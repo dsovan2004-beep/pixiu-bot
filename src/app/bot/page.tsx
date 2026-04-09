@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 
 interface BotState {
@@ -26,8 +26,9 @@ export default function BotPage() {
   const [signals, setSignals] = useState<CoinSignal[]>([]);
   const [walletCount, setWalletCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [toggling, setToggling] = useState(false);
 
-  async function fetchData() {
+  const fetchData = useCallback(async () => {
     const [stateRes, signalsRes, walletsRes] = await Promise.all([
       supabase
         .from("bot_state")
@@ -38,7 +39,7 @@ export default function BotPage() {
         .from("coin_signals")
         .select("*")
         .order("signal_time", { ascending: false })
-        .limit(20),
+        .limit(50),
       supabase
         .from("tracked_wallets")
         .select("id", { count: "exact", head: true })
@@ -51,13 +52,30 @@ export default function BotPage() {
     setSignals(signalsRes.data || []);
     setWalletCount(walletsRes.count || 0);
     setLoading(false);
-  }
+  }, []);
 
   useEffect(() => {
     fetchData();
     const interval = setInterval(fetchData, 10_000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchData]);
+
+  async function toggleBot() {
+    if (!botState) return;
+    setToggling(true);
+
+    const newState = !botState.is_running;
+    await supabase
+      .from("bot_state")
+      .update({
+        is_running: newState,
+        last_updated: new Date().toISOString(),
+      })
+      .eq("id", botState.id);
+
+    setBotState({ ...botState, is_running: newState });
+    setToggling(false);
+  }
 
   if (loading) {
     return <div className="text-zinc-500 text-center mt-20">Loading...</div>;
@@ -66,10 +84,11 @@ export default function BotPage() {
   return (
     <div className="min-h-screen bg-zinc-950 text-white p-6">
       <div className="max-w-5xl mx-auto space-y-6">
+        {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-amber-500">PixiuBot</h1>
           <span className="text-xs text-zinc-600">
-            Sprint 0 — Observe Only
+            Sprint 1 — Observe Only
           </span>
         </div>
 
@@ -85,18 +104,35 @@ export default function BotPage() {
           <Card label="Signals" value={String(signals.length)} />
         </div>
 
-        {/* Last Updated */}
-        {botState?.last_updated && (
-          <div className="text-zinc-600 text-xs">
-            Last updated:{" "}
-            {new Date(botState.last_updated).toLocaleString()}
-          </div>
-        )}
+        {/* Start/Stop Button */}
+        <div className="flex items-center gap-4">
+          <button
+            onClick={toggleBot}
+            disabled={toggling}
+            className={`px-6 py-2 rounded-lg font-mono font-bold text-sm transition-colors ${
+              botState?.is_running
+                ? "bg-red-600 hover:bg-red-700 text-white"
+                : "bg-green-600 hover:bg-green-700 text-white"
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
+          >
+            {toggling
+              ? "..."
+              : botState?.is_running
+                ? "STOP BOT"
+                : "START BOT"}
+          </button>
+          {botState?.last_updated && (
+            <span className="text-zinc-600 text-xs">
+              Last updated:{" "}
+              {new Date(botState.last_updated).toLocaleString()}
+            </span>
+          )}
+        </div>
 
-        {/* Recent Signals */}
+        {/* Live Signal Feed */}
         <section>
           <h2 className="text-lg font-semibold text-zinc-300 mb-3">
-            Recent Signals
+            Live Signal Feed
           </h2>
           {signals.length > 0 ? (
             <div className="overflow-x-auto">
@@ -104,10 +140,11 @@ export default function BotPage() {
                 <thead>
                   <tr className="text-zinc-500 border-b border-zinc-800">
                     <th className="text-left py-2 px-3">Coin</th>
+                    <th className="text-left py-2 px-3">Address</th>
                     <th className="text-left py-2 px-3">Wallet</th>
                     <th className="text-right py-2 px-3">Entry MC</th>
                     <th className="text-center py-2 px-3">Rug Check</th>
-                    <th className="text-right py-2 px-3">Gap (min)</th>
+                    <th className="text-right py-2 px-3">Gap</th>
                     <th className="text-left py-2 px-3">Time</th>
                   </tr>
                 </thead>
@@ -117,8 +154,18 @@ export default function BotPage() {
                       key={s.id}
                       className="border-b border-zinc-900 hover:bg-zinc-900/50"
                     >
-                      <td className="py-2 px-3 text-amber-500">
-                        {s.coin_name || s.coin_address.slice(0, 8) + "..."}
+                      <td className="py-2 px-3 text-amber-500 font-bold">
+                        {s.coin_name || "???"}
+                      </td>
+                      <td className="py-2 px-3 text-zinc-500">
+                        <a
+                          href={`https://solscan.io/token/${s.coin_address}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:text-amber-400 transition-colors"
+                        >
+                          {s.coin_address.slice(0, 6)}...{s.coin_address.slice(-4)}
+                        </a>
                       </td>
                       <td className="py-2 px-3 text-zinc-400">
                         {s.wallet_tag}
@@ -129,14 +176,26 @@ export default function BotPage() {
                           : "-"}
                       </td>
                       <td className="py-2 px-3 text-center">
-                        {s.rug_check_passed === null
-                          ? "-"
-                          : s.rug_check_passed
-                            ? "PASS"
-                            : "FAIL"}
+                        <span
+                          className={
+                            s.rug_check_passed === null
+                              ? "text-zinc-600"
+                              : s.rug_check_passed
+                                ? "text-green-500"
+                                : "text-red-500"
+                          }
+                        >
+                          {s.rug_check_passed === null
+                            ? "-"
+                            : s.rug_check_passed
+                              ? "PASS"
+                              : "FAIL"}
+                        </span>
                       </td>
-                      <td className="py-2 px-3 text-right">
-                        {s.price_gap_minutes ?? "-"}
+                      <td className="py-2 px-3 text-right text-zinc-400">
+                        {s.price_gap_minutes !== null
+                          ? `${s.price_gap_minutes}m`
+                          : "-"}
                       </td>
                       <td className="py-2 px-3 text-zinc-600">
                         {new Date(s.signal_time).toLocaleTimeString()}
@@ -147,9 +206,9 @@ export default function BotPage() {
               </table>
             </div>
           ) : (
-            <div className="text-zinc-600 text-sm">
-              No signals yet. Start feed.ts and add wallets to begin
-              monitoring.
+            <div className="text-zinc-600 text-sm bg-zinc-900 border border-zinc-800 rounded-lg p-6 text-center">
+              No signals yet. Add wallets to wallets.txt, run import-wallets.ts,
+              then start feed.ts to begin monitoring.
             </div>
           )}
         </section>

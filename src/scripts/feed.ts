@@ -1,102 +1,194 @@
 /**
- * PixiuBot — Passive Wallet Observer (Sprint 0)
+ * PixiuBot — Passive Wallet Observer (Sprint 1)
  * Usage: npx ts-node src/scripts/feed.ts
  *
- * Monitors tracked wallets via Helius RPC for new buy transactions.
- * Logs detected signals to coin_signals table.
+ * Uses Helius Enhanced Transactions API to monitor tracked wallets.
+ * Filters for Pump.fun and Raydium DEX swaps (meme coins only).
+ * Validates via RugCheck.xyz before logging signals.
  * Does NOT execute any trades.
  */
 
 import supabase from "../lib/supabase-server";
 
-const HELIUS_API_KEY = process.env.HELIUS_API_KEY || "YOUR_HELIUS_API_KEY";
-const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
+const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
+if (!HELIUS_API_KEY) {
+  throw new Error("Missing HELIUS_API_KEY in .env.local");
+}
+
+const HELIUS_API_URL = `https://api.helius.xyz/v0`;
 const POLL_INTERVAL_MS = 5_000;
 
-// Track last seen signature per wallet to avoid duplicate processing
+// Known DEX program IDs for meme coin filtering
+const PUMP_FUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+const RAYDIUM_AMM_V4 = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
+const RAYDIUM_CPMM = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
+const JUPITER_V6 = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
+
+// Native SOL and common stablecoins to ignore
+const IGNORE_MINTS = new Set([
+  "So11111111111111111111111111111111111111112", // Wrapped SOL
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
+  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
+]);
+
+// Track last seen signature per wallet to avoid duplicates
 const lastSeenSignature = new Map<string, string>();
 
-// ─── Helius RPC Helpers ──────────────────────────────────
+// ─── Helius Enhanced Transactions API ────────────────────
 
-async function getRecentTransactions(
+interface HeliusTransaction {
+  signature: string;
+  timestamp: number;
+  type: string;
+  source: string;
+  description: string;
+  tokenTransfers: Array<{
+    fromUserAccount: string;
+    toUserAccount: string;
+    fromTokenAccount: string;
+    toTokenAccount: string;
+    tokenAmount: number;
+    mint: string;
+    tokenStandard: string;
+  }>;
+  nativeTransfers: Array<{
+    fromUserAccount: string;
+    toUserAccount: string;
+    amount: number;
+  }>;
+  accountData: Array<{
+    account: string;
+    nativeBalanceChange: number;
+    tokenBalanceChanges: Array<{
+      userAccount: string;
+      tokenAccount: string;
+      rawTokenAmount: {
+        tokenAmount: string;
+        decimals: number;
+      };
+      mint: string;
+    }>;
+  }>;
+}
+
+async function getEnhancedTransactions(
   walletAddress: string,
   limit = 10
-): Promise<any[]> {
-  const response = await fetch(HELIUS_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "getSignaturesForAddress",
-      params: [walletAddress, { limit }],
-    }),
-  });
+): Promise<HeliusTransaction[]> {
+  const url = `${HELIUS_API_URL}/addresses/${walletAddress}/transactions?api-key=${HELIUS_API_KEY}&limit=${limit}`;
 
-  const data = await response.json();
-  return data.result || [];
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Helius API error: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
 }
 
-async function getTransactionDetails(signature: string): Promise<any | null> {
-  const response = await fetch(HELIUS_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "getTransaction",
-      params: [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }],
-    }),
-  });
+// ─── RugCheck.xyz Validation ─────────────────────────────
 
-  const data = await response.json();
-  return data.result || null;
+interface RugCheckResult {
+  passed: boolean;
+  tokenName: string | null;
+  risks: string[];
 }
 
-// ─── Signal Detection ────────────────────────────────────
+async function checkRug(mint: string): Promise<RugCheckResult> {
+  try {
+    const url = `https://api.rugcheck.xyz/v1/tokens/${mint}/report/summary`;
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      return { passed: false, tokenName: null, risks: ["API error"] };
+    }
+
+    const data = await response.json();
+
+    // Check for honeypot and LP lock status
+    const isHoneypot = data.risks?.some(
+      (r: any) => r.name?.toLowerCase().includes("honeypot")
+    ) ?? false;
+
+    const lpUnlocked = data.risks?.some(
+      (r: any) =>
+        r.name?.toLowerCase().includes("lp unlocked") ||
+        r.name?.toLowerCase().includes("liquidity unlocked")
+    ) ?? false;
+
+    const passed = !isHoneypot && !lpUnlocked;
+
+    return {
+      passed,
+      tokenName: data.tokenMeta?.name || data.tokenMeta?.symbol || null,
+      risks: data.risks?.map((r: any) => r.name) || [],
+    };
+  } catch (err: any) {
+    console.error(`  [RUGCHECK] Error for ${mint.slice(0, 8)}...: ${err.message}`);
+    return { passed: false, tokenName: null, risks: ["fetch error"] };
+  }
+}
+
+// ─── DEX Buy Detection ──────────────────────────────────
 
 interface DetectedSignal {
   coin_address: string;
   coin_name: string | null;
   wallet_tag: string;
   entry_mc: number | null;
-  rug_check_passed: boolean | null;
+  rug_check_passed: boolean;
   price_gap_minutes: number | null;
 }
 
-function extractBuySignals(tx: any, walletTag: string): DetectedSignal[] {
-  const signals: DetectedSignal[] = [];
-
-  if (!tx?.meta?.postTokenBalances || !tx?.meta?.preTokenBalances) {
-    return signals;
+function isMemeSwap(tx: HeliusTransaction): boolean {
+  // Check if transaction source is from known DEX programs
+  const dexSources = ["PUMP_FUN", "RAYDIUM", "JUPITER"];
+  if (dexSources.some((s) => tx.source?.toUpperCase().includes(s))) {
+    return true;
   }
 
-  const preBalances = tx.meta.preTokenBalances;
-  const postBalances = tx.meta.postTokenBalances;
+  // Check type — SWAP is the key indicator
+  if (tx.type === "SWAP") {
+    return true;
+  }
 
-  // Detect token balance increases (buy signals)
-  for (const post of postBalances) {
-    const pre = preBalances.find(
-      (p: any) =>
-        p.accountIndex === post.accountIndex && p.mint === post.mint
-    );
+  return false;
+}
 
-    const preAmount = pre?.uiTokenAmount?.uiAmount || 0;
-    const postAmount = post?.uiTokenAmount?.uiAmount || 0;
+function extractBuyMints(
+  tx: HeliusTransaction,
+  walletAddress: string
+): string[] {
+  const mints: string[] = [];
 
-    if (postAmount > preAmount && post.mint) {
-      signals.push({
-        coin_address: post.mint,
-        coin_name: null, // Would resolve via Jupiter metadata in future sprint
-        wallet_tag: walletTag,
-        entry_mc: null, // Would fetch from Jupiter/DexScreener in future sprint
-        rug_check_passed: null, // Would run rug check in future sprint
-        price_gap_minutes: null,
-      });
+  // From token transfers: wallet received tokens (buy)
+  for (const transfer of tx.tokenTransfers || []) {
+    if (
+      transfer.toUserAccount === walletAddress &&
+      transfer.tokenAmount > 0 &&
+      !IGNORE_MINTS.has(transfer.mint)
+    ) {
+      mints.push(transfer.mint);
     }
   }
 
-  return signals;
+  // Fallback: check token balance changes
+  if (mints.length === 0) {
+    for (const account of tx.accountData || []) {
+      for (const change of account.tokenBalanceChanges || []) {
+        const amount = Number(change.rawTokenAmount?.tokenAmount || 0);
+        if (
+          change.userAccount === walletAddress &&
+          amount > 0 &&
+          !IGNORE_MINTS.has(change.mint)
+        ) {
+          mints.push(change.mint);
+        }
+      }
+    }
+  }
+
+  // Deduplicate
+  return [...new Set(mints)];
 }
 
 // ─── Wallet Polling ──────────────────────────────────────
@@ -105,29 +197,67 @@ async function pollWallet(
   walletAddress: string,
   tag: string
 ): Promise<DetectedSignal[]> {
-  const txs = await getRecentTransactions(walletAddress, 5);
+  const txs = await getEnhancedTransactions(walletAddress, 10);
 
   if (txs.length === 0) return [];
 
   const lastSeen = lastSeenSignature.get(walletAddress);
-  const newTxs = lastSeen
-    ? txs.filter((tx: any) => tx.signature !== lastSeen)
-    : txs.slice(0, 1); // On first run, only check most recent
 
+  // Filter to new transactions only
+  let newTxs: HeliusTransaction[];
+  if (lastSeen) {
+    const lastIdx = txs.findIndex((tx) => tx.signature === lastSeen);
+    newTxs = lastIdx > 0 ? txs.slice(0, lastIdx) : [];
+  } else {
+    // First run: only check the most recent transaction
+    newTxs = txs.slice(0, 1);
+  }
+
+  // Update last seen
   if (txs.length > 0) {
     lastSeenSignature.set(walletAddress, txs[0].signature);
   }
 
+  if (newTxs.length === 0) return [];
+
   const allSignals: DetectedSignal[] = [];
 
-  for (const txInfo of newTxs) {
-    if (txInfo.err) continue; // skip failed transactions
+  for (const tx of newTxs) {
+    // Only process DEX swaps (Pump.fun, Raydium, Jupiter)
+    if (!isMemeSwap(tx)) continue;
 
-    const details = await getTransactionDetails(txInfo.signature);
-    if (!details) continue;
+    // Extract bought token mints
+    const buyMints = extractBuyMints(tx, walletAddress);
+    if (buyMints.length === 0) continue;
 
-    const signals = extractBuySignals(details, tag);
-    allSignals.push(...signals);
+    for (const mint of buyMints) {
+      // Run rug check
+      const rugResult = await checkRug(mint);
+
+      // Only log signals that pass rug check
+      if (!rugResult.passed) {
+        console.log(
+          `  [SKIP] ${tag} bought ${mint.slice(0, 8)}... — failed rug check: ${rugResult.risks.join(", ")}`
+        );
+        continue;
+      }
+
+      // Calculate time gap from signal detection
+      const signalTime = new Date(tx.timestamp * 1000);
+      const now = new Date();
+      const gapMinutes = Math.round(
+        (now.getTime() - signalTime.getTime()) / 60_000
+      );
+
+      allSignals.push({
+        coin_address: mint,
+        coin_name: rugResult.tokenName,
+        wallet_tag: tag,
+        entry_mc: null, // Would need DexScreener API for market cap
+        rug_check_passed: true,
+        price_gap_minutes: gapMinutes,
+      });
+    }
   }
 
   return allSignals;
@@ -137,10 +267,12 @@ async function pollWallet(
 
 async function main(): Promise<void> {
   console.log("═══════════════════════════════════════════════════════════");
-  console.log("  PIXIU BOT — Passive Wallet Observer (Sprint 0)");
+  console.log("  PIXIU BOT — Passive Wallet Observer (Sprint 1)");
   console.log("═══════════════════════════════════════════════════════════");
   console.log(`  Mode:     OBSERVE ONLY — zero trades executed`);
-  console.log(`  RPC:      Helius Mainnet`);
+  console.log(`  RPC:      Helius Enhanced Transactions API`);
+  console.log(`  Filter:   Pump.fun + Raydium + Jupiter swaps only`);
+  console.log(`  Validate: RugCheck.xyz (LP locked, no honeypot)`);
   console.log(`  Polling:  Every ${POLL_INTERVAL_MS / 1000}s`);
   console.log(`  Started:  ${new Date().toISOString()}`);
   console.log("═══════════════════════════════════════════════════════════\n");
@@ -164,8 +296,7 @@ async function main(): Promise<void> {
     }
 
     if (!wallets || wallets.length === 0) {
-      console.log("  [INFO] No active wallets to monitor.");
-      return;
+      return; // Silent — no spam when no wallets
     }
 
     for (const wallet of wallets) {
@@ -173,7 +304,6 @@ async function main(): Promise<void> {
         const signals = await pollWallet(wallet.wallet_address, wallet.tag);
 
         for (const signal of signals) {
-          // Log to coin_signals table
           const { error: insertError } = await supabase
             .from("coin_signals")
             .insert({
@@ -189,7 +319,7 @@ async function main(): Promise<void> {
             console.error("  [ERROR] Insert signal:", insertError.message);
           } else {
             console.log(
-              `  [SIGNAL] ${signal.wallet_tag} bought ${signal.coin_address.slice(0, 8)}...`
+              `  [SIGNAL] ${signal.wallet_tag} bought ${signal.coin_name || signal.coin_address.slice(0, 8) + "..."} ✓ rug check passed (gap: ${signal.price_gap_minutes}min)`
             );
           }
         }

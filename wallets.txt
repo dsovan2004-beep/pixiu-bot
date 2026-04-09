@@ -1,0 +1,12 @@
+# PixiuBot — Tracked Wallets
+# Add one Solana wallet address per line.
+# Lines starting with # are ignored.
+# Format: WALLET_ADDRESS  (optionally followed by a tag after a space)
+#
+# Example:
+# 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU ethan-whale-1
+#
+# Ethan Rosper's wallet list was not found publicly.
+# His wallet addresses are typically shared in his Discord community.
+# Add them here manually when available, then run:
+#   npx ts-node src/scripts/import-wallets.ts
