@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find ~/Desktop/raptor-bot/dashboard -type f -name *.tsx -o -name *.ts)",
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --no-turbopack)",
+      "Bash(export PATH=\"/usr/local/bin:/opt/homebrew/bin:$HOME/.nvm/versions/node/*/bin:$PATH\")",
+      "Bash(export PATH=\"/usr/local/bin:/opt/homebrew/bin:$PATH\")",
+      "Bash(mkdir -p ~/PixiuBot/temp-scaffold)",
+      "Bash(npx create-next-app@latest pixiu-bot --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --no-turbopack)",
+      "Bash(cp -r temp-scaffold/pixiu-bot/* .)",
+      "Bash(cp -r temp-scaffold/pixiu-bot/.gitignore .)",
+      "Bash(cp -r temp-scaffold/pixiu-bot/.eslintrc* .)",
+      "Bash(rm -rf temp-scaffold)",
+      "Bash(mkdir -p src/scripts src/pages src/lib src/components supabase/migrations)",
+      "Bash(npm install:*)"
+    ]
+  }
+}
