@@ -139,6 +139,53 @@ async function getEnhancedTransactions(
   throw new Error("Helius API: max retries exceeded");
 }
 
+// ─── Token Metadata via Helius DAS API ───────────────────
+
+const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
+
+// Simple in-memory cache to avoid re-fetching the same mint
+const nameCache = new Map<string, string>();
+
+async function getTokenName(mint: string): Promise<string> {
+  const cached = nameCache.get(mint);
+  if (cached) return cached;
+
+  try {
+    await rateLimiter.acquire();
+    const response = await fetch(HELIUS_RPC_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getAsset",
+        params: { id: mint },
+      }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      const content = data.result?.content;
+      const name =
+        content?.metadata?.name ||
+        content?.metadata?.symbol ||
+        content?.json_uri?.split("/").pop() ||
+        null;
+
+      if (name) {
+        nameCache.set(mint, name);
+        return name;
+      }
+    }
+  } catch {
+    // Fall through to fallback
+  }
+
+  const fallback = mint.slice(0, 8) + "...";
+  nameCache.set(mint, fallback);
+  return fallback;
+}
+
 // ─── RugCheck.xyz Validation ─────────────────────────────
 
 interface RugCheckResult {
@@ -282,6 +329,9 @@ async function pollWallet(
         continue;
       }
 
+      // Resolve token name: RugCheck → Helius DAS → fallback
+      const coinName = rugResult.tokenName || (await getTokenName(mint));
+
       const signalTime = new Date(tx.timestamp * 1000);
       const now = new Date();
       const gapMinutes = Math.round(
@@ -290,7 +340,7 @@ async function pollWallet(
 
       allSignals.push({
         coin_address: mint,
-        coin_name: rugResult.tokenName,
+        coin_name: coinName,
         wallet_tag: tag,
         entry_mc: null,
         rug_check_passed: true,
