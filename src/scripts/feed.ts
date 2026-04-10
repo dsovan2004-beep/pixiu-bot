@@ -1,10 +1,11 @@
 /**
- * PixiuBot — Passive Wallet Observer (Sprint 1)
- * Usage: npx ts-node src/scripts/feed.ts
+ * PixiuBot — Passive Wallet Observer (Sprint 1.1)
+ * Usage: npx tsx src/scripts/feed.ts
  *
  * Uses Helius Enhanced Transactions API to monitor tracked wallets.
  * Filters for Pump.fun and Raydium DEX swaps (meme coins only).
  * Validates via RugCheck.xyz before logging signals.
+ * Rate-limited: batches of 5, 200ms between batches, exponential backoff on 429.
  * Does NOT execute any trades.
  */
 
@@ -16,23 +17,60 @@ if (!HELIUS_API_KEY) {
 }
 
 const HELIUS_API_URL = `https://api.helius.xyz/v0`;
-const POLL_INTERVAL_MS = 5_000;
-
-// Known DEX program IDs for meme coin filtering
-const PUMP_FUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
-const RAYDIUM_AMM_V4 = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
-const RAYDIUM_CPMM = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
-const JUPITER_V6 = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
+const POLL_INTERVAL_MS = 15_000; // 15s between full cycles (718 wallets takes ~30s)
+const BATCH_SIZE = 5;
+const BATCH_DELAY_MS = 200;
+const MAX_RETRIES = 3;
+const MAX_REQUESTS_PER_SEC = 8;
 
 // Native SOL and common stablecoins to ignore
 const IGNORE_MINTS = new Set([
-  "So11111111111111111111111111111111111111112", // Wrapped SOL
-  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
-  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
+  "So11111111111111111111111111111111111111112",
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
 ]);
 
-// Track last seen signature per wallet to avoid duplicates
+// Track last seen signature per wallet
 const lastSeenSignature = new Map<string, string>();
+
+// ─── Rate Limiter ────────────────────────────────────────
+
+class RateLimiter {
+  private tokens: number;
+  private maxTokens: number;
+  private refillRate: number; // tokens per ms
+  private lastRefill: number;
+
+  constructor(maxPerSecond: number) {
+    this.maxTokens = maxPerSecond;
+    this.tokens = maxPerSecond;
+    this.refillRate = maxPerSecond / 1000;
+    this.lastRefill = Date.now();
+  }
+
+  async acquire(): Promise<void> {
+    this.refill();
+    if (this.tokens < 1) {
+      const waitMs = Math.ceil((1 - this.tokens) / this.refillRate);
+      await sleep(waitMs);
+      this.refill();
+    }
+    this.tokens -= 1;
+  }
+
+  private refill(): void {
+    const now = Date.now();
+    const elapsed = now - this.lastRefill;
+    this.tokens = Math.min(this.maxTokens, this.tokens + elapsed * this.refillRate);
+    this.lastRefill = now;
+  }
+}
+
+const rateLimiter = new RateLimiter(MAX_REQUESTS_PER_SEC);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // ─── Helius Enhanced Transactions API ────────────────────
 
@@ -75,14 +113,30 @@ async function getEnhancedTransactions(
   walletAddress: string,
   limit = 10
 ): Promise<HeliusTransaction[]> {
+  await rateLimiter.acquire();
+
   const url = `${HELIUS_API_URL}/addresses/${walletAddress}/transactions?api-key=${HELIUS_API_KEY}&limit=${limit}`;
 
-  const response = await fetch(url);
-  if (!response.ok) {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const response = await fetch(url);
+
+    if (response.ok) {
+      return response.json();
+    }
+
+    if (response.status === 429) {
+      const backoffMs = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
+      if (attempt < MAX_RETRIES) {
+        await sleep(backoffMs);
+        await rateLimiter.acquire();
+        continue;
+      }
+    }
+
     throw new Error(`Helius API error: ${response.status} ${response.statusText}`);
   }
 
-  return response.json();
+  throw new Error("Helius API: max retries exceeded");
 }
 
 // ─── RugCheck.xyz Validation ─────────────────────────────
@@ -95,6 +149,7 @@ interface RugCheckResult {
 
 async function checkRug(mint: string): Promise<RugCheckResult> {
   try {
+    await rateLimiter.acquire();
     const url = `https://api.rugcheck.xyz/v1/tokens/${mint}/report/summary`;
     const response = await fetch(url);
 
@@ -104,7 +159,6 @@ async function checkRug(mint: string): Promise<RugCheckResult> {
 
     const data = await response.json();
 
-    // Check for honeypot and LP lock status
     const isHoneypot = data.risks?.some(
       (r: any) => r.name?.toLowerCase().includes("honeypot")
     ) ?? false;
@@ -140,17 +194,13 @@ interface DetectedSignal {
 }
 
 function isMemeSwap(tx: HeliusTransaction): boolean {
-  // Check if transaction source is from known DEX programs
   const dexSources = ["PUMP_FUN", "RAYDIUM", "JUPITER"];
   if (dexSources.some((s) => tx.source?.toUpperCase().includes(s))) {
     return true;
   }
-
-  // Check type — SWAP is the key indicator
   if (tx.type === "SWAP") {
     return true;
   }
-
   return false;
 }
 
@@ -160,7 +210,6 @@ function extractBuyMints(
 ): string[] {
   const mints: string[] = [];
 
-  // From token transfers: wallet received tokens (buy)
   for (const transfer of tx.tokenTransfers || []) {
     if (
       transfer.toUserAccount === walletAddress &&
@@ -171,7 +220,6 @@ function extractBuyMints(
     }
   }
 
-  // Fallback: check token balance changes
   if (mints.length === 0) {
     for (const account of tx.accountData || []) {
       for (const change of account.tokenBalanceChanges || []) {
@@ -187,7 +235,6 @@ function extractBuyMints(
     }
   }
 
-  // Deduplicate
   return [...new Set(mints)];
 }
 
@@ -197,23 +244,20 @@ async function pollWallet(
   walletAddress: string,
   tag: string
 ): Promise<DetectedSignal[]> {
-  const txs = await getEnhancedTransactions(walletAddress, 10);
+  const txs = await getEnhancedTransactions(walletAddress, 5);
 
   if (txs.length === 0) return [];
 
   const lastSeen = lastSeenSignature.get(walletAddress);
 
-  // Filter to new transactions only
   let newTxs: HeliusTransaction[];
   if (lastSeen) {
     const lastIdx = txs.findIndex((tx) => tx.signature === lastSeen);
     newTxs = lastIdx > 0 ? txs.slice(0, lastIdx) : [];
   } else {
-    // First run: only check the most recent transaction
     newTxs = txs.slice(0, 1);
   }
 
-  // Update last seen
   if (txs.length > 0) {
     lastSeenSignature.set(walletAddress, txs[0].signature);
   }
@@ -223,18 +267,14 @@ async function pollWallet(
   const allSignals: DetectedSignal[] = [];
 
   for (const tx of newTxs) {
-    // Only process DEX swaps (Pump.fun, Raydium, Jupiter)
     if (!isMemeSwap(tx)) continue;
 
-    // Extract bought token mints
     const buyMints = extractBuyMints(tx, walletAddress);
     if (buyMints.length === 0) continue;
 
     for (const mint of buyMints) {
-      // Run rug check
       const rugResult = await checkRug(mint);
 
-      // Only log signals that pass rug check
       if (!rugResult.passed) {
         console.log(
           `  [SKIP] ${tag} bought ${mint.slice(0, 8)}... — failed rug check: ${rugResult.risks.join(", ")}`
@@ -242,7 +282,6 @@ async function pollWallet(
         continue;
       }
 
-      // Calculate time gap from signal detection
       const signalTime = new Date(tx.timestamp * 1000);
       const now = new Date();
       const gapMinutes = Math.round(
@@ -253,7 +292,7 @@ async function pollWallet(
         coin_address: mint,
         coin_name: rugResult.tokenName,
         wallet_tag: tag,
-        entry_mc: null, // Would need DexScreener API for market cap
+        entry_mc: null,
         rug_check_passed: true,
         price_gap_minutes: gapMinutes,
       });
@@ -263,44 +302,43 @@ async function pollWallet(
   return allSignals;
 }
 
-// ─── Main Loop ───────────────────────────────────────────
+// ─── Batched Tick ────────────────────────────────────────
 
-async function main(): Promise<void> {
-  console.log("═══════════════════════════════════════════════════════════");
-  console.log("  PIXIU BOT — Passive Wallet Observer (Sprint 1)");
-  console.log("═══════════════════════════════════════════════════════════");
-  console.log(`  Mode:     OBSERVE ONLY — zero trades executed`);
-  console.log(`  RPC:      Helius Enhanced Transactions API`);
-  console.log(`  Filter:   Pump.fun + Raydium + Jupiter swaps only`);
-  console.log(`  Validate: RugCheck.xyz (LP locked, no honeypot)`);
-  console.log(`  Polling:  Every ${POLL_INTERVAL_MS / 1000}s`);
-  console.log(`  Started:  ${new Date().toISOString()}`);
-  console.log("═══════════════════════════════════════════════════════════\n");
+async function tick(): Promise<void> {
+  const { data: wallets, error } = await supabase
+    .from("tracked_wallets")
+    .select("*")
+    .eq("active", true);
 
-  // Update bot state to running
-  await supabase
-    .from("bot_state")
-    .update({ is_running: true, last_updated: new Date().toISOString() })
-    .eq("mode", "observe");
+  if (error) {
+    console.error("  [ERROR] Failed to fetch wallets:", error.message);
+    return;
+  }
 
-  async function tick(): Promise<void> {
-    // Fetch active wallets
-    const { data: wallets, error } = await supabase
-      .from("tracked_wallets")
-      .select("*")
-      .eq("active", true);
+  if (!wallets || wallets.length === 0) return;
 
-    if (error) {
-      console.error("  [ERROR] Failed to fetch wallets:", error.message);
-      return;
+  const totalBatches = Math.ceil(wallets.length / BATCH_SIZE);
+  const startTime = Date.now();
+  let signalCount = 0;
+  let errorCount = 0;
+
+  console.log(`  [CYCLE] Polling ${wallets.length} wallets in ${totalBatches} batches...`);
+
+  for (let i = 0; i < wallets.length; i += BATCH_SIZE) {
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+    const batch = wallets.slice(i, i + BATCH_SIZE);
+
+    // Log progress every 50 wallets
+    if (i > 0 && i % 50 === 0) {
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(
+        `  [INFO] Batch ${batchNum}/${totalBatches} (${i}/${wallets.length} wallets, ${elapsed}s elapsed, ${signalCount} signals, ${errorCount} errors)`
+      );
     }
 
-    if (!wallets || wallets.length === 0) {
-      return; // Silent — no spam when no wallets
-    }
-
-    for (const wallet of wallets) {
-      try {
+    // Process batch concurrently
+    const results = await Promise.allSettled(
+      batch.map(async (wallet) => {
         const signals = await pollWallet(wallet.wallet_address, wallet.tag);
 
         for (const signal of signals) {
@@ -318,22 +356,57 @@ async function main(): Promise<void> {
           if (insertError) {
             console.error("  [ERROR] Insert signal:", insertError.message);
           } else {
+            signalCount++;
             console.log(
-              `  [SIGNAL] ${signal.wallet_tag} bought ${signal.coin_name || signal.coin_address.slice(0, 8) + "..."} ✓ rug check passed (gap: ${signal.price_gap_minutes}min)`
+              `  [SIGNAL] ${signal.wallet_tag} bought ${signal.coin_name || signal.coin_address.slice(0, 8) + "..."} ✓ (gap: ${signal.price_gap_minutes}min)`
             );
           }
         }
-      } catch (err: any) {
-        console.error(
-          `  [ERROR] Polling ${wallet.tag} (${wallet.wallet_address.slice(0, 8)}...):`,
-          err.message
-        );
-      }
+      })
+    );
+
+    // Count errors
+    for (const r of results) {
+      if (r.status === "rejected") errorCount++;
+    }
+
+    // Delay between batches
+    if (i + BATCH_SIZE < wallets.length) {
+      await sleep(BATCH_DELAY_MS);
     }
   }
 
-  // Run immediately, then on interval
+  const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.log(
+    `  [CYCLE] Done in ${totalTime}s — ${signalCount} signals, ${errorCount} errors`
+  );
+}
+
+// ─── Main Loop ───────────────────────────────────────────
+
+async function main(): Promise<void> {
+  console.log("═══════════════════════════════════════════════════════════");
+  console.log("  PIXIU BOT — Passive Wallet Observer (Sprint 1.1)");
+  console.log("═══════════════════════════════════════════════════════════");
+  console.log(`  Mode:       OBSERVE ONLY — zero trades executed`);
+  console.log(`  RPC:        Helius Enhanced Transactions API`);
+  console.log(`  Filter:     Pump.fun + Raydium + Jupiter swaps only`);
+  console.log(`  Validate:   RugCheck.xyz (LP locked, no honeypot)`);
+  console.log(`  Rate limit: ${MAX_REQUESTS_PER_SEC} req/s, batches of ${BATCH_SIZE}, ${BATCH_DELAY_MS}ms delay`);
+  console.log(`  Polling:    Every ${POLL_INTERVAL_MS / 1000}s`);
+  console.log(`  Started:    ${new Date().toISOString()}`);
+  console.log("═══════════════════════════════════════════════════════════\n");
+
+  // Update bot state to running
+  await supabase
+    .from("bot_state")
+    .update({ is_running: true, last_updated: new Date().toISOString() })
+    .eq("mode", "observe");
+
+  // Run immediately
   await tick();
+
+  // Then on interval
   setInterval(tick, POLL_INTERVAL_MS);
 
   // Graceful shutdown
