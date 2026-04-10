@@ -333,19 +333,17 @@ export default function BotPage() {
                       </td>
                       <td className="py-2 px-3 text-center">
                         <span className={t.grid_level > 0 ? "text-green-400" : "text-zinc-600"}>
-                          L{t.grid_level}/4
+                          L{t.grid_level}/3
                         </span>
                       </td>
                       <td className="py-2 px-3">
-                        {t.grid_level >= 4
+                        {t.grid_level >= 3
                           ? "100x 💰"
-                          : t.grid_level === 3
-                            ? "Flying 🛸"
-                            : t.grid_level === 2
-                              ? "Mooning 🚀"
-                              : t.grid_level === 1
-                                ? "Pumping 📈"
-                                : "Watching 👀"}
+                          : t.grid_level === 2
+                            ? "Mooning 🚀"
+                            : t.grid_level === 1
+                              ? "Pumping 📈"
+                              : "Watching 👀"}
                       </td>
                       <td className="py-2 px-3 text-right text-zinc-400">
                         {t.remaining_pct}%
@@ -411,7 +409,7 @@ export default function BotPage() {
                           {pnl.toFixed(2)}%
                         </td>
                         <td className="py-2 px-3 text-center">
-                          <span className={t.grid_level >= 4 ? "text-green-400" : t.grid_level > 0 ? "text-amber-400" : "text-zinc-600"}>
+                          <span className={t.grid_level >= 3 ? "text-green-400" : t.grid_level > 0 ? "text-amber-400" : "text-zinc-600"}>
                             L{t.grid_level}
                           </span>
                         </td>

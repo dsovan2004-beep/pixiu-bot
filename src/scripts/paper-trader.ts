@@ -22,15 +22,14 @@ const MIN_UNIQUE_WALLETS = 2; // KEEP — this is the edge
 const MIN_SIGNAL_COUNT = 2; // 2+ signals minimum
 const MULTI_WALLET_WINDOW_MIN = 15; // Wider window for wallet convergence
 
-// Grid exit levels: sell 25% of original position at each
+// Grid exit levels
 const GRID_LEVELS = [
-  { level: 1, pct: 10, sellPct: 25 },  // +10% → sell 25%
-  { level: 2, pct: 20, sellPct: 25 },  // +20% → sell 25%
-  { level: 3, pct: 40, sellPct: 25 },  // +40% → sell 25%
-  { level: 4, pct: 100, sellPct: 25 }, // +100% → sell final 25%, close
+  { level: 1, pct: 15, sellPct: 50 },  // +15% → sell 50% (break-even lock)
+  { level: 2, pct: 40, sellPct: 25 },  // +40% → sell 25%
+  { level: 3, pct: 100, sellPct: 25 }, // +100% → sell final 25%, close
 ];
 const STOP_LOSS_PCT = 10; // -10% on remaining → close all
-const TIMEOUT_MINUTES = 30;
+const TIMEOUT_MINUTES = 20; // Was 30 — exit dead coins faster
 
 // Kill switch
 const KILL_SWITCH_MIN_TRADES = 50;
@@ -535,7 +534,7 @@ async function main(): Promise<void> {
   console.log(`  Mode:         PAPER ONLY — zero real SOL spent`);
   console.log(`  Entry filter: gap < ${MAX_GAP_MINUTES}min, MC < $${MAX_ENTRY_MC.toLocaleString()}, ${MIN_UNIQUE_WALLETS}+ Tier1 wallets, VOLUME MODE`);
   console.log(`  Mission:      Recover $3,325 — need 50 trades for validation`);
-  console.log(`  Exit grid:    L1 +10% | L2 +20% | L3 +40% | L4 +100% (25% each)`);
+  console.log(`  Exit grid:    L1 +15% (50%) | L2 +40% (25%) | L3 +100% (25%)`);
   console.log(`  Stop loss:    -${STOP_LOSS_PCT}% on remaining | Timeout ${TIMEOUT_MINUTES}min`);
   console.log(`  Multi-wallet: 2+ wallets within ${MULTI_WALLET_WINDOW_MIN}min = HIGH priority`);
   console.log(`  Kill switch:  WR < ${KILL_SWITCH_MIN_WR * 100}% after ${KILL_SWITCH_MIN_TRADES} trades`);
