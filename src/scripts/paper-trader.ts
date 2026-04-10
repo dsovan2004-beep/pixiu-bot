@@ -20,9 +20,14 @@ const MAX_GAP_MINUTES = 15;
 const MAX_ENTRY_MC = 20_000;
 const MULTI_WALLET_WINDOW_MIN = 10; // 2+ wallets buying same coin within 10 min
 
-// Exit rules
-const TAKE_PROFIT_PCT = 0.20; // +20%
-const STOP_LOSS_PCT = 0.10; // -10%
+// Grid exit levels: sell 25% of original position at each
+const GRID_LEVELS = [
+  { level: 1, pct: 10, sellPct: 25 },  // +10% → sell 25%
+  { level: 2, pct: 20, sellPct: 25 },  // +20% → sell 25%
+  { level: 3, pct: 40, sellPct: 25 },  // +40% → sell 25%
+  { level: 4, pct: 100, sellPct: 25 }, // +100% → sell final 25%, close
+];
+const STOP_LOSS_PCT = 10; // -10% on remaining → close all
 const TIMEOUT_MINUTES = 30;
 
 // Kill switch
@@ -241,7 +246,7 @@ async function openPosition(signal: QualifiedSignal): Promise<void> {
   );
 }
 
-// ─── Check Open Positions ────────────────────────────────
+// ─── Check Open Positions (Grid Exit) ────────────────────
 
 async function checkPositions(): Promise<void> {
   const { data: positions, error } = await supabase
@@ -256,7 +261,6 @@ async function checkPositions(): Promise<void> {
   for (const pos of positions) {
     const { price: currentPrice, source } = await getPrice(pos.coin_address);
 
-    // Skip PnL calc if both entry and current are placeholder
     if (source === "placeholder" && Number(pos.entry_price) === PLACEHOLDER_PRICE) {
       continue;
     }
@@ -265,34 +269,112 @@ async function checkPositions(): Promise<void> {
     const pnlPct = ((currentPrice - entryPrice) / entryPrice) * 100;
     const entryTime = new Date(pos.entry_time).getTime();
     const minutesOpen = (Date.now() - entryTime) / 60_000;
+    const coinLabel = pos.coin_name || pos.coin_address.slice(0, 8) + "...";
+    const currentLevel = pos.grid_level || 0;
+    let remainingPct = pos.remaining_pct ?? 100;
+    let partialPnl = pos.partial_pnl ?? 0;
 
-    let exitReason: string | null = null;
+    // ── Stop Loss: close everything immediately ──
+    if (pnlPct <= -STOP_LOSS_PCT) {
+      // PnL on remaining portion + any locked partial gains
+      const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
 
-    if (pnlPct >= TAKE_PROFIT_PCT * 100) {
-      exitReason = "take_profit";
-    } else if (pnlPct <= -(STOP_LOSS_PCT * 100)) {
-      exitReason = "stop_loss";
-    } else if (minutesOpen >= TIMEOUT_MINUTES) {
-      exitReason = "timeout";
-    }
-
-    if (exitReason) {
       await supabase
         .from("paper_trades")
         .update({
           exit_price: currentPrice,
-          pnl_pct: pnlPct,
+          pnl_pct: finalPnl,
           status: "closed",
           exit_time: new Date().toISOString(),
-          exit_reason: exitReason,
+          exit_reason: "stop_loss",
+          grid_level: currentLevel,
+          remaining_pct: 0,
+          partial_pnl: finalPnl,
         })
         .eq("id", pos.id);
 
-      const emoji =
-        exitReason === "take_profit" ? "✅" : exitReason === "stop_loss" ? "❌" : "⏰";
       console.log(
-        `  [PAPER EXIT] ${emoji} ${pos.coin_name || pos.coin_address.slice(0, 8)}... ${exitReason} @ $${currentPrice.toFixed(10)} (PnL: ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%)`
+        `  [STOP LOSS] ❌ ${coinLabel} @ $${currentPrice.toFixed(10)} | PnL: ${finalPnl >= 0 ? "+" : ""}${finalPnl.toFixed(2)}% (grid L${currentLevel}, ${remainingPct}% remaining closed)`
       );
+      continue;
+    }
+
+    // ── Timeout: close whatever remains ──
+    if (minutesOpen >= TIMEOUT_MINUTES) {
+      const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
+
+      await supabase
+        .from("paper_trades")
+        .update({
+          exit_price: currentPrice,
+          pnl_pct: finalPnl,
+          status: "closed",
+          exit_time: new Date().toISOString(),
+          exit_reason: "timeout",
+          grid_level: currentLevel,
+          remaining_pct: 0,
+          partial_pnl: finalPnl,
+        })
+        .eq("id", pos.id);
+
+      console.log(
+        `  [TIMEOUT] ⏰ ${coinLabel} @ $${currentPrice.toFixed(10)} | PnL: ${finalPnl >= 0 ? "+" : ""}${finalPnl.toFixed(2)}% (grid L${currentLevel}, ${remainingPct}% remaining closed at ${minutesOpen.toFixed(0)}min)`
+      );
+      continue;
+    }
+
+    // ── Grid Levels: check if we hit the next level ──
+    let newLevel = currentLevel;
+    let updated = false;
+
+    for (const grid of GRID_LEVELS) {
+      if (grid.level <= currentLevel) continue; // Already passed this level
+      if (pnlPct < grid.pct) break; // Haven't reached this level yet
+
+      // Hit this grid level — sell 25% of original position
+      const portionPnl = (grid.pct * grid.sellPct) / 100;
+      partialPnl += portionPnl;
+      remainingPct -= grid.sellPct;
+      newLevel = grid.level;
+      updated = true;
+
+      console.log(
+        `  [GRID L${grid.level}] ${coinLabel} → sold ${grid.sellPct}% at +${grid.pct}% | locked: +${partialPnl.toFixed(2)}% overall | ${remainingPct}% remaining`
+      );
+    }
+
+    // If we hit level 4 (or remaining is 0), close the trade
+    if (remainingPct <= 0) {
+      await supabase
+        .from("paper_trades")
+        .update({
+          exit_price: currentPrice,
+          pnl_pct: partialPnl,
+          status: "closed",
+          exit_time: new Date().toISOString(),
+          exit_reason: "take_profit",
+          grid_level: newLevel,
+          remaining_pct: 0,
+          partial_pnl: partialPnl,
+        })
+        .eq("id", pos.id);
+
+      console.log(
+        `  [GRID COMPLETE] ✅ ${coinLabel} fully exited at L${newLevel} | Total PnL: +${partialPnl.toFixed(2)}%`
+      );
+      continue;
+    }
+
+    // Update partial exit progress if any grid level was hit
+    if (updated) {
+      await supabase
+        .from("paper_trades")
+        .update({
+          grid_level: newLevel,
+          remaining_pct: remainingPct,
+          partial_pnl: partialPnl,
+        })
+        .eq("id", pos.id);
     }
   }
 }
@@ -372,7 +454,8 @@ async function main(): Promise<void> {
   console.log("═══════════════════════════════════════════════════════════");
   console.log(`  Mode:         PAPER ONLY — zero real SOL spent`);
   console.log(`  Entry filter: gap < ${MAX_GAP_MINUTES}min, MC < $${MAX_ENTRY_MC.toLocaleString()}, rug pass`);
-  console.log(`  Exit rules:   TP +${TAKE_PROFIT_PCT * 100}% | SL -${STOP_LOSS_PCT * 100}% | Timeout ${TIMEOUT_MINUTES}min`);
+  console.log(`  Exit grid:    L1 +10% | L2 +20% | L3 +40% | L4 +100% (25% each)`);
+  console.log(`  Stop loss:    -${STOP_LOSS_PCT}% on remaining | Timeout ${TIMEOUT_MINUTES}min`);
   console.log(`  Multi-wallet: 2+ wallets within ${MULTI_WALLET_WINDOW_MIN}min = HIGH priority`);
   console.log(`  Kill switch:  WR < ${KILL_SWITCH_MIN_WR * 100}% after ${KILL_SWITCH_MIN_TRADES} trades`);
   console.log(`  Signal poll:  Every ${SIGNAL_POLL_MS / 1000}s`);

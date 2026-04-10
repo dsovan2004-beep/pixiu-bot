@@ -35,6 +35,9 @@ interface PaperTrade {
   entry_time: string;
   exit_time: string | null;
   exit_reason: string | null;
+  grid_level: number;
+  remaining_pct: number;
+  partial_pnl: number;
 }
 
 export default function BotPage() {
@@ -221,7 +224,9 @@ export default function BotPage() {
                     <th className="text-left py-2 px-3">Coin</th>
                     <th className="text-left py-2 px-3">Wallet</th>
                     <th className="text-right py-2 px-3">Entry Price</th>
-                    <th className="text-center py-2 px-3">Priority</th>
+                    <th className="text-center py-2 px-3">Grid</th>
+                    <th className="text-right py-2 px-3">Remaining</th>
+                    <th className="text-right py-2 px-3">Locked PnL</th>
                     <th className="text-left py-2 px-3">Opened</th>
                   </tr>
                 </thead>
@@ -239,15 +244,15 @@ export default function BotPage() {
                         ${Number(t.entry_price).toFixed(10)}
                       </td>
                       <td className="py-2 px-3 text-center">
-                        <span
-                          className={
-                            t.priority === "HIGH"
-                              ? "text-amber-400 font-bold"
-                              : "text-zinc-500"
-                          }
-                        >
-                          {t.priority === "HIGH" ? "MULTI" : "—"}
+                        <span className={t.grid_level > 0 ? "text-green-400" : "text-zinc-600"}>
+                          L{t.grid_level}/4
                         </span>
+                      </td>
+                      <td className="py-2 px-3 text-right text-zinc-400">
+                        {t.remaining_pct}%
+                      </td>
+                      <td className={`py-2 px-3 text-right ${t.partial_pnl > 0 ? "text-green-500" : "text-zinc-600"}`}>
+                        {t.partial_pnl > 0 ? `+${t.partial_pnl.toFixed(2)}%` : "—"}
                       </td>
                       <td className="py-2 px-3 text-zinc-600">
                         {new Date(t.entry_time).toLocaleTimeString()}
@@ -274,6 +279,7 @@ export default function BotPage() {
                     <th className="text-right py-2 px-3">Entry</th>
                     <th className="text-right py-2 px-3">Exit</th>
                     <th className="text-right py-2 px-3">PnL</th>
+                    <th className="text-center py-2 px-3">Grid</th>
                     <th className="text-left py-2 px-3">Reason</th>
                     <th className="text-left py-2 px-3">Closed</th>
                   </tr>
@@ -304,6 +310,11 @@ export default function BotPage() {
                         >
                           {pnl >= 0 ? "+" : ""}
                           {pnl.toFixed(2)}%
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          <span className={t.grid_level >= 4 ? "text-green-400" : t.grid_level > 0 ? "text-amber-400" : "text-zinc-600"}>
+                            L{t.grid_level}
+                          </span>
                         </td>
                         <td className="py-2 px-3">
                           <span
