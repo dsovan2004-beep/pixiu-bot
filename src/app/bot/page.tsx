@@ -49,6 +49,7 @@ export default function BotPage() {
   const [openTrades, setOpenTrades] = useState<PaperTrade[]>([]);
   const [closedTrades, setClosedTrades] = useState<PaperTrade[]>([]);
   const [walletCount, setWalletCount] = useState(0);
+  const [allClosedStats, setAllClosedStats] = useState<Array<{ pnl_pct: number | null; pnl_usd: number | null; exit_reason: string | null }>>([]);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
@@ -59,7 +60,7 @@ export default function BotPage() {
   } | null>(null);
 
   const fetchData = useCallback(async () => {
-    const [stateRes, signalsRes, walletsRes, openRes, closedRes, bankrollRes] =
+    const [stateRes, signalsRes, walletsRes, openRes, closedRes, bankrollRes, allClosedRes] =
       await Promise.all([
         supabase
           .from("bot_state")
@@ -86,6 +87,11 @@ export default function BotPage() {
           .eq("status", "closed")
           .order("exit_time", { ascending: false })
           .limit(50),
+        // Fetch ALL closed trades for accurate stats (just pnl fields, not full rows)
+        supabase
+          .from("paper_trades")
+          .select("pnl_pct, pnl_usd, exit_reason")
+          .eq("status", "closed"),
         supabase
           .from("paper_bankroll")
           .select("*")
@@ -98,6 +104,7 @@ export default function BotPage() {
     setWalletCount(walletsRes.count || 0);
     setOpenTrades(openRes.data || []);
     setClosedTrades(closedRes.data || []);
+    setAllClosedStats(allClosedRes.data || []);
     if (bankrollRes.data) setBankroll(bankrollRes.data);
     setLastFetch(new Date());
     setLoading(false);
@@ -121,11 +128,11 @@ export default function BotPage() {
     setToggling(false);
   }
 
-  // ─── Paper Trade Stats ──────────────────────────────────
+  // ─── Paper Trade Stats (from ALL closed trades, not just display limit) ──
 
-  const totalClosed = closedTrades.length;
-  const wins = closedTrades.filter((t) => Number(t.pnl_pct) > 0);
-  const losses = closedTrades.filter((t) => Number(t.pnl_pct) <= 0);
+  const totalClosed = allClosedStats.length;
+  const wins = allClosedStats.filter((t) => Number(t.pnl_pct) > 0);
+  const losses = allClosedStats.filter((t) => Number(t.pnl_pct) <= 0);
   const winRate = totalClosed > 0 ? ((wins.length / totalClosed) * 100).toFixed(1) : "0";
   const avgGain =
     wins.length > 0
