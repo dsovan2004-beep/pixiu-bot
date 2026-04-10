@@ -258,6 +258,7 @@ export default function BotPage() {
                     <th className="text-left py-2 px-3">Wallet</th>
                     <th className="text-right py-2 px-3">Entry Price</th>
                     <th className="text-center py-2 px-3">Grid</th>
+                    <th className="text-left py-2 px-3">Verdict</th>
                     <th className="text-right py-2 px-3">Remaining</th>
                     <th className="text-right py-2 px-3">Locked PnL</th>
                     <th className="text-left py-2 px-3">Opened</th>
@@ -280,6 +281,17 @@ export default function BotPage() {
                         <span className={t.grid_level > 0 ? "text-green-400" : "text-zinc-600"}>
                           L{t.grid_level}/4
                         </span>
+                      </td>
+                      <td className="py-2 px-3">
+                        {t.grid_level >= 4
+                          ? "100x 💰"
+                          : t.grid_level === 3
+                            ? "Flying 🛸"
+                            : t.grid_level === 2
+                              ? "Mooning 🚀"
+                              : t.grid_level === 1
+                                ? "Pumping 📈"
+                                : "Watching 👀"}
                       </td>
                       <td className="py-2 px-3 text-right text-zinc-400">
                         {t.remaining_pct}%
