@@ -15,10 +15,12 @@ import supabase from "../lib/supabase-server";
 const SIGNAL_POLL_MS = 30_000; // Check for new signals every 30s
 const POSITION_CHECK_MS = 60_000; // Check open positions every 60s
 
-// Entry filters
-const MAX_GAP_MINUTES = 15;
-const MAX_ENTRY_MC = 20_000;
-const MULTI_WALLET_WINDOW_MIN = 10; // 2+ wallets buying same coin within 10 min
+// Entry filters (tightened after 11 trades at 18.2% WR)
+const MAX_GAP_MINUTES = 5; // Was 15 — meme coins peak fast
+const MAX_ENTRY_MC = 10_000; // Was 20K — earlier entry = more upside
+const MIN_UNIQUE_WALLETS = 2; // REQUIRE 2+ different wallets
+const MIN_SIGNAL_COUNT = 2; // REQUIRE 2+ signals in window
+const MULTI_WALLET_WINDOW_MIN = 10; // 2+ wallets within 10 min
 
 // Grid exit levels: sell 25% of original position at each
 const GRID_LEVELS = [
@@ -121,6 +123,8 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
   let skipMcTooHigh = 0;
   let skipAlreadyOpen = 0;
   let skipBundle = 0;
+  let skipSingleWallet = 0;
+  let skipLowSignals = 0;
   let passedFilters = 0;
 
   const qualified: QualifiedSignal[] = [];
@@ -242,7 +246,25 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
       continue;
     }
 
-    // Multi-wallet: only count truly unique wallets
+    // ── REQUIRE minimum signal count ──
+    if (totalSignals < MIN_SIGNAL_COUNT) {
+      skipLowSignals++;
+      for (const s of sigs) processedSignalIds.add(s.id);
+      continue;
+    }
+
+    // ── REQUIRE 2+ DIFFERENT wallets (most important filter) ──
+    if (uniqueWallets.size < MIN_UNIQUE_WALLETS) {
+      skipSingleWallet++;
+      if (skipSingleWallet <= 3) {
+        console.log(
+          `    [SKIP] ${coinLabel} single-wallet (${Array.from(uniqueWallets)[0]} only)`
+        );
+      }
+      for (const s of sigs) processedSignalIds.add(s.id);
+      continue;
+    }
+
     const isMultiWallet = uniqueWallets.size >= 2;
 
     const bestSig = sigs[0];
@@ -252,18 +274,16 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
       id: bestSig.id,
       coin_address: coinAddress,
       coin_name: bestSig.coin_name,
-      wallet_tag: isMultiWallet
-        ? `${Array.from(uniqueWallets).slice(0, 3).join("+")}${uniqueWallets.size > 3 ? `+${uniqueWallets.size - 3}more` : ""}`
-        : bestSig.wallet_tag,
+      wallet_tag: `${Array.from(uniqueWallets).slice(0, 3).join("+")}${uniqueWallets.size > 3 ? `+${uniqueWallets.size - 3}more` : ""}`,
       entry_mc: bestSig.entry_mc,
       signal_time: bestSig.signal_time,
       price_gap_minutes: bestSig.price_gap_minutes,
-      priority: isMultiWallet ? "HIGH" : "normal",
+      priority: uniqueWallets.size >= 3 ? "HIGH" : "normal",
     });
   }
 
   console.log(
-    `  [SCAN] Results: ${passedFilters} passed filters, ${qualified.length} qualified | Skipped: ${skipAlreadyProcessed} processed, ${skipGapTooOld} gap>${MAX_GAP_MINUTES}m, ${skipMcTooHigh} MC>$${MAX_ENTRY_MC}, ${skipAlreadyOpen} open, ${skipBundle} bundles`
+    `  [SCAN] Results: ${qualified.length} qualified | Skipped: ${skipGapTooOld} gap>${MAX_GAP_MINUTES}m, ${skipSingleWallet} single-wallet, ${skipLowSignals} low-signals, ${skipMcTooHigh} MC>$${MAX_ENTRY_MC.toLocaleString()}, ${skipBundle} bundles, ${skipAlreadyOpen} open, ${skipAlreadyProcessed} processed`
   );
 
   return qualified;
@@ -553,7 +573,7 @@ async function main(): Promise<void> {
   console.log("  PIXIU BOT — Paper Trading Engine (Sprint 2)");
   console.log("═══════════════════════════════════════════════════════════");
   console.log(`  Mode:         PAPER ONLY — zero real SOL spent`);
-  console.log(`  Entry filter: gap < ${MAX_GAP_MINUTES}min, MC < $${MAX_ENTRY_MC.toLocaleString()}, rug pass`);
+  console.log(`  Entry filter: gap < ${MAX_GAP_MINUTES}min, MC < $${MAX_ENTRY_MC.toLocaleString()}, ${MIN_UNIQUE_WALLETS}+ wallets, ${MIN_SIGNAL_COUNT}+ signals`);
   console.log(`  Exit grid:    L1 +10% | L2 +20% | L3 +40% | L4 +100% (25% each)`);
   console.log(`  Stop loss:    -${STOP_LOSS_PCT}% on remaining | Timeout ${TIMEOUT_MINUTES}min`);
   console.log(`  Multi-wallet: 2+ wallets within ${MULTI_WALLET_WINDOW_MIN}min = HIGH priority`);
