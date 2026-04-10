@@ -11,7 +11,9 @@
 
 import supabase from "../lib/supabase-server";
 
-const HEARTBEAT_MS = 60_000; // Update bot_state every 60s
+const HEARTBEAT_MS = 30_000; // Update bot_state every 30s
+const WEBHOOK_COUNT = 5;
+const COVERED_WALLETS = 500;
 
 async function main(): Promise<void> {
   console.log("═══════════════════════════════════════════════════════════");
@@ -19,11 +21,12 @@ async function main(): Promise<void> {
   console.log("═══════════════════════════════════════════════════════════");
   console.log(`  Mode:      WEBHOOK — Helius pushes transactions to us`);
   console.log(`  Endpoint:  https://pixiu-bot.pages.dev/api/webhook`);
-  console.log(`  Polling:   NONE — zero API calls, zero rate limits`);
+  console.log(`  Webhooks:  ${WEBHOOK_COUNT} active — covering ${COVERED_WALLETS} wallets`);
+  console.log(`  Note:      218 wallets uncovered (Helius 500 error)`);
   console.log(`  Heartbeat: Every ${HEARTBEAT_MS / 1000}s`);
   console.log(`  Started:   ${new Date().toISOString()}`);
   console.log("═══════════════════════════════════════════════════════════\n");
-  console.log("  [WEBHOOK MODE] Listening for Helius push notifications");
+  console.log("  [WEBHOOK MODE] Active — 5 webhooks covering 500 wallets");
   console.log("  Signals are processed at /api/webhook on Cloudflare Edge\n");
 
   // Set bot state to running
