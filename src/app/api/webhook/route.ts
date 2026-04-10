@@ -195,6 +195,20 @@ export async function POST(request: Request): Promise<Response> {
           (Date.now() - signalTime.getTime()) / 60_000
         );
 
+        // Bundle detection: check if same wallet has 3+ signals for same coin in 5 min
+        let bundleSuspected = false;
+        const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+        const { count: recentCount } = await supabase
+          .from("coin_signals")
+          .select("id", { count: "exact", head: true })
+          .eq("coin_address", mint)
+          .eq("wallet_tag", walletTag)
+          .gte("signal_time", fiveMinAgo);
+
+        if ((recentCount || 0) >= 2) {
+          bundleSuspected = true;
+        }
+
         // Insert signal
         await supabase.from("coin_signals").insert({
           coin_address: mint,
@@ -203,6 +217,7 @@ export async function POST(request: Request): Promise<Response> {
           entry_mc: null,
           rug_check_passed: true,
           price_gap_minutes: gapMinutes,
+          bundle_suspected: bundleSuspected,
         });
 
         signalCount++;

@@ -120,6 +120,7 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
   let skipGapTooOld = 0;
   let skipMcTooHigh = 0;
   let skipAlreadyOpen = 0;
+  let skipBundle = 0;
   let passedFilters = 0;
 
   const qualified: QualifiedSignal[] = [];
@@ -171,17 +172,77 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
   const recentlyTradedCoins = new Set(recentClosed?.map((p) => p.coin_address) || []);
 
   for (const [coinAddress, sigs] of coinGroups) {
+    const coinLabel = sigs[0].coin_name || coinAddress.slice(0, 8) + "...";
+
     if (openCoins.has(coinAddress)) {
       skipAlreadyOpen++;
       continue;
     }
 
     if (recentlyTradedCoins.has(coinAddress)) {
-      console.log(`    [SKIP] ${sigs[0].coin_name || coinAddress.slice(0, 8)}... recently traded`);
+      console.log(`    [SKIP] ${coinLabel} recently traded`);
       continue;
     }
 
+    // ── Bundle Detection ──
+    // Count signals per wallet for this coin
+    const walletSignalCounts = new Map<string, number>();
+    for (const s of sigs) {
+      walletSignalCounts.set(s.wallet_tag, (walletSignalCounts.get(s.wallet_tag) || 0) + 1);
+    }
+
     const uniqueWallets = new Set(sigs.map((s) => s.wallet_tag));
+    const totalSignals = sigs.length;
+
+    // Check if any single wallet has 50%+ of all signals (bundle)
+    let isBundle = false;
+    for (const [wallet, count] of walletSignalCounts) {
+      if (count / totalSignals >= 0.5 && totalSignals >= 3) {
+        isBundle = true;
+        console.log(
+          `    [SKIP] ${coinLabel} bundle detected (${wallet} = ${count}/${totalSignals} signals = ${((count / totalSignals) * 100).toFixed(0)}%)`
+        );
+        break;
+      }
+    }
+
+    // Also check if any single wallet has 3+ signals in 10 min window
+    if (!isBundle) {
+      for (const [wallet, count] of walletSignalCounts) {
+        if (count >= 3) {
+          // Check time spread
+          const walletSigs = sigs.filter((s) => s.wallet_tag === wallet);
+          const times = walletSigs.map((s) => new Date(s.signal_time).getTime());
+          const spread = (Math.max(...times) - Math.min(...times)) / 60_000;
+          if (spread <= 10) {
+            isBundle = true;
+            console.log(
+              `    [SKIP] ${coinLabel} bundle detected (${wallet} = ${count} signals in ${spread.toFixed(0)}min)`
+            );
+            break;
+          }
+        }
+      }
+    }
+
+    // Check if bundle_suspected signals dominate
+    if (!isBundle) {
+      const bundleSuspected = sigs.filter((s) => s.bundle_suspected === true).length;
+      if (bundleSuspected / totalSignals >= 0.5 && totalSignals >= 2) {
+        isBundle = true;
+        console.log(
+          `    [SKIP] ${coinLabel} bundle suspected (${bundleSuspected}/${totalSignals} flagged by webhook)`
+        );
+      }
+    }
+
+    if (isBundle) {
+      skipBundle++;
+      for (const s of sigs) processedSignalIds.add(s.id);
+      continue;
+    }
+
+    // Multi-wallet: only count truly unique wallets
     const isMultiWallet = uniqueWallets.size >= 2;
 
     const bestSig = sigs[0];
@@ -202,7 +263,7 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
   }
 
   console.log(
-    `  [SCAN] Results: ${passedFilters} passed filters, ${qualified.length} qualified | Skipped: ${skipAlreadyProcessed} processed, ${skipGapTooOld} gap>${MAX_GAP_MINUTES}m, ${skipMcTooHigh} MC>$${MAX_ENTRY_MC}, ${skipAlreadyOpen} already open`
+    `  [SCAN] Results: ${passedFilters} passed filters, ${qualified.length} qualified | Skipped: ${skipAlreadyProcessed} processed, ${skipGapTooOld} gap>${MAX_GAP_MINUTES}m, ${skipMcTooHigh} MC>$${MAX_ENTRY_MC}, ${skipAlreadyOpen} open, ${skipBundle} bundles`
   );
 
   return qualified;
@@ -338,6 +399,18 @@ async function checkPositions(): Promise<void> {
         })
         .eq("id", pos.id);
       await updateBankroll(pnlUsd);
+    }
+
+    // ── Circuit Breaker: hard exit on crash (>25% drop) ──
+    const CIRCUIT_BREAKER_PCT = 25;
+    if (pnlPct <= -CIRCUIT_BREAKER_PCT) {
+      const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
+      await closeTrade(finalPnl, "circuit_breaker", currentLevel);
+      const pnlUsd = (finalPnl / 100) * posSize;
+      console.log(
+        `  [CIRCUIT BREAKER] 🚨 ${coinLabel} crashed ${pnlPct.toFixed(1)}% — emergency exit | PnL: ${finalPnl.toFixed(2)}% ($${pnlUsd.toFixed(2)}) | grid L${currentLevel}`
+      );
+      continue;
     }
 
     // ── Stop Loss: close everything immediately ──

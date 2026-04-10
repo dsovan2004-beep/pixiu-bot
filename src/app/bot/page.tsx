@@ -19,6 +19,7 @@ interface CoinSignal {
   signal_time: string;
   rug_check_passed: boolean | null;
   price_gap_minutes: number | null;
+  bundle_suspected: boolean;
 }
 
 interface PaperTrade {
@@ -421,6 +422,11 @@ export default function BotPage() {
                     >
                       <td className="py-2 px-3 text-amber-500 font-bold">
                         {s.coin_name || "???"}
+                        {s.bundle_suspected && (
+                          <span className="ml-2 text-xs bg-red-900 text-red-400 px-1.5 py-0.5 rounded font-mono">
+                            BUNDLE
+                          </span>
+                        )}
                       </td>
                       <td className="py-2 px-3 text-zinc-500">
                         <a
