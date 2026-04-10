@@ -117,17 +117,6 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
 
   console.log(`  [SCAN] Found ${signals.length} rug-passed signals in window`);
 
-  // Load wallet tiers for quality filtering
-  const { data: walletTiers } = await supabase
-    .from("tracked_wallets")
-    .select("tag, tier")
-    .eq("active", true);
-
-  const tierMap = new Map<string, number>();
-  for (const w of walletTiers || []) {
-    tierMap.set(w.tag, w.tier);
-  }
-
   // Diagnostics
   let skipAlreadyProcessed = 0;
   let skipGapTooOld = 0;
@@ -212,7 +201,7 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
     // Check if any single wallet has 50%+ of all signals (bundle)
     let isBundle = false;
     for (const [wallet, count] of walletSignalCounts) {
-      if (count / totalSignals >= 0.5 && totalSignals >= 3) {
+      if (count / totalSignals >= 0.8 && totalSignals >= 3) {
         isBundle = true;
         console.log(
           `    [SKIP] ${coinLabel} bundle detected (${wallet} = ${count}/${totalSignals} signals = ${((count / totalSignals) * 100).toFixed(0)}%)`
@@ -243,7 +232,7 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
     // Check if bundle_suspected signals dominate
     if (!isBundle) {
       const bundleSuspected = sigs.filter((s) => s.bundle_suspected === true).length;
-      if (bundleSuspected / totalSignals >= 0.5 && totalSignals >= 2) {
+      if (bundleSuspected / totalSignals >= 0.8 && totalSignals >= 3) {
         isBundle = true;
         console.log(
           `    [SKIP] ${coinLabel} bundle suspected (${bundleSuspected}/${totalSignals} flagged by webhook)`
@@ -264,25 +253,17 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
       continue;
     }
 
-    // ── REQUIRE 2+ DIFFERENT Tier 1 wallets (most important filter) ──
-    const tier1Wallets = new Set(
-      Array.from(uniqueWallets).filter((tag) => tierMap.get(tag) === 1)
-    );
-
-    if (tier1Wallets.size < MIN_UNIQUE_WALLETS) {
+    // ── REQUIRE 2+ DIFFERENT active wallets (no tier gate) ──
+    if (uniqueWallets.size < MIN_UNIQUE_WALLETS) {
       skipSingleWallet++;
       if (skipSingleWallet <= 3) {
-        const t1Count = tier1Wallets.size;
-        const totalW = uniqueWallets.size;
         console.log(
-          `    [SKIP] ${coinLabel} needs ${MIN_UNIQUE_WALLETS}+ Tier1 wallets (has ${t1Count} Tier1 / ${totalW} total)`
+          `    [SKIP] ${coinLabel} single-wallet (${Array.from(uniqueWallets)[0]} only)`
         );
       }
       for (const s of sigs) processedSignalIds.add(s.id);
       continue;
     }
-
-    const isMultiWallet = tier1Wallets.size >= 2;
 
     const bestSig = sigs[0];
     for (const s of sigs) processedSignalIds.add(s.id);
@@ -291,11 +272,11 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
       id: bestSig.id,
       coin_address: coinAddress,
       coin_name: bestSig.coin_name,
-      wallet_tag: `${Array.from(tier1Wallets).slice(0, 3).join("+")}${tier1Wallets.size > 3 ? `+${tier1Wallets.size - 3}more` : ""}`,
+      wallet_tag: `${Array.from(uniqueWallets).slice(0, 3).join("+")}${uniqueWallets.size > 3 ? `+${uniqueWallets.size - 3}more` : ""}`,
       entry_mc: bestSig.entry_mc,
       signal_time: bestSig.signal_time,
       price_gap_minutes: bestSig.price_gap_minutes,
-      priority: tier1Wallets.size >= 3 ? "HIGH" : "normal",
+      priority: uniqueWallets.size >= 3 ? "HIGH" : "normal",
     });
   }
 
