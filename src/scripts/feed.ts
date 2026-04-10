@@ -17,11 +17,11 @@ if (!HELIUS_API_KEY) {
 }
 
 const HELIUS_API_URL = `https://api.helius.xyz/v0`;
-const POLL_INTERVAL_MS = 15_000; // 15s between full cycles (718 wallets takes ~30s)
-const BATCH_SIZE = 5;
-const BATCH_DELAY_MS = 200;
+const POLL_INTERVAL_MS = 30_000; // 30s between full cycles
+const BATCH_SIZE = 2; // Reduced from 5 — free tier can't handle concurrent bursts
+const BATCH_DELAY_MS = 500; // 500ms between batches
 const MAX_RETRIES = 3;
-const MAX_REQUESTS_PER_SEC = 8;
+const MAX_REQUESTS_PER_SEC = 4; // Conservative for free tier
 
 // Native SOL and common stablecoins to ignore
 const IGNORE_MINTS = new Set([
@@ -415,9 +415,16 @@ async function tick(): Promise<void> {
       })
     );
 
-    // Count errors
+    // Count and log errors
     for (const r of results) {
-      if (r.status === "rejected") errorCount++;
+      if (r.status === "rejected") {
+        errorCount++;
+        const msg = r.reason?.message || String(r.reason);
+        // Only log first few unique errors per cycle to avoid spam
+        if (errorCount <= 3 || errorCount % 50 === 0) {
+          console.error(`  [ERROR #${errorCount}] ${msg}`);
+        }
+      }
     }
 
     // Delay between batches
@@ -436,7 +443,7 @@ async function tick(): Promise<void> {
 
 async function main(): Promise<void> {
   console.log("═══════════════════════════════════════════════════════════");
-  console.log("  PIXIU BOT — Passive Wallet Observer (Sprint 1.1)");
+  console.log("  PIXIU BOT — Passive Wallet Observer (Sprint 2)");
   console.log("═══════════════════════════════════════════════════════════");
   console.log(`  Mode:       OBSERVE ONLY — zero trades executed`);
   console.log(`  RPC:        Helius Enhanced Transactions API`);

@@ -64,8 +64,11 @@ interface QualifiedSignal {
 }
 
 async function findNewSignals(): Promise<QualifiedSignal[]> {
-  // Get signals from last 20 minutes that pass filters
-  const cutoff = new Date(Date.now() - 20 * 60_000).toISOString();
+  const now = new Date();
+  // Look back 60 minutes for signals (wider window to catch more)
+  const cutoff = new Date(now.getTime() - 60 * 60_000).toISOString();
+
+  console.log(`  [SCAN] Looking for signals since ${cutoff} (now: ${now.toISOString()})`);
 
   const { data: signals, error } = await supabase
     .from("coin_signals")
@@ -79,25 +82,47 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
     return [];
   }
 
-  const qualified: QualifiedSignal[] = [];
+  console.log(`  [SCAN] Found ${signals.length} rug-passed signals in window`);
 
-  // Group by coin_address to detect multi-wallet buys
+  // Diagnostics
+  let skipAlreadyProcessed = 0;
+  let skipGapTooOld = 0;
+  let skipMcTooHigh = 0;
+  let skipAlreadyOpen = 0;
+  let passedFilters = 0;
+
+  const qualified: QualifiedSignal[] = [];
   const coinGroups = new Map<string, typeof signals>();
+
   for (const sig of signals) {
-    if (processedSignalIds.has(sig.id)) continue;
+    if (processedSignalIds.has(sig.id)) {
+      skipAlreadyProcessed++;
+      continue;
+    }
 
     const gap = sig.price_gap_minutes ?? 999;
-    if (gap > MAX_GAP_MINUTES) continue;
+    if (gap > MAX_GAP_MINUTES) {
+      skipGapTooOld++;
+      if (skipGapTooOld <= 3) {
+        console.log(
+          `    [SKIP] ${sig.coin_name || sig.coin_address.slice(0, 8)}... gap=${gap}min > ${MAX_GAP_MINUTES}min`
+        );
+      }
+      continue;
+    }
 
-    // MC filter: skip if MC is known and over limit
-    if (sig.entry_mc && Number(sig.entry_mc) > MAX_ENTRY_MC) continue;
+    if (sig.entry_mc && Number(sig.entry_mc) > MAX_ENTRY_MC) {
+      skipMcTooHigh++;
+      continue;
+    }
 
+    passedFilters++;
     const group = coinGroups.get(sig.coin_address) || [];
     group.push(sig);
     coinGroups.set(sig.coin_address, group);
   }
 
-  // Check if we already have an open position for each coin
+  // Check open positions
   const { data: openPositions } = await supabase
     .from("paper_trades")
     .select("coin_address")
@@ -105,19 +130,30 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
 
   const openCoins = new Set(openPositions?.map((p) => p.coin_address) || []);
 
-  for (const [coinAddress, sigs] of coinGroups) {
-    // Skip if already have open position on this coin
-    if (openCoins.has(coinAddress)) continue;
+  // Also check recently closed to avoid re-entering same coin
+  const { data: recentClosed } = await supabase
+    .from("paper_trades")
+    .select("coin_address")
+    .eq("status", "closed")
+    .gte("exit_time", new Date(now.getTime() - 60 * 60_000).toISOString());
 
-    // Detect multi-wallet boost
+  const recentlyTradedCoins = new Set(recentClosed?.map((p) => p.coin_address) || []);
+
+  for (const [coinAddress, sigs] of coinGroups) {
+    if (openCoins.has(coinAddress)) {
+      skipAlreadyOpen++;
+      continue;
+    }
+
+    if (recentlyTradedCoins.has(coinAddress)) {
+      console.log(`    [SKIP] ${sigs[0].coin_name || coinAddress.slice(0, 8)}... recently traded`);
+      continue;
+    }
+
     const uniqueWallets = new Set(sigs.map((s) => s.wallet_tag));
     const isMultiWallet = uniqueWallets.size >= 2;
 
-    // Use the most recent signal for this coin
     const bestSig = sigs[0];
-    processedSignalIds.add(bestSig.id);
-
-    // Mark all signals for this coin as processed
     for (const s of sigs) processedSignalIds.add(s.id);
 
     qualified.push({
@@ -133,6 +169,10 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
       priority: isMultiWallet ? "HIGH" : "normal",
     });
   }
+
+  console.log(
+    `  [SCAN] Results: ${passedFilters} passed filters, ${qualified.length} qualified | Skipped: ${skipAlreadyProcessed} processed, ${skipGapTooOld} gap>${MAX_GAP_MINUTES}m, ${skipMcTooHigh} MC>$${MAX_ENTRY_MC}, ${skipAlreadyOpen} already open`
+  );
 
   return qualified;
 }
@@ -309,9 +349,15 @@ async function main(): Promise<void> {
 
   // Signal poll loop
   async function signalTick(): Promise<void> {
-    if (killSwitchActive) return;
+    if (killSwitchActive) {
+      console.log("  [SCAN] Kill switch active — skipping signal scan");
+      return;
+    }
 
     const signals = await findNewSignals();
+    if (signals.length === 0) {
+      console.log("  [SCAN] No new qualified signals this tick");
+    }
     for (const sig of signals) {
       await openPosition(sig);
     }
