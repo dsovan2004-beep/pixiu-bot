@@ -15,12 +15,12 @@ import supabase from "../lib/supabase-server";
 const SIGNAL_POLL_MS = 30_000; // Check for new signals every 30s
 const POSITION_CHECK_MS = 60_000; // Check open positions every 60s
 
-// Entry filters (tightened after 11 trades at 18.2% WR)
-const MAX_GAP_MINUTES = 5; // Was 15 — meme coins peak fast
-const MAX_ENTRY_MC = 10_000; // Was 20K — earlier entry = more upside
-const MIN_UNIQUE_WALLETS = 2; // REQUIRE 2+ different wallets
-const MIN_SIGNAL_COUNT = 2; // REQUIRE 2+ signals in window
-const MULTI_WALLET_WINDOW_MIN = 10; // 2+ wallets within 10 min
+// Entry filters — opened up for volume. 2-wallet rule stays.
+const MAX_GAP_MINUTES = 30; // Wide — let trades flow
+const MAX_ENTRY_MC = 100_000; // Wide — don't miss runners
+const MIN_UNIQUE_WALLETS = 2; // KEEP — this is the edge
+const MIN_SIGNAL_COUNT = 2; // 2+ signals minimum
+const MULTI_WALLET_WINDOW_MIN = 15; // Wider window for wallet convergence
 
 // Grid exit levels: sell 25% of original position at each
 const GRID_LEVELS = [
@@ -98,8 +98,8 @@ interface QualifiedSignal {
 
 async function findNewSignals(): Promise<QualifiedSignal[]> {
   const now = new Date();
-  // Look back 60 minutes for signals (wider window to catch more)
-  const cutoff = new Date(now.getTime() - 60 * 60_000).toISOString();
+  // Look back 120 minutes for signals — maximize volume
+  const cutoff = new Date(now.getTime() - 120 * 60_000).toISOString();
 
   console.log(`  [SCAN] Looking for signals since ${cutoff} (now: ${now.toISOString()})`);
 
@@ -590,7 +590,8 @@ async function main(): Promise<void> {
   console.log("  PIXIU BOT — Paper Trading Engine (Sprint 2)");
   console.log("═══════════════════════════════════════════════════════════");
   console.log(`  Mode:         PAPER ONLY — zero real SOL spent`);
-  console.log(`  Entry filter: gap < ${MAX_GAP_MINUTES}min, MC < $${MAX_ENTRY_MC.toLocaleString()}, ${MIN_UNIQUE_WALLETS}+ Tier1 wallets, ${MIN_SIGNAL_COUNT}+ signals`);
+  console.log(`  Entry filter: gap < ${MAX_GAP_MINUTES}min, MC < $${MAX_ENTRY_MC.toLocaleString()}, ${MIN_UNIQUE_WALLETS}+ Tier1 wallets, VOLUME MODE`);
+  console.log(`  Mission:      Recover $3,325 — need 50 trades for validation`);
   console.log(`  Exit grid:    L1 +10% | L2 +20% | L3 +40% | L4 +100% (25% each)`);
   console.log(`  Stop loss:    -${STOP_LOSS_PCT}% on remaining | Timeout ${TIMEOUT_MINUTES}min`);
   console.log(`  Multi-wallet: 2+ wallets within ${MULTI_WALLET_WINDOW_MIN}min = HIGH priority`);

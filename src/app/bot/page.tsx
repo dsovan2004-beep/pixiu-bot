@@ -31,6 +31,8 @@ interface PaperTrade {
   entry_mc: number | null;
   exit_price: number | null;
   pnl_pct: number | null;
+  pnl_usd: number | null;
+  position_size_usd: number | null;
   status: string;
   priority: string;
   entry_time: string;
@@ -137,6 +139,13 @@ export default function BotPage() {
   const killSwitchTriggered =
     totalClosed >= 50 && Number(winRate) < 55;
 
+  // ─── Recovery Tracker ──────────────────────────────────
+  const RECOVERY_GOAL = 3325;
+  const totalWinUsd = wins.reduce((s, t) => s + Math.max(0, Number(t.pnl_usd || 0)), 0);
+  const recoveryPct = Math.min((totalWinUsd / RECOVERY_GOAL) * 100, 100);
+  const avgWinUsd = wins.length > 0 ? totalWinUsd / wins.length : 0;
+  const tradesNeeded = avgWinUsd > 0 ? Math.ceil((RECOVERY_GOAL - totalWinUsd) / avgWinUsd) : 999;
+
   if (loading) {
     return <div className="text-zinc-500 text-center mt-20">Loading...</div>;
   }
@@ -180,6 +189,43 @@ export default function BotPage() {
             />
           </div>
         )}
+
+        {/* Recovery Tracker */}
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-bold text-amber-500">
+              Recovery Goal: ${RECOVERY_GOAL.toLocaleString()}
+            </span>
+            <span className="text-sm font-mono text-zinc-400">
+              ${totalWinUsd.toFixed(2)} / ${RECOVERY_GOAL.toLocaleString()}
+            </span>
+          </div>
+          <div className="w-full bg-zinc-800 rounded-full h-4 overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all duration-500"
+              style={{
+                width: `${Math.max(recoveryPct, 1)}%`,
+                background: recoveryPct >= 100
+                  ? "linear-gradient(90deg, #22c55e, #16a34a)"
+                  : "linear-gradient(90deg, #f59e0b, #ef4444)",
+              }}
+            />
+          </div>
+          <div className="flex items-center justify-between mt-2">
+            <span className="text-xs text-zinc-500">
+              {recoveryPct >= 100
+                ? "GOAL REACHED"
+                : `${recoveryPct.toFixed(1)}% there`}
+            </span>
+            <span className="text-xs text-zinc-500">
+              {wins.length > 0 && recoveryPct < 100
+                ? `~${tradesNeeded} winning trades to go (avg $${avgWinUsd.toFixed(2)}/win)`
+                : recoveryPct >= 100
+                  ? "Dustin's back"
+                  : "Waiting for first win..."}
+            </span>
+          </div>
+        </div>
 
         {/* Status Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
