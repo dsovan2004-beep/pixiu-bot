@@ -45,6 +45,7 @@ export default function BotPage() {
   const [walletCount, setWalletCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
+  const [lastFetch, setLastFetch] = useState<Date | null>(null);
 
   const fetchData = useCallback(async () => {
     const [stateRes, signalsRes, walletsRes, openRes, closedRes] =
@@ -81,6 +82,7 @@ export default function BotPage() {
     setWalletCount(walletsRes.count || 0);
     setOpenTrades(openRes.data || []);
     setClosedTrades(closedRes.data || []);
+    setLastFetch(new Date());
     setLoading(false);
   }, []);
 
@@ -167,9 +169,9 @@ export default function BotPage() {
           >
             {toggling ? "..." : botState?.is_running ? "STOP BOT" : "START BOT"}
           </button>
-          {botState?.last_updated && (
+          {lastFetch && (
             <span className="text-zinc-600 text-xs">
-              Last updated: {new Date(botState.last_updated).toLocaleString()}
+              Last fetched: {lastFetch.toLocaleTimeString()}
             </span>
           )}
         </div>
