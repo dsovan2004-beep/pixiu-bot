@@ -49,9 +49,14 @@ export default function BotPage() {
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
+  const [bankroll, setBankroll] = useState<{
+    starting_balance: number;
+    current_balance: number;
+    total_pnl_usd: number;
+  } | null>(null);
 
   const fetchData = useCallback(async () => {
-    const [stateRes, signalsRes, walletsRes, openRes, closedRes] =
+    const [stateRes, signalsRes, walletsRes, openRes, closedRes, bankrollRes] =
       await Promise.all([
         supabase
           .from("bot_state")
@@ -78,6 +83,11 @@ export default function BotPage() {
           .eq("status", "closed")
           .order("exit_time", { ascending: false })
           .limit(50),
+        supabase
+          .from("paper_bankroll")
+          .select("*")
+          .limit(1)
+          .single(),
       ]);
 
     if (stateRes.data && stateRes.data.length > 0) setBotState(stateRes.data[0]);
@@ -85,6 +95,7 @@ export default function BotPage() {
     setWalletCount(walletsRes.count || 0);
     setOpenTrades(openRes.data || []);
     setClosedTrades(closedRes.data || []);
+    if (bankrollRes.data) setBankroll(bankrollRes.data);
     setLastFetch(new Date());
     setLoading(false);
   }, []);
@@ -144,6 +155,28 @@ export default function BotPage() {
             <span className="text-red-400 font-bold font-mono">
               KILL SWITCH: Win rate {winRate}% &lt; 55% after {totalClosed} trades — new entries paused
             </span>
+          </div>
+        )}
+
+        {/* Bankroll */}
+        {bankroll && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Card label="Starting" value={`$${Number(bankroll.starting_balance).toLocaleString()}`} />
+            <Card
+              label="Current"
+              value={`$${Number(bankroll.current_balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              color={Number(bankroll.current_balance) >= Number(bankroll.starting_balance) ? "text-green-500" : "text-red-500"}
+            />
+            <Card
+              label="Total PnL"
+              value={`${Number(bankroll.total_pnl_usd) >= 0 ? "+" : ""}$${Number(bankroll.total_pnl_usd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              color={Number(bankroll.total_pnl_usd) >= 0 ? "text-green-500" : "text-red-500"}
+            />
+            <Card
+              label="Return"
+              value={`${Number(bankroll.total_pnl_usd) >= 0 ? "+" : ""}${((Number(bankroll.total_pnl_usd) / Number(bankroll.starting_balance)) * 100).toFixed(2)}%`}
+              color={Number(bankroll.total_pnl_usd) >= 0 ? "text-green-500" : "text-red-500"}
+            />
           </div>
         )}
 

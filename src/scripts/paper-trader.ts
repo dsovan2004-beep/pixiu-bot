@@ -208,6 +208,45 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
   return qualified;
 }
 
+// ─── Bankroll ────────────────────────────────────────────
+
+const POSITION_SIZE_PCT = 0.01; // 1% of bankroll per trade
+
+async function getBankroll(): Promise<{ id: string; current_balance: number }> {
+  const { data } = await supabase
+    .from("paper_bankroll")
+    .select("id, current_balance")
+    .limit(1)
+    .single();
+  return data || { id: "", current_balance: 10000 };
+}
+
+async function updateBankroll(pnlUsd: number): Promise<void> {
+  const bankroll = await getBankroll();
+  const newBalance = Number(bankroll.current_balance) + pnlUsd;
+  const { data: startRow } = await supabase
+    .from("paper_bankroll")
+    .select("starting_balance")
+    .limit(1)
+    .single();
+  const startBal = Number(startRow?.starting_balance || 10000);
+  const totalPnl = newBalance - startBal;
+
+  await supabase
+    .from("paper_bankroll")
+    .update({
+      current_balance: newBalance,
+      total_pnl_usd: totalPnl,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", bankroll.id);
+
+  const sign = pnlUsd >= 0 ? "+" : "";
+  console.log(
+    `  [BANKROLL] $${Number(bankroll.current_balance).toFixed(2)} → $${newBalance.toFixed(2)} (${sign}$${pnlUsd.toFixed(2)})`
+  );
+}
+
 // ─── Open Paper Position ─────────────────────────────────
 
 async function openPosition(signal: QualifiedSignal): Promise<void> {
@@ -223,6 +262,10 @@ async function openPosition(signal: QualifiedSignal): Promise<void> {
     `  [DEBUG] Price for ${coinLabel}: $${price} (source: ${source})`
   );
 
+  // Calculate position size: 1% of current bankroll
+  const bankroll = await getBankroll();
+  const positionSize = Number(bankroll.current_balance) * POSITION_SIZE_PCT;
+
   const { error } = await supabase.from("paper_trades").insert({
     coin_address: signal.coin_address,
     coin_name: signal.coin_name,
@@ -232,6 +275,7 @@ async function openPosition(signal: QualifiedSignal): Promise<void> {
     status: "open",
     priority: signal.priority,
     entry_time: new Date().toISOString(),
+    position_size_usd: positionSize,
   });
 
   if (error) {
@@ -242,7 +286,7 @@ async function openPosition(signal: QualifiedSignal): Promise<void> {
   const prioTag = signal.priority === "HIGH" ? " [MULTI-WALLET]" : "";
   const srcTag = source !== "jupiter" ? ` [${source}]` : "";
   console.log(
-    `  [ENTRY] ${coinLabel} @ $${price.toFixed(10)} | gap: ${signal.price_gap_minutes}min | via: ${signal.wallet_tag}${prioTag}${srcTag}`
+    `  [ENTRY] ${coinLabel} @ $${price.toFixed(10)} | $${positionSize.toFixed(2)} position | gap: ${signal.price_gap_minutes}min | via: ${signal.wallet_tag}${prioTag}${srcTag}`
   );
 }
 
@@ -274,27 +318,35 @@ async function checkPositions(): Promise<void> {
     let remainingPct = pos.remaining_pct ?? 100;
     let partialPnl = pos.partial_pnl ?? 0;
 
-    // ── Stop Loss: close everything immediately ──
-    if (pnlPct <= -STOP_LOSS_PCT) {
-      // PnL on remaining portion + any locked partial gains
-      const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
+    const posSize = Number(pos.position_size_usd) || 100;
 
+    // Helper: close trade and update bankroll
+    async function closeTrade(finalPnl: number, exitReason: string, gridLvl: number) {
+      const pnlUsd = (finalPnl / 100) * posSize;
       await supabase
         .from("paper_trades")
         .update({
           exit_price: currentPrice,
           pnl_pct: finalPnl,
+          pnl_usd: pnlUsd,
           status: "closed",
           exit_time: new Date().toISOString(),
-          exit_reason: "stop_loss",
-          grid_level: currentLevel,
+          exit_reason: exitReason,
+          grid_level: gridLvl,
           remaining_pct: 0,
           partial_pnl: finalPnl,
         })
         .eq("id", pos.id);
+      await updateBankroll(pnlUsd);
+    }
 
+    // ── Stop Loss: close everything immediately ──
+    if (pnlPct <= -STOP_LOSS_PCT) {
+      const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
+      await closeTrade(finalPnl, "stop_loss", currentLevel);
+      const pnlUsd = (finalPnl / 100) * posSize;
       console.log(
-        `  [STOP LOSS] ❌ ${coinLabel} @ $${currentPrice.toFixed(10)} | PnL: ${finalPnl >= 0 ? "+" : ""}${finalPnl.toFixed(2)}% (grid L${currentLevel}, ${remainingPct}% remaining closed)`
+        `  [STOP LOSS] ❌ ${coinLabel} | PnL: ${finalPnl >= 0 ? "+" : ""}${finalPnl.toFixed(2)}% ($${pnlUsd >= 0 ? "+" : ""}${pnlUsd.toFixed(2)}) | grid L${currentLevel}`
       );
       continue;
     }
@@ -302,23 +354,10 @@ async function checkPositions(): Promise<void> {
     // ── Timeout: close whatever remains ──
     if (minutesOpen >= TIMEOUT_MINUTES) {
       const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
-
-      await supabase
-        .from("paper_trades")
-        .update({
-          exit_price: currentPrice,
-          pnl_pct: finalPnl,
-          status: "closed",
-          exit_time: new Date().toISOString(),
-          exit_reason: "timeout",
-          grid_level: currentLevel,
-          remaining_pct: 0,
-          partial_pnl: finalPnl,
-        })
-        .eq("id", pos.id);
-
+      await closeTrade(finalPnl, "timeout", currentLevel);
+      const pnlUsd = (finalPnl / 100) * posSize;
       console.log(
-        `  [TIMEOUT] ⏰ ${coinLabel} @ $${currentPrice.toFixed(10)} | PnL: ${finalPnl >= 0 ? "+" : ""}${finalPnl.toFixed(2)}% (grid L${currentLevel}, ${remainingPct}% remaining closed at ${minutesOpen.toFixed(0)}min)`
+        `  [TIMEOUT] ⏰ ${coinLabel} | PnL: ${finalPnl >= 0 ? "+" : ""}${finalPnl.toFixed(2)}% ($${pnlUsd >= 0 ? "+" : ""}${pnlUsd.toFixed(2)}) | grid L${currentLevel} | ${minutesOpen.toFixed(0)}min`
       );
       continue;
     }
@@ -328,39 +367,27 @@ async function checkPositions(): Promise<void> {
     let updated = false;
 
     for (const grid of GRID_LEVELS) {
-      if (grid.level <= currentLevel) continue; // Already passed this level
-      if (pnlPct < grid.pct) break; // Haven't reached this level yet
+      if (grid.level <= currentLevel) continue;
+      if (pnlPct < grid.pct) break;
 
-      // Hit this grid level — sell 25% of original position
       const portionPnl = (grid.pct * grid.sellPct) / 100;
       partialPnl += portionPnl;
       remainingPct -= grid.sellPct;
       newLevel = grid.level;
       updated = true;
 
+      const lockedUsd = (partialPnl / 100) * posSize;
       console.log(
-        `  [GRID L${grid.level}] ${coinLabel} → sold ${grid.sellPct}% at +${grid.pct}% | locked: +${partialPnl.toFixed(2)}% overall | ${remainingPct}% remaining`
+        `  [GRID L${grid.level}] ${coinLabel} → sold ${grid.sellPct}% at +${grid.pct}% | locked: +${partialPnl.toFixed(2)}% (+$${lockedUsd.toFixed(2)}) | ${remainingPct}% remaining`
       );
     }
 
     // If we hit level 4 (or remaining is 0), close the trade
     if (remainingPct <= 0) {
-      await supabase
-        .from("paper_trades")
-        .update({
-          exit_price: currentPrice,
-          pnl_pct: partialPnl,
-          status: "closed",
-          exit_time: new Date().toISOString(),
-          exit_reason: "take_profit",
-          grid_level: newLevel,
-          remaining_pct: 0,
-          partial_pnl: partialPnl,
-        })
-        .eq("id", pos.id);
-
+      await closeTrade(partialPnl, "take_profit", newLevel);
+      const pnlUsd = (partialPnl / 100) * posSize;
       console.log(
-        `  [GRID COMPLETE] ✅ ${coinLabel} fully exited at L${newLevel} | Total PnL: +${partialPnl.toFixed(2)}%`
+        `  [GRID COMPLETE] ✅ ${coinLabel} fully exited at L${newLevel} | PnL: +${partialPnl.toFixed(2)}% (+$${pnlUsd.toFixed(2)})`
       );
       continue;
     }
