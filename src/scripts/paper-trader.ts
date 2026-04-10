@@ -124,7 +124,6 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
   let skipAlreadyOpen = 0;
   let skipBundle = 0;
   let skipSingleWallet = 0;
-  let skipLowSignals = 0;
   let passedFilters = 0;
 
   const qualified: QualifiedSignal[] = [];
@@ -198,57 +197,20 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
     const uniqueWallets = new Set(sigs.map((s) => s.wallet_tag));
     const totalSignals = sigs.length;
 
-    // Check if any single wallet has 50%+ of all signals (bundle)
+    // Bundle check: skip only if 1 wallet = 80%+ of all signals
     let isBundle = false;
     for (const [wallet, count] of walletSignalCounts) {
       if (count / totalSignals >= 0.8 && totalSignals >= 3) {
         isBundle = true;
         console.log(
-          `    [SKIP] ${coinLabel} bundle detected (${wallet} = ${count}/${totalSignals} signals = ${((count / totalSignals) * 100).toFixed(0)}%)`
+          `    [SKIP] ${coinLabel} bundle (${wallet} = ${count}/${totalSignals} = ${((count / totalSignals) * 100).toFixed(0)}%)`
         );
         break;
       }
     }
 
-    // Also check if any single wallet has 3+ signals in 10 min window
-    if (!isBundle) {
-      for (const [wallet, count] of walletSignalCounts) {
-        if (count >= 3) {
-          // Check time spread
-          const walletSigs = sigs.filter((s) => s.wallet_tag === wallet);
-          const times = walletSigs.map((s) => new Date(s.signal_time).getTime());
-          const spread = (Math.max(...times) - Math.min(...times)) / 60_000;
-          if (spread <= 10) {
-            isBundle = true;
-            console.log(
-              `    [SKIP] ${coinLabel} bundle detected (${wallet} = ${count} signals in ${spread.toFixed(0)}min)`
-            );
-            break;
-          }
-        }
-      }
-    }
-
-    // Check if bundle_suspected signals dominate
-    if (!isBundle) {
-      const bundleSuspected = sigs.filter((s) => s.bundle_suspected === true).length;
-      if (bundleSuspected / totalSignals >= 0.8 && totalSignals >= 3) {
-        isBundle = true;
-        console.log(
-          `    [SKIP] ${coinLabel} bundle suspected (${bundleSuspected}/${totalSignals} flagged by webhook)`
-        );
-      }
-    }
-
     if (isBundle) {
       skipBundle++;
-      for (const s of sigs) processedSignalIds.add(s.id);
-      continue;
-    }
-
-    // ── REQUIRE minimum signal count ──
-    if (totalSignals < MIN_SIGNAL_COUNT) {
-      skipLowSignals++;
       for (const s of sigs) processedSignalIds.add(s.id);
       continue;
     }
@@ -281,7 +243,7 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
   }
 
   console.log(
-    `  [SCAN] Results: ${qualified.length} qualified | Skipped: ${skipGapTooOld} gap>${MAX_GAP_MINUTES}m, ${skipSingleWallet} single-wallet, ${skipLowSignals} low-signals, ${skipMcTooHigh} MC>$${MAX_ENTRY_MC.toLocaleString()}, ${skipBundle} bundles, ${skipAlreadyOpen} open, ${skipAlreadyProcessed} processed`
+    `  [SCAN] Results: ${qualified.length} qualified | Skipped: ${skipGapTooOld} gap>${MAX_GAP_MINUTES}m, ${skipSingleWallet} single-wallet, ${skipMcTooHigh} MC>$${MAX_ENTRY_MC.toLocaleString()}, ${skipBundle} bundles, ${skipAlreadyOpen} open, ${skipAlreadyProcessed} processed`
   );
 
   return qualified;
