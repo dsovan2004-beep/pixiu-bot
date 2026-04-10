@@ -33,21 +33,47 @@ const KILL_SWITCH_MIN_WR = 0.55; // 55%
 const processedSignalIds = new Set<string>();
 let killSwitchActive = false;
 
-// ─── Jupiter Price API ───────────────────────────────────
+// ─── Price Resolution (multi-source) ─────────────────────
 
-async function getPrice(mint: string): Promise<number | null> {
+const HELIUS_API_KEY = process.env.HELIUS_API_KEY || "";
+const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
+const PLACEHOLDER_PRICE = 0.000001;
+
+interface PriceResult {
+  price: number;
+  source: string;
+}
+
+async function getPrice(mint: string): Promise<PriceResult> {
+  // Source 1: Jupiter Price API
   try {
     const url = `https://price.jup.ag/v6/price?ids=${mint}`;
     const response = await fetch(url);
+    if (response.ok) {
+      const data = await response.json();
+      const price = data.data?.[mint]?.price;
+      if (typeof price === "number" && price > 0) {
+        return { price, source: "jupiter" };
+      }
+    }
+  } catch {}
 
-    if (!response.ok) return null;
+  // Source 2: DexScreener API
+  try {
+    const url = `https://api.dexscreener.com/latest/dex/tokens/${mint}`;
+    const response = await fetch(url);
+    if (response.ok) {
+      const data = await response.json();
+      const pair = data.pairs?.[0];
+      if (pair?.priceUsd) {
+        const price = parseFloat(pair.priceUsd);
+        if (price > 0) return { price, source: "dexscreener" };
+      }
+    }
+  } catch {}
 
-    const data = await response.json();
-    const price = data.data?.[mint]?.price;
-    return typeof price === "number" && price > 0 ? price : null;
-  } catch {
-    return null;
-  }
+  // Source 3: Placeholder — still enter trade for signal validation
+  return { price: PLACEHOLDER_PRICE, source: "placeholder" };
 }
 
 // ─── Signal Processing ───────────────────────────────────
@@ -180,14 +206,17 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
 // ─── Open Paper Position ─────────────────────────────────
 
 async function openPosition(signal: QualifiedSignal): Promise<void> {
-  const price = await getPrice(signal.coin_address);
+  const coinLabel = signal.coin_name || signal.coin_address.slice(0, 8) + "...";
 
-  if (!price) {
-    console.log(
-      `  [SKIP] ${signal.coin_name || signal.coin_address.slice(0, 8)}... — no price available`
-    );
-    return;
-  }
+  console.log(
+    `  [DEBUG] Evaluating ${coinLabel}: gap=${signal.price_gap_minutes}min, MC=${signal.entry_mc ?? "unknown"}, mint=${signal.coin_address.slice(0, 12)}...`
+  );
+
+  const { price, source } = await getPrice(signal.coin_address);
+
+  console.log(
+    `  [DEBUG] Price for ${coinLabel}: $${price} (source: ${source})`
+  );
 
   const { error } = await supabase.from("paper_trades").insert({
     coin_address: signal.coin_address,
@@ -206,8 +235,9 @@ async function openPosition(signal: QualifiedSignal): Promise<void> {
   }
 
   const prioTag = signal.priority === "HIGH" ? " [MULTI-WALLET]" : "";
+  const srcTag = source !== "jupiter" ? ` [${source}]` : "";
   console.log(
-    `  [PAPER BUY] ${signal.coin_name || signal.coin_address.slice(0, 8)}... @ $${price.toFixed(10)} (gap: ${signal.price_gap_minutes}min, via: ${signal.wallet_tag})${prioTag}`
+    `  [ENTRY] ${coinLabel} @ $${price.toFixed(10)} | gap: ${signal.price_gap_minutes}min | via: ${signal.wallet_tag}${prioTag}${srcTag}`
   );
 }
 
@@ -224,9 +254,12 @@ async function checkPositions(): Promise<void> {
   console.log(`  [CHECK] ${positions.length} open position(s)...`);
 
   for (const pos of positions) {
-    const currentPrice = await getPrice(pos.coin_address);
+    const { price: currentPrice, source } = await getPrice(pos.coin_address);
 
-    if (!currentPrice) continue;
+    // Skip PnL calc if both entry and current are placeholder
+    if (source === "placeholder" && Number(pos.entry_price) === PLACEHOLDER_PRICE) {
+      continue;
+    }
 
     const entryPrice = Number(pos.entry_price);
     const pnlPct = ((currentPrice - entryPrice) / entryPrice) * 100;
