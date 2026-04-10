@@ -275,9 +275,9 @@ export default function BotPage() {
             <Card label="Total Trades" value={String(totalClosed)} />
             <Card
               label="Win Rate"
-              value={`${winRate}%`}
+              value={totalClosed < 50 ? `${winRate}% (${totalClosed}/50)` : `${winRate}%`}
               color={
-                totalClosed === 0
+                totalClosed < 50
                   ? "text-white"
                   : Number(winRate) >= 55
                     ? "text-green-500"
