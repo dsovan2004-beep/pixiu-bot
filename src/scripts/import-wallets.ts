@@ -1,95 +1,95 @@
 /**
- * PixiuBot — Wallet Importer (Sprint 1)
+ * PixiuBot — Wallet Importer (Sprint 1.1)
  * Usage: npx ts-node src/scripts/import-wallets.ts
  *
- * Reads wallets.txt and imports into tracked_wallets table.
- * Deduplicates on wallet_address. Tags all as 'ethan-list' by default.
+ * Reads wallets.json (Ethan Rosper's tracked wallet list).
+ * Imports into tracked_wallets table with actual names as tags.
+ * Deduplicates on wallet_address via upsert.
  */
 
 import fs from "fs";
 import path from "path";
 import supabase from "../lib/supabase-server";
 
-const WALLETS_FILE = path.resolve(__dirname, "../../wallets.txt");
-const DEFAULT_TAG = "ethan-list";
+const WALLETS_FILE = path.resolve(__dirname, "../../wallets.json");
+const BATCH_SIZE = 50;
 
-interface WalletEntry {
-  address: string;
-  tag: string;
+interface WalletJson {
+  trackedWalletAddress: string;
+  name: string;
+  emoji: string;
+  alertsOn: boolean;
 }
 
-function parseWalletsFile(filePath: string): WalletEntry[] {
+function loadWallets(filePath: string): WalletJson[] {
   if (!fs.existsSync(filePath)) {
     console.error(`  [ERROR] File not found: ${filePath}`);
     process.exit(1);
   }
 
-  const content = fs.readFileSync(filePath, "utf-8");
-  const entries: WalletEntry[] = [];
+  const raw = fs.readFileSync(filePath, "utf-8");
+  const data: WalletJson[] = JSON.parse(raw);
 
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-
-    // Skip empty lines and comments
-    if (!trimmed || trimmed.startsWith("#")) continue;
-
-    // Format: ADDRESS [optional-tag]
-    const parts = trimmed.split(/\s+/);
-    const address = parts[0];
-    const tag = parts[1] || DEFAULT_TAG;
-
-    // Basic Solana address validation (base58, 32-44 chars)
-    if (address.length < 32 || address.length > 44) {
-      console.warn(`  [SKIP] Invalid address: ${address}`);
-      continue;
+  // Validate
+  return data.filter((w) => {
+    if (!w.trackedWalletAddress || w.trackedWalletAddress.length < 32) {
+      console.warn(`  [SKIP] Invalid address for "${w.name}"`);
+      return false;
     }
-
-    entries.push({ address, tag });
-  }
-
-  return entries;
+    return true;
+  });
 }
 
 async function main(): Promise<void> {
   console.log("═══════════════════════════════════════════════════════════");
-  console.log("  PIXIU BOT — Wallet Importer");
+  console.log("  PIXIU BOT — Wallet Importer (JSON)");
   console.log("═══════════════════════════════════════════════════════════\n");
 
-  const wallets = parseWalletsFile(WALLETS_FILE);
+  const wallets = loadWallets(WALLETS_FILE);
+  console.log(`  Loaded ${wallets.length} wallets from wallets.json\n`);
 
   if (wallets.length === 0) {
-    console.log("  No wallets found in wallets.txt.");
-    console.log("  Add Solana wallet addresses (one per line) and re-run.\n");
+    console.log("  No valid wallets found.\n");
     return;
   }
-
-  console.log(`  Found ${wallets.length} wallet(s) in wallets.txt\n`);
 
   let imported = 0;
   let skipped = 0;
 
-  for (const wallet of wallets) {
+  // Batch upsert for speed
+  for (let i = 0; i < wallets.length; i += BATCH_SIZE) {
+    const batch = wallets.slice(i, i + BATCH_SIZE);
+
+    const rows = batch.map((w) => ({
+      wallet_address: w.trackedWalletAddress,
+      tag: w.name || `wallet-${w.trackedWalletAddress.slice(0, 8)}`,
+      active: true,
+    }));
+
     const { error } = await supabase
       .from("tracked_wallets")
-      .upsert(
-        {
-          wallet_address: wallet.address,
-          tag: wallet.tag,
-          active: true,
-        },
-        { onConflict: "wallet_address" }
-      );
+      .upsert(rows, { onConflict: "wallet_address" });
 
     if (error) {
-      console.error(`  [ERROR] ${wallet.address.slice(0, 8)}...: ${error.message}`);
-      skipped++;
+      console.error(`  [ERROR] Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${error.message}`);
+      skipped += batch.length;
     } else {
-      console.log(`  [OK] ${wallet.address.slice(0, 8)}... (tag: ${wallet.tag})`);
-      imported++;
+      imported += batch.length;
+      console.log(
+        `  [BATCH ${Math.floor(i / BATCH_SIZE) + 1}] ${batch.length} wallets upserted (${imported}/${wallets.length})`
+      );
     }
   }
 
-  console.log(`\n  Done: ${imported} imported, ${skipped} skipped.\n`);
+  console.log(`\n  ✓ Done: ${imported} imported, ${skipped} skipped.`);
+  console.log(`  Total in file: ${wallets.length}\n`);
+
+  // Verify count in DB
+  const { count } = await supabase
+    .from("tracked_wallets")
+    .select("id", { count: "exact", head: true });
+
+  console.log(`  Tracked wallets in Supabase: ${count}\n`);
 }
 
 main().catch((err) => {
