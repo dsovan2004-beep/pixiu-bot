@@ -21,36 +21,66 @@ interface CoinSignal {
   price_gap_minutes: number | null;
 }
 
+interface PaperTrade {
+  id: string;
+  coin_address: string;
+  coin_name: string | null;
+  wallet_tag: string;
+  entry_price: number;
+  entry_mc: number | null;
+  exit_price: number | null;
+  pnl_pct: number | null;
+  status: string;
+  priority: string;
+  entry_time: string;
+  exit_time: string | null;
+  exit_reason: string | null;
+}
+
 export default function BotPage() {
   const [botState, setBotState] = useState<BotState | null>(null);
   const [signals, setSignals] = useState<CoinSignal[]>([]);
+  const [openTrades, setOpenTrades] = useState<PaperTrade[]>([]);
+  const [closedTrades, setClosedTrades] = useState<PaperTrade[]>([]);
   const [walletCount, setWalletCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const [stateRes, signalsRes, walletsRes] = await Promise.all([
-      supabase
-        .from("bot_state")
-        .select("*")
-        .order("last_updated", { ascending: false })
-        .limit(1),
-      supabase
-        .from("coin_signals")
-        .select("*")
-        .order("signal_time", { ascending: false })
-        .limit(50),
-      supabase
-        .from("tracked_wallets")
-        .select("id", { count: "exact", head: true })
-        .eq("active", true),
-    ]);
+    const [stateRes, signalsRes, walletsRes, openRes, closedRes] =
+      await Promise.all([
+        supabase
+          .from("bot_state")
+          .select("*")
+          .order("last_updated", { ascending: false })
+          .limit(1),
+        supabase
+          .from("coin_signals")
+          .select("*")
+          .order("signal_time", { ascending: false })
+          .limit(50),
+        supabase
+          .from("tracked_wallets")
+          .select("id", { count: "exact", head: true })
+          .eq("active", true),
+        supabase
+          .from("paper_trades")
+          .select("*")
+          .eq("status", "open")
+          .order("entry_time", { ascending: false }),
+        supabase
+          .from("paper_trades")
+          .select("*")
+          .eq("status", "closed")
+          .order("exit_time", { ascending: false })
+          .limit(50),
+      ]);
 
-    if (stateRes.data && stateRes.data.length > 0) {
-      setBotState(stateRes.data[0]);
-    }
+    if (stateRes.data && stateRes.data.length > 0) setBotState(stateRes.data[0]);
     setSignals(signalsRes.data || []);
     setWalletCount(walletsRes.count || 0);
+    setOpenTrades(openRes.data || []);
+    setClosedTrades(closedRes.data || []);
     setLoading(false);
   }, []);
 
@@ -63,19 +93,32 @@ export default function BotPage() {
   async function toggleBot() {
     if (!botState) return;
     setToggling(true);
-
     const newState = !botState.is_running;
     await supabase
       .from("bot_state")
-      .update({
-        is_running: newState,
-        last_updated: new Date().toISOString(),
-      })
+      .update({ is_running: newState, last_updated: new Date().toISOString() })
       .eq("id", botState.id);
-
     setBotState({ ...botState, is_running: newState });
     setToggling(false);
   }
+
+  // ─── Paper Trade Stats ──────────────────────────────────
+
+  const totalClosed = closedTrades.length;
+  const wins = closedTrades.filter((t) => Number(t.pnl_pct) > 0);
+  const losses = closedTrades.filter((t) => Number(t.pnl_pct) <= 0);
+  const winRate = totalClosed > 0 ? ((wins.length / totalClosed) * 100).toFixed(1) : "0";
+  const avgGain =
+    wins.length > 0
+      ? (wins.reduce((s, t) => s + Number(t.pnl_pct), 0) / wins.length).toFixed(2)
+      : "0";
+  const avgLoss =
+    losses.length > 0
+      ? (losses.reduce((s, t) => s + Number(t.pnl_pct), 0) / losses.length).toFixed(2)
+      : "0";
+
+  const killSwitchTriggered =
+    totalClosed >= 50 && Number(winRate) < 55;
 
   if (loading) {
     return <div className="text-zinc-500 text-center mt-20">Loading...</div>;
@@ -83,14 +126,21 @@ export default function BotPage() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white p-6">
-      <div className="max-w-5xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-amber-500">PixiuBot</h1>
-          <span className="text-xs text-zinc-600">
-            Sprint 1 — Observe Only
-          </span>
+          <span className="text-xs text-zinc-600">Sprint 2 — Paper Trading</span>
         </div>
+
+        {/* Kill Switch Warning */}
+        {killSwitchTriggered && (
+          <div className="bg-red-900/50 border border-red-600 rounded-lg p-4 text-center">
+            <span className="text-red-400 font-bold font-mono">
+              KILL SWITCH: Win rate {winRate}% &lt; 55% after {totalClosed} trades — new entries paused
+            </span>
+          </div>
+        )}
 
         {/* Status Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -99,7 +149,7 @@ export default function BotPage() {
             value={botState?.is_running ? "RUNNING" : "STOPPED"}
             color={botState?.is_running ? "text-green-500" : "text-red-500"}
           />
-          <Card label="Mode" value={botState?.mode?.toUpperCase() || "N/A"} />
+          <Card label="Mode" value="PAPER" />
           <Card label="Tracked Wallets" value={String(walletCount)} />
           <Card label="Signals" value={String(signals.length)} />
         </div>
@@ -115,21 +165,178 @@ export default function BotPage() {
                 : "bg-green-600 hover:bg-green-700 text-white"
             } disabled:opacity-50 disabled:cursor-not-allowed`}
           >
-            {toggling
-              ? "..."
-              : botState?.is_running
-                ? "STOP BOT"
-                : "START BOT"}
+            {toggling ? "..." : botState?.is_running ? "STOP BOT" : "START BOT"}
           </button>
           {botState?.last_updated && (
             <span className="text-zinc-600 text-xs">
-              Last updated:{" "}
-              {new Date(botState.last_updated).toLocaleString()}
+              Last updated: {new Date(botState.last_updated).toLocaleString()}
             </span>
           )}
         </div>
 
-        {/* Live Signal Feed */}
+        {/* ─── Paper Trading Stats ────────────────────────── */}
+        <section>
+          <h2 className="text-lg font-semibold text-zinc-300 mb-3">
+            Paper Trading
+          </h2>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <Card label="Total Trades" value={String(totalClosed)} />
+            <Card
+              label="Win Rate"
+              value={`${winRate}%`}
+              color={
+                totalClosed === 0
+                  ? "text-white"
+                  : Number(winRate) >= 55
+                    ? "text-green-500"
+                    : "text-red-500"
+              }
+            />
+            <Card
+              label="Avg Gain"
+              value={`+${avgGain}%`}
+              color="text-green-500"
+            />
+            <Card
+              label="Avg Loss"
+              value={`${avgLoss}%`}
+              color="text-red-500"
+            />
+            <Card label="Open Positions" value={String(openTrades.length)} />
+          </div>
+        </section>
+
+        {/* ─── Open Positions ─────────────────────────────── */}
+        {openTrades.length > 0 && (
+          <section>
+            <h2 className="text-lg font-semibold text-zinc-300 mb-3">
+              Open Positions
+            </h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm font-mono">
+                <thead>
+                  <tr className="text-zinc-500 border-b border-zinc-800">
+                    <th className="text-left py-2 px-3">Coin</th>
+                    <th className="text-left py-2 px-3">Wallet</th>
+                    <th className="text-right py-2 px-3">Entry Price</th>
+                    <th className="text-center py-2 px-3">Priority</th>
+                    <th className="text-left py-2 px-3">Opened</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {openTrades.map((t) => (
+                    <tr
+                      key={t.id}
+                      className="border-b border-zinc-900 hover:bg-zinc-900/50"
+                    >
+                      <td className="py-2 px-3 text-amber-500 font-bold">
+                        {t.coin_name || t.coin_address.slice(0, 8) + "..."}
+                      </td>
+                      <td className="py-2 px-3 text-zinc-400">{t.wallet_tag}</td>
+                      <td className="py-2 px-3 text-right">
+                        ${Number(t.entry_price).toFixed(10)}
+                      </td>
+                      <td className="py-2 px-3 text-center">
+                        <span
+                          className={
+                            t.priority === "HIGH"
+                              ? "text-amber-400 font-bold"
+                              : "text-zinc-500"
+                          }
+                        >
+                          {t.priority === "HIGH" ? "MULTI" : "—"}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-zinc-600">
+                        {new Date(t.entry_time).toLocaleTimeString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {/* ─── Closed Trades ──────────────────────────────── */}
+        {closedTrades.length > 0 && (
+          <section>
+            <h2 className="text-lg font-semibold text-zinc-300 mb-3">
+              Closed Trades
+            </h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm font-mono">
+                <thead>
+                  <tr className="text-zinc-500 border-b border-zinc-800">
+                    <th className="text-left py-2 px-3">Coin</th>
+                    <th className="text-right py-2 px-3">Entry</th>
+                    <th className="text-right py-2 px-3">Exit</th>
+                    <th className="text-right py-2 px-3">PnL</th>
+                    <th className="text-left py-2 px-3">Reason</th>
+                    <th className="text-left py-2 px-3">Closed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {closedTrades.map((t) => {
+                    const pnl = Number(t.pnl_pct);
+                    return (
+                      <tr
+                        key={t.id}
+                        className="border-b border-zinc-900 hover:bg-zinc-900/50"
+                      >
+                        <td className="py-2 px-3 text-amber-500 font-bold">
+                          {t.coin_name || t.coin_address.slice(0, 8) + "..."}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          ${Number(t.entry_price).toFixed(10)}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          {t.exit_price
+                            ? `$${Number(t.exit_price).toFixed(10)}`
+                            : "-"}
+                        </td>
+                        <td
+                          className={`py-2 px-3 text-right font-bold ${
+                            pnl >= 0 ? "text-green-500" : "text-red-500"
+                          }`}
+                        >
+                          {pnl >= 0 ? "+" : ""}
+                          {pnl.toFixed(2)}%
+                        </td>
+                        <td className="py-2 px-3">
+                          <span
+                            className={
+                              t.exit_reason === "take_profit"
+                                ? "text-green-500"
+                                : t.exit_reason === "stop_loss"
+                                  ? "text-red-500"
+                                  : "text-zinc-500"
+                            }
+                          >
+                            {t.exit_reason === "take_profit"
+                              ? "TP"
+                              : t.exit_reason === "stop_loss"
+                                ? "SL"
+                                : t.exit_reason === "timeout"
+                                  ? "TO"
+                                  : "-"}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-zinc-600">
+                          {t.exit_time
+                            ? new Date(t.exit_time).toLocaleTimeString()
+                            : "-"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {/* ─── Live Signal Feed ───────────────────────────── */}
         <section>
           <h2 className="text-lg font-semibold text-zinc-300 mb-3">
             Live Signal Feed
@@ -164,7 +371,8 @@ export default function BotPage() {
                           rel="noopener noreferrer"
                           className="hover:text-amber-400 transition-colors"
                         >
-                          {s.coin_address.slice(0, 6)}...{s.coin_address.slice(-4)}
+                          {s.coin_address.slice(0, 6)}...
+                          {s.coin_address.slice(-4)}
                         </a>
                       </td>
                       <td className="py-2 px-3 text-zinc-400">
@@ -207,8 +415,7 @@ export default function BotPage() {
             </div>
           ) : (
             <div className="text-zinc-600 text-sm bg-zinc-900 border border-zinc-800 rounded-lg p-6 text-center">
-              No signals yet. Add wallets to wallets.txt, run import-wallets.ts,
-              then start feed.ts to begin monitoring.
+              No signals yet.
             </div>
           )}
         </section>
