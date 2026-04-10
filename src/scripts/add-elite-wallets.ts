@@ -19,6 +19,15 @@ const ELITE_WALLETS = [
   { address: "AGqjivJr1dSv73TVUvdtqAwogzmThzvYMVXjGWg2FYLm", tag: "noob mini" },
   { address: "2e1w3Xo441Ytvwn54wCn8itAXwCKbiizc9ynGEv14Vis", tag: "prettyover" },
   { address: "4vw54BmAogeRV3vPKWyFet5yf8DTLcREzdSzx4rw9Ud9", tag: "decu" },
+  // Batch 2
+  { address: "4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk", tag: "Jijo" },
+  { address: "4cXnf2z85UiZ5cyKsPMEULq1yufAtpkatmX4j4DBZqj2", tag: "WaiterG" },
+  { address: "Hw5UKBU5k3YudnGwaykj5E8cYUidNMPuEewRRar5Xoc7", tag: "Trenchman" },
+  { address: "G6fUXjMKPJzCY1rveAE6Qm7wy5U3vZgKDJmN1VPAdiZC", tag: "clukz" },
+  { address: "6TAHDM5Tod7dBTZdYQxzgJZKxxPfiNV9udPHMiUNumyK", tag: "Bluey" },
+  { address: "DEdEW3SMPU2dCfXEcgj2YppmX9H3bnMDJaU4ctn2BQDQ", tag: "King Solomon" },
+  { address: "J9TYAsWWidbrcZybmLSfrLzryANf4CgJBLdvwdGuC8MB", tag: "Johnson" },
+  { address: "4fZFcK8ms3bFMpo1ACzEUz8bH741fQW4zhAMGd5yZMHu", tag: "Rilsio" },
 ];
 
 async function main(): Promise<void> {
