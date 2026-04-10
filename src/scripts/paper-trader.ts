@@ -117,6 +117,17 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
 
   console.log(`  [SCAN] Found ${signals.length} rug-passed signals in window`);
 
+  // Load wallet tiers for quality filtering
+  const { data: walletTiers } = await supabase
+    .from("tracked_wallets")
+    .select("tag, tier")
+    .eq("active", true);
+
+  const tierMap = new Map<string, number>();
+  for (const w of walletTiers || []) {
+    tierMap.set(w.tag, w.tier);
+  }
+
   // Diagnostics
   let skipAlreadyProcessed = 0;
   let skipGapTooOld = 0;
@@ -253,19 +264,25 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
       continue;
     }
 
-    // ── REQUIRE 2+ DIFFERENT wallets (most important filter) ──
-    if (uniqueWallets.size < MIN_UNIQUE_WALLETS) {
+    // ── REQUIRE 2+ DIFFERENT Tier 1 wallets (most important filter) ──
+    const tier1Wallets = new Set(
+      Array.from(uniqueWallets).filter((tag) => tierMap.get(tag) === 1)
+    );
+
+    if (tier1Wallets.size < MIN_UNIQUE_WALLETS) {
       skipSingleWallet++;
       if (skipSingleWallet <= 3) {
+        const t1Count = tier1Wallets.size;
+        const totalW = uniqueWallets.size;
         console.log(
-          `    [SKIP] ${coinLabel} single-wallet (${Array.from(uniqueWallets)[0]} only)`
+          `    [SKIP] ${coinLabel} needs ${MIN_UNIQUE_WALLETS}+ Tier1 wallets (has ${t1Count} Tier1 / ${totalW} total)`
         );
       }
       for (const s of sigs) processedSignalIds.add(s.id);
       continue;
     }
 
-    const isMultiWallet = uniqueWallets.size >= 2;
+    const isMultiWallet = tier1Wallets.size >= 2;
 
     const bestSig = sigs[0];
     for (const s of sigs) processedSignalIds.add(s.id);
@@ -274,11 +291,11 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
       id: bestSig.id,
       coin_address: coinAddress,
       coin_name: bestSig.coin_name,
-      wallet_tag: `${Array.from(uniqueWallets).slice(0, 3).join("+")}${uniqueWallets.size > 3 ? `+${uniqueWallets.size - 3}more` : ""}`,
+      wallet_tag: `${Array.from(tier1Wallets).slice(0, 3).join("+")}${tier1Wallets.size > 3 ? `+${tier1Wallets.size - 3}more` : ""}`,
       entry_mc: bestSig.entry_mc,
       signal_time: bestSig.signal_time,
       price_gap_minutes: bestSig.price_gap_minutes,
-      priority: uniqueWallets.size >= 3 ? "HIGH" : "normal",
+      priority: tier1Wallets.size >= 3 ? "HIGH" : "normal",
     });
   }
 
@@ -573,7 +590,7 @@ async function main(): Promise<void> {
   console.log("  PIXIU BOT — Paper Trading Engine (Sprint 2)");
   console.log("═══════════════════════════════════════════════════════════");
   console.log(`  Mode:         PAPER ONLY — zero real SOL spent`);
-  console.log(`  Entry filter: gap < ${MAX_GAP_MINUTES}min, MC < $${MAX_ENTRY_MC.toLocaleString()}, ${MIN_UNIQUE_WALLETS}+ wallets, ${MIN_SIGNAL_COUNT}+ signals`);
+  console.log(`  Entry filter: gap < ${MAX_GAP_MINUTES}min, MC < $${MAX_ENTRY_MC.toLocaleString()}, ${MIN_UNIQUE_WALLETS}+ Tier1 wallets, ${MIN_SIGNAL_COUNT}+ signals`);
   console.log(`  Exit grid:    L1 +10% | L2 +20% | L3 +40% | L4 +100% (25% each)`);
   console.log(`  Stop loss:    -${STOP_LOSS_PCT}% on remaining | Timeout ${TIMEOUT_MINUTES}min`);
   console.log(`  Multi-wallet: 2+ wallets within ${MULTI_WALLET_WINDOW_MIN}min = HIGH priority`);
