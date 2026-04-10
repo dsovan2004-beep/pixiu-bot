@@ -490,6 +490,73 @@ async function main(): Promise<void> {
   console.log(`  Started:      ${new Date().toISOString()}`);
   console.log("═══════════════════════════════════════════════════════════\n");
 
+  // ── Startup: backfill and sync bankroll ──
+  async function syncBankroll(): Promise<void> {
+    const DEFAULT_POS_SIZE = 100;
+
+    // Backfill trades missing pnl_usd or position_size_usd
+    const { data: needsBackfill } = await supabase
+      .from("paper_trades")
+      .select("id, pnl_pct, pnl_usd, position_size_usd")
+      .eq("status", "closed");
+
+    if (needsBackfill) {
+      let backfilled = 0;
+      for (const t of needsBackfill) {
+        const posSize = Number(t.position_size_usd) || DEFAULT_POS_SIZE;
+        const existingUsd = Number(t.pnl_usd);
+        if (existingUsd === 0 && t.pnl_pct !== null) {
+          const pnlUsd = (Number(t.pnl_pct) / 100) * posSize;
+          await supabase
+            .from("paper_trades")
+            .update({ pnl_usd: pnlUsd, position_size_usd: posSize })
+            .eq("id", t.id);
+          backfilled++;
+        }
+      }
+      if (backfilled > 0) {
+        console.log(`  [BANKROLL SYNC] Backfilled pnl_usd for ${backfilled} trade(s)`);
+      }
+    }
+
+    // Recalculate bankroll from all closed trades
+    const { data: allClosed } = await supabase
+      .from("paper_trades")
+      .select("pnl_pct, pnl_usd, position_size_usd")
+      .eq("status", "closed");
+
+    let totalPnlUsd = 0;
+    for (const t of allClosed || []) {
+      const posSize = Number(t.position_size_usd) || DEFAULT_POS_SIZE;
+      const pnlUsd = Number(t.pnl_usd) || (Number(t.pnl_pct) / 100) * posSize;
+      totalPnlUsd += pnlUsd;
+    }
+
+    const bankroll = await getBankroll();
+    const { data: startRow } = await supabase
+      .from("paper_bankroll")
+      .select("starting_balance")
+      .limit(1)
+      .single();
+    const startBal = Number(startRow?.starting_balance || 10000);
+    const newBalance = startBal + totalPnlUsd;
+
+    await supabase
+      .from("paper_bankroll")
+      .update({
+        current_balance: newBalance,
+        total_pnl_usd: totalPnlUsd,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", bankroll.id);
+
+    console.log(
+      `  [BANKROLL SYNC] Synced from ${allClosed?.length || 0} closed trades | Total PnL: ${totalPnlUsd >= 0 ? "+" : ""}$${totalPnlUsd.toFixed(2)} | Balance: $${newBalance.toFixed(2)}`
+    );
+  }
+
+  await syncBankroll();
+
   // Signal poll loop
   async function signalTick(): Promise<void> {
     if (killSwitchActive) {
