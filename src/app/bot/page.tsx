@@ -60,7 +60,7 @@ export default function BotPage() {
   } | null>(null);
 
   const fetchData = useCallback(async () => {
-    const [stateRes, signalsRes, walletsRes, openRes, closedRes, bankrollRes, allClosedRes] =
+    const [stateRes, signalsRes, walletsRes, openRes, closedRes, allClosedRes, bankrollRes] =
       await Promise.all([
         supabase
           .from("bot_state")
