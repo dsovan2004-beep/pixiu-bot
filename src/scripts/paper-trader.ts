@@ -125,21 +125,20 @@ async function checkPositions(): Promise<void> {
 
   for (const pos of positions) {
     const { price: currentPrice, source } = await getPrice(pos.coin_address);
-
-    if (source === "placeholder" && Number(pos.entry_price) === PLACEHOLDER_PRICE) {
-      continue;
-    }
-
     const entryPrice = Number(pos.entry_price);
-    const pnlPct = ((currentPrice - entryPrice) / entryPrice) * 100;
-    const entryTime = new Date(pos.entry_time).getTime();
-    const minutesOpen = (Date.now() - entryTime) / 60_000;
     const coinLabel = pos.coin_name || pos.coin_address.slice(0, 8) + "...";
     const currentLevel = pos.grid_level || 0;
     let remainingPct = pos.remaining_pct ?? 100;
     let partialPnl = pos.partial_pnl ?? 0;
-
     const posSize = Number(pos.position_size_usd) || 100;
+    const entryTime = new Date(pos.entry_time).getTime();
+    const minutesOpen = (Date.now() - entryTime) / 60_000;
+
+    // Skip ONLY if both entry AND current are placeholder (no real data at all)
+    const bothPlaceholder = source === "placeholder" && entryPrice === PLACEHOLDER_PRICE;
+
+    // Calculate PnL — always, even with placeholder (for timeout at minimum)
+    const pnlPct = entryPrice > 0 ? ((currentPrice - entryPrice) / entryPrice) * 100 : 0;
 
     // Helper: close trade and update bankroll
     async function closeTrade(finalPnl: number, exitReason: string, gridLvl: number) {
@@ -161,17 +160,15 @@ async function checkPositions(): Promise<void> {
       await updateBankroll(pnlUsd);
     }
 
-    // ── Circuit Breaker: FIRST CHECK — hard exit on crash (>25% drop) ──
+    // ── Circuit Breaker: ABSOLUTE FIRST CHECK — NO EXCEPTIONS ──
     const CIRCUIT_BREAKER_PCT = 25;
 
-    // Log significant drops for debugging
-    if (pnlPct <= -15) {
-      console.log(
-        `  [WARN] ${coinLabel} at ${pnlPct.toFixed(1)}% (entry: $${entryPrice}, now: $${currentPrice}, src: ${source})`
-      );
-    }
+    // Always log every position check for audit trail
+    console.log(
+      `  [CB CHECK] ${coinLabel} pnlPct=${pnlPct.toFixed(1)}% threshold=-${CIRCUIT_BREAKER_PCT}% (entry:$${entryPrice} now:$${currentPrice} src:${source})`
+    );
 
-    if (pnlPct <= -CIRCUIT_BREAKER_PCT) {
+    if (!bothPlaceholder && pnlPct <= -CIRCUIT_BREAKER_PCT) {
       // Use raw pnlPct for the full remaining position — no weighted calc
       const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
       const pnlUsd = (finalPnl / 100) * posSize;
@@ -227,7 +224,7 @@ async function checkPositions(): Promise<void> {
       continue;
     }
 
-    // ── Timeout: close whatever remains ──
+    // ── Timeout: close whatever remains (always runs, even placeholder) ──
     if (minutesOpen >= TIMEOUT_MINUTES) {
       const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
       await closeTrade(finalPnl, "timeout", currentLevel);
