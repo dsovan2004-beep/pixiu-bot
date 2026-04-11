@@ -8,7 +8,7 @@
  */
 
 import supabase from "../lib/supabase-server";
-import { TOP_ELITE_ADDRESSES, PLACEHOLDER_PRICE, POSITION_SIZE_PCT } from "../config/smart-money";
+import { TOP_ELITE_ADDRESSES, MAX_GAP_MINUTES, MAX_ENTRY_MC, PLACEHOLDER_PRICE, POSITION_SIZE_PCT } from "../config/smart-money";
 
 // ─── Config ──────────────────────────────────────────────
 
@@ -76,20 +76,11 @@ async function getPrice(mint: string): Promise<PriceResult> {
   return { price: PLACEHOLDER_PRICE, source: "placeholder" };
 }
 
-// ─── Signal Processing ───────────────────────────────────
+// Signal processing — legacy, entries now handled by /api/webhook.
+// Functions kept to avoid compile errors; not called from main().
+const MIN_UNIQUE_WALLETS = 2;
 
-interface QualifiedSignal {
-  id: string;
-  coin_address: string;
-  coin_name: string | null;
-  wallet_tag: string;
-  entry_mc: number | null;
-  signal_time: string;
-  price_gap_minutes: number | null;
-  priority: "HIGH" | "normal";
-}
-
-async function findNewSignals(): Promise<QualifiedSignal[]> {
+async function findNewSignals(): Promise<any[]> {
   const now = new Date();
   // Look back 120 minutes for signals — maximize volume
   const cutoff = new Date(now.getTime() - 120 * 60_000).toISOString();
