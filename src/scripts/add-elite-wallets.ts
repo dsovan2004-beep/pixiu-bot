@@ -60,6 +60,8 @@ const ELITE_WALLETS = [
   { address: "5BGiLEfrrrAHPdjomZXhXk8mu36xgSdoV38BPxwkB3mz", tag: "GMGN_FW_2" },
   { address: "G45wKGBuuHbfh2tkkNhWchfFquLM1DQ7xKs3VfygXQ5F", tag: "GMGN_FW_3" },
   { address: "Hrk1f2nEMme9tDY5yro4itW9cN7P8K7PKyReGatf5zRb", tag: "GMGN_FW_4" },
+  // Batch 8 — GMGN Live
+  { address: "sAdNbe1cKNMDqDsa4npB3TfL62T14uAo2MsUQfLvzLT", tag: "Ethan_Pros" },
 ];
 
 async function main(): Promise<void> {
