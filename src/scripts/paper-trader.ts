@@ -443,6 +443,14 @@ async function checkPositions(): Promise<void> {
 
     // ── Circuit Breaker: FIRST CHECK — hard exit on crash (>25% drop) ──
     const CIRCUIT_BREAKER_PCT = 25;
+
+    // Log significant drops for debugging
+    if (pnlPct <= -15) {
+      console.log(
+        `  [WARN] ${coinLabel} at ${pnlPct.toFixed(1)}% (entry: $${entryPrice}, now: $${currentPrice}, src: ${source})`
+      );
+    }
+
     if (pnlPct <= -CIRCUIT_BREAKER_PCT) {
       // Use raw pnlPct for the full remaining position — no weighted calc
       const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
@@ -455,16 +463,27 @@ async function checkPositions(): Promise<void> {
     }
 
     // ── Whale Exit: exit WITH the whale ──
+    // Look up Smart Money tags from DB addresses (not hardcoded)
+    const { data: smartWalletRows } = await supabase
+      .from("tracked_wallets")
+      .select("tag")
+      .in("wallet_address", Array.from(TOP_ELITE_ADDRESSES));
+
+    const smartMoneyTagsLive = new Set(
+      smartWalletRows?.map((w) => w.tag) || []
+    );
+
     const { data: sellSignals } = await supabase
       .from("coin_signals")
       .select("wallet_tag, signal_time")
       .eq("coin_address", pos.coin_address)
       .eq("transaction_type", "SELL")
       .gte("signal_time", new Date(entryTime).toISOString())
-      .limit(5);
+      .limit(10);
 
     if (sellSignals && sellSignals.length > 0) {
-      const whaleExits = sellSignals.filter((s) => SMART_MONEY_TAGS.has(s.wallet_tag));
+      // Check if ANY sell signal is from a Smart Money wallet
+      const whaleExits = sellSignals.filter((s) => smartMoneyTagsLive.has(s.wallet_tag));
       if (whaleExits.length > 0) {
         const whaleTag = whaleExits[0].wallet_tag;
         const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
