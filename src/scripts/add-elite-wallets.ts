@@ -45,6 +45,10 @@ const ELITE_WALLETS = [
   { address: "5RQEcWJZdhkxRMbwjSq32RaocgYPaWDhi3ztimWUcrwo", tag: "EvansOfWeb" },
   { address: "6EDaVsS6enYgJ81tmhEkiKFcb4HuzPUVFZeom6PHUqN3", tag: "Cowboy" },
   { address: "64ymeD9XTAkNJgHtXgrG6JCNZmBC9fSVcmgkL54pFikE", tag: "Phineas.SOL" },
+  // Batch 5 — GMGN Smart Money
+  { address: "5dd3zjBQQvQqtmWF67nR6XaRKe79cYu4fP6LFXZ1YRR9", tag: "GMGN_SM_1" },
+  { address: "J3Ez1WjZMpcnMua4xA9nirZwWTurAxY7wqhm4vPeJ8k5", tag: "GMGN_SM_2" },
+  { address: "B3b1rDyViWRbnnXWHytpVJNmMRgNRMvMaADmpbn3EMYx", tag: "GMGN_SM_3" },
 ];
 
 async function main(): Promise<void> {
