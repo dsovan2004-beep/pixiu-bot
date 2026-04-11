@@ -51,6 +51,10 @@ const ELITE_WALLETS = [
   { address: "B3b1rDyViWRbnnXWHytpVJNmMRgNRMvMaADmpbn3EMYx", tag: "GMGN_SM_3" },
   { address: "7q15WZ4iSUDvqfs5Kdh9bfptkQhs6qKUyCUq6GY6PGxg", tag: "GMGN_SM_4" },
   { address: "6Dt9J7TXM3eqyQBAZMbGJCV6VsP13WVStwPJnLPFtw2Y", tag: "GMGN_SM_5" },
+  // Batch 6 — GMGN KOL wallets
+  { address: "EQaxqKT3N981QBmdSUGNzAGK5S26zUwAdRHhBCgn87zD", tag: "jamessmith" },
+  { address: "4uCT4g7YHH4xxfmfNfKUDenwGrRNGoZ9Ay1XFxfUGhQG", tag: "Esee" },
+  { address: "99i9uVA7Q56bY22ajKKUfTZTgTeP5yCtVGsrG9J4pDYQ", tag: "Zrool" },
 ];
 
 async function main(): Promise<void> {
