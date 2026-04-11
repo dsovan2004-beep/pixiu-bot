@@ -20,6 +20,7 @@ interface CoinSignal {
   rug_check_passed: boolean | null;
   price_gap_minutes: number | null;
   bundle_suspected: boolean;
+  transaction_type: string;
 }
 
 interface PaperTrade {
@@ -471,9 +472,15 @@ export default function BotPage() {
                       key={s.id}
                       className="border-b border-zinc-900 hover:bg-zinc-900/50"
                     >
-                      <td className="py-2 px-3 text-amber-500 font-bold">
+                      <td className={`py-2 px-3 font-bold ${s.transaction_type === "SELL" ? "text-red-400" : "text-amber-500"}`}>
+                        {s.transaction_type === "SELL" && "🐳 "}
                         {s.coin_name || "???"}
-                        {s.bundle_suspected && (
+                        {s.transaction_type === "SELL" && (
+                          <span className="ml-2 text-xs bg-red-900 text-red-400 px-1.5 py-0.5 rounded font-mono">
+                            SELL
+                          </span>
+                        )}
+                        {s.bundle_suspected && s.transaction_type !== "SELL" && (
                           <span className="ml-2 text-xs bg-red-900 text-red-400 px-1.5 py-0.5 rounded font-mono">
                             BUNDLE
                           </span>

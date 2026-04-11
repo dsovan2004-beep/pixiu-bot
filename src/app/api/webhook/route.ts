@@ -107,43 +107,53 @@ interface EnhancedTx {
   }>;
 }
 
-function extractBuys(
+interface SwapSignal {
+  mint: string;
+  wallet: string;
+  type: "BUY" | "SELL";
+}
+
+function extractSwaps(
   tx: EnhancedTx,
   trackedAddresses: Set<string>
-): Array<{ mint: string; wallet: string }> {
-  const buys: Array<{ mint: string; wallet: string }> = [];
+): SwapSignal[] {
+  const signals: SwapSignal[] = [];
 
-  // Check token transfers
   for (const t of tx.tokenTransfers || []) {
-    if (
-      trackedAddresses.has(t.toUserAccount) &&
-      t.tokenAmount > 0 &&
-      !IGNORE_MINTS.has(t.mint)
-    ) {
-      buys.push({ mint: t.mint, wallet: t.toUserAccount });
+    if (IGNORE_MINTS.has(t.mint)) continue;
+
+    // BUY: tracked wallet received tokens
+    if (trackedAddresses.has(t.toUserAccount) && t.tokenAmount > 0) {
+      signals.push({ mint: t.mint, wallet: t.toUserAccount, type: "BUY" });
+    }
+
+    // SELL: tracked wallet sent tokens
+    if (trackedAddresses.has(t.fromUserAccount) && t.tokenAmount > 0) {
+      signals.push({ mint: t.mint, wallet: t.fromUserAccount, type: "SELL" });
     }
   }
 
   // Fallback: token balance changes
-  if (buys.length === 0) {
+  if (signals.length === 0) {
     for (const acct of tx.accountData || []) {
       for (const change of acct.tokenBalanceChanges || []) {
+        if (IGNORE_MINTS.has(change.mint)) continue;
         const amount = Number(change.rawTokenAmount?.tokenAmount || 0);
-        if (
-          trackedAddresses.has(change.userAccount) &&
-          amount > 0 &&
-          !IGNORE_MINTS.has(change.mint)
-        ) {
-          buys.push({ mint: change.mint, wallet: change.userAccount });
+        if (!trackedAddresses.has(change.userAccount)) continue;
+
+        if (amount > 0) {
+          signals.push({ mint: change.mint, wallet: change.userAccount, type: "BUY" });
+        } else if (amount < 0) {
+          signals.push({ mint: change.mint, wallet: change.userAccount, type: "SELL" });
         }
       }
     }
   }
 
-  // Dedupe by mint+wallet
+  // Dedupe by mint+wallet+type
   const seen = new Set<string>();
-  return buys.filter((b) => {
-    const key = `${b.mint}:${b.wallet}`;
+  return signals.filter((s) => {
+    const key = `${s.mint}:${s.wallet}:${s.type}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -172,30 +182,41 @@ export async function POST(request: Request): Promise<Response> {
     let signalCount = 0;
 
     for (const tx of transactions) {
-      // Only process swaps
       if (tx.type !== "SWAP") continue;
 
-      const buys = extractBuys(tx, trackedSet);
-      if (buys.length === 0) continue;
+      const swaps = extractSwaps(tx, trackedSet);
+      if (swaps.length === 0) continue;
 
-      for (const { mint, wallet } of buys) {
-        // Rug check
-        const { passed, tokenName: rugName } = await checkRug(mint);
-        if (!passed) continue;
-
-        // Resolve name
-        const coinName = rugName || (await getTokenName(mint));
-
-        // Wallet tag
+      for (const { mint, wallet, type } of swaps) {
         const walletTag = await getWalletTag(wallet);
-
-        // Time gap
         const signalTime = new Date(tx.timestamp * 1000);
         const gapMinutes = Math.round(
           (Date.now() - signalTime.getTime()) / 60_000
         );
 
-        // Bundle detection: check if same wallet has 3+ signals for same coin in 5 min
+        if (type === "SELL") {
+          // SELL signals: no rug check needed, just log
+          const coinName = await getTokenName(mint);
+          await supabase.from("coin_signals").insert({
+            coin_address: mint,
+            coin_name: coinName,
+            wallet_tag: walletTag,
+            entry_mc: null,
+            rug_check_passed: true,
+            price_gap_minutes: gapMinutes,
+            bundle_suspected: false,
+            transaction_type: "SELL",
+          });
+          signalCount++;
+          continue;
+        }
+
+        // BUY signals: rug check + bundle detection
+        const { passed, tokenName: rugName } = await checkRug(mint);
+        if (!passed) continue;
+
+        const coinName = rugName || (await getTokenName(mint));
+
         let bundleSuspected = false;
         const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString();
         const { count: recentCount } = await supabase
@@ -203,13 +224,13 @@ export async function POST(request: Request): Promise<Response> {
           .select("id", { count: "exact", head: true })
           .eq("coin_address", mint)
           .eq("wallet_tag", walletTag)
+          .eq("transaction_type", "BUY")
           .gte("signal_time", fiveMinAgo);
 
         if ((recentCount || 0) >= 2) {
           bundleSuspected = true;
         }
 
-        // Insert signal
         await supabase.from("coin_signals").insert({
           coin_address: mint,
           coin_name: coinName,
@@ -218,8 +239,8 @@ export async function POST(request: Request): Promise<Response> {
           rug_check_passed: true,
           price_gap_minutes: gapMinutes,
           bundle_suspected: bundleSuspected,
+          transaction_type: "BUY",
         });
-
         signalCount++;
       }
     }

@@ -39,6 +39,15 @@ const KILL_SWITCH_MIN_WR = 0.55; // 55%
 const processedSignalIds = new Set<string>();
 let killSwitchActive = false;
 
+// Tier 1 Smart Money wallets for whale exit detection
+const SMART_MONEY_TAGS = new Set([
+  "cented", "Cented",
+  "Cooker",
+  "GMGN_SM_2",
+  "GMGN_FW_1", "GMGN_FW_2", "GMGN_FW_3", "GMGN_FW_4",
+  "jijo", "Jijo",
+]);
+
 // ─── Price Resolution (multi-source) ─────────────────────
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || "";
@@ -391,6 +400,29 @@ async function checkPositions(): Promise<void> {
         `  [CIRCUIT BREAKER] 🚨 ${coinLabel} crashed ${pnlPct.toFixed(1)}% — emergency exit | PnL: ${finalPnl.toFixed(2)}% (-$${Math.abs(pnlUsd).toFixed(2)}) | grid L${currentLevel} | price: $${currentPrice}`
       );
       continue;
+    }
+
+    // ── Whale Exit: exit WITH the whale ──
+    const { data: sellSignals } = await supabase
+      .from("coin_signals")
+      .select("wallet_tag, signal_time")
+      .eq("coin_address", pos.coin_address)
+      .eq("transaction_type", "SELL")
+      .gte("signal_time", new Date(entryTime).toISOString())
+      .limit(5);
+
+    if (sellSignals && sellSignals.length > 0) {
+      const whaleExits = sellSignals.filter((s) => SMART_MONEY_TAGS.has(s.wallet_tag));
+      if (whaleExits.length > 0) {
+        const whaleTag = whaleExits[0].wallet_tag;
+        const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
+        const pnlUsd = (finalPnl / 100) * posSize;
+        await closeTrade(finalPnl, "whale_exit", currentLevel);
+        console.log(
+          `  [WHALE EXIT] 🐳 ${whaleTag} sold ${coinLabel} — exiting with whale | PnL: ${finalPnl >= 0 ? "+" : ""}${finalPnl.toFixed(2)}% ($${pnlUsd >= 0 ? "+" : ""}${pnlUsd.toFixed(2)})`
+        );
+        continue;
+      }
     }
 
     // ── Stop Loss: close everything immediately ──
