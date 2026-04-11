@@ -32,7 +32,7 @@ const STOP_LOSS_PCT = 10; // -10% on remaining → close all
 const TIMEOUT_MINUTES = 20; // Was 30 — exit dead coins faster
 
 // Kill switch
-const KILL_SWITCH_MIN_TRADES = 50;
+const KILL_SWITCH_MIN_TRADES = 100; // Raised for Round 2 — need more data
 const KILL_SWITCH_MIN_WR = 0.55; // 55%
 
 // Track which signals we've already processed
