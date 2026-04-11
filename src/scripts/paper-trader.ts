@@ -8,7 +8,7 @@
  */
 
 import supabase from "../lib/supabase-server";
-import { TOP_ELITE_ADDRESSES, MAX_GAP_MINUTES, MAX_ENTRY_MC, PLACEHOLDER_PRICE, POSITION_SIZE_PCT } from "../config/smart-money";
+import { TOP_ELITE_ADDRESSES, PLACEHOLDER_PRICE } from "../config/smart-money";
 
 // ─── Config ──────────────────────────────────────────────
 
@@ -27,11 +27,7 @@ const TIMEOUT_MINUTES = 20; // Was 30 — exit dead coins faster
 const KILL_SWITCH_MIN_TRADES = 100; // Raised for Round 2 — need more data
 const KILL_SWITCH_MIN_WR = 0.55; // 55%
 
-// Track which signals we've already processed
-const processedSignalIds = new Set<string>();
 let killSwitchActive = false;
-
-// TOP_ELITE_ADDRESSES imported from config/smart-money.ts
 
 // ─── Price Resolution (multi-source) ─────────────────────
 
@@ -76,206 +72,7 @@ async function getPrice(mint: string): Promise<PriceResult> {
   return { price: PLACEHOLDER_PRICE, source: "placeholder" };
 }
 
-// Signal processing — legacy, entries now handled by /api/webhook.
-// Functions kept to avoid compile errors; not called from main().
-const MIN_UNIQUE_WALLETS = 2;
-
-async function findNewSignals(): Promise<any[]> {
-  const now = new Date();
-  // Look back 120 minutes for signals — maximize volume
-  const cutoff = new Date(now.getTime() - 120 * 60_000).toISOString();
-
-  console.log(`  [SCAN] Looking for signals since ${cutoff} (now: ${now.toISOString()})`);
-
-  // Load tag→address map for Smart Money check
-  const { data: walletRows } = await supabase
-    .from("tracked_wallets")
-    .select("wallet_address, tag")
-    .eq("active", true);
-
-  const tagToAddress = new Map<string, string>();
-  for (const w of walletRows || []) {
-    tagToAddress.set(w.tag, w.wallet_address);
-  }
-
-  const { data: signals, error } = await supabase
-    .from("coin_signals")
-    .select("*")
-    .eq("rug_check_passed", true)
-    .gte("signal_time", cutoff)
-    .order("signal_time", { ascending: false });
-
-  if (error || !signals) {
-    console.error("  [ERROR] Fetching signals:", error?.message);
-    return [];
-  }
-
-  console.log(`  [SCAN] Found ${signals.length} rug-passed signals in window`);
-
-  // Diagnostics
-  let skipAlreadyProcessed = 0;
-  let skipGapTooOld = 0;
-  let skipMcTooHigh = 0;
-  let skipAlreadyOpen = 0;
-  let skipBundle = 0;
-  let skipSingleWallet = 0;
-  let passedFilters = 0;
-
-  const qualified: QualifiedSignal[] = [];
-  const coinGroups = new Map<string, typeof signals>();
-
-  for (const sig of signals) {
-    if (processedSignalIds.has(sig.id)) {
-      skipAlreadyProcessed++;
-      continue;
-    }
-
-    const gap = sig.price_gap_minutes ?? 999;
-    if (gap > MAX_GAP_MINUTES) {
-      skipGapTooOld++;
-      if (skipGapTooOld <= 3) {
-        console.log(
-          `    [SKIP] ${sig.coin_name || sig.coin_address.slice(0, 8)}... gap=${gap}min > ${MAX_GAP_MINUTES}min`
-        );
-      }
-      continue;
-    }
-
-    if (sig.entry_mc && Number(sig.entry_mc) > MAX_ENTRY_MC) {
-      skipMcTooHigh++;
-      continue;
-    }
-
-    passedFilters++;
-    const group = coinGroups.get(sig.coin_address) || [];
-    group.push(sig);
-    coinGroups.set(sig.coin_address, group);
-  }
-
-  // Check open positions
-  const { data: openPositions } = await supabase
-    .from("paper_trades")
-    .select("coin_address")
-    .eq("status", "open");
-
-  const openCoins = new Set(openPositions?.map((p) => p.coin_address) || []);
-
-  // Also check recently closed to avoid re-entering same coin
-  const { data: recentClosed } = await supabase
-    .from("paper_trades")
-    .select("coin_address")
-    .eq("status", "closed")
-    .gte("exit_time", new Date(now.getTime() - 120 * 60_000).toISOString());
-
-  const recentlyTradedCoins = new Set(recentClosed?.map((p) => p.coin_address) || []);
-
-  for (const [coinAddress, sigs] of coinGroups) {
-    const coinLabel = sigs[0].coin_name || coinAddress.slice(0, 8) + "...";
-
-    if (openCoins.has(coinAddress)) {
-      skipAlreadyOpen++;
-      continue;
-    }
-
-    if (recentlyTradedCoins.has(coinAddress)) {
-      console.log(`    [SKIP] ${coinLabel} recently traded`);
-      continue;
-    }
-
-    // ── Bundle Detection ──
-    // Count signals per wallet for this coin
-    const walletSignalCounts = new Map<string, number>();
-    for (const s of sigs) {
-      walletSignalCounts.set(s.wallet_tag, (walletSignalCounts.get(s.wallet_tag) || 0) + 1);
-    }
-
-    const uniqueWallets = new Set(sigs.map((s) => s.wallet_tag));
-    const totalSignals = sigs.length;
-
-    // Bundle check: skip only if 1 wallet = 80%+ of all signals
-    let isBundle = false;
-    for (const [wallet, count] of walletSignalCounts) {
-      if (count / totalSignals >= 0.8 && totalSignals >= 3) {
-        isBundle = true;
-        console.log(
-          `    [SKIP] ${coinLabel} bundle (${wallet} = ${count}/${totalSignals} = ${((count / totalSignals) * 100).toFixed(0)}%)`
-        );
-        break;
-      }
-    }
-
-    if (isBundle) {
-      skipBundle++;
-      for (const s of sigs) processedSignalIds.add(s.id);
-      continue;
-    }
-
-    // ── REQUIRE: 1 Smart Money wallet + 1 additional wallet ──
-    // Find which wallet tags map to TOP_ELITE addresses
-    const smartMoneyTags: string[] = [];
-    const otherTags: string[] = [];
-    for (const tag of uniqueWallets) {
-      const addr = tagToAddress.get(tag);
-      if (addr && TOP_ELITE_ADDRESSES.has(addr)) {
-        smartMoneyTags.push(tag);
-      } else {
-        otherTags.push(tag);
-      }
-    }
-
-    if (smartMoneyTags.length === 0) {
-      skipSingleWallet++;
-      if (skipSingleWallet <= 3) {
-        console.log(
-          `    [SKIP] ${coinLabel} — no Smart Money confirmed (0 T1 wallets, ${uniqueWallets.size} total)`
-        );
-      }
-      for (const s of sigs) processedSignalIds.add(s.id);
-      continue;
-    }
-
-    if (uniqueWallets.size < MIN_UNIQUE_WALLETS) {
-      skipSingleWallet++;
-      if (skipSingleWallet <= 3) {
-        console.log(
-          `    [SKIP] ${coinLabel} — Smart Money only, no confirmation (${smartMoneyTags[0]} alone)`
-        );
-      }
-      for (const s of sigs) processedSignalIds.add(s.id);
-      continue;
-    }
-
-    // We have 1+ Smart Money + 1+ other wallet = ENTER
-    const confirmTag = otherTags.length > 0 ? otherTags[0] : smartMoneyTags[1] || smartMoneyTags[0];
-    const bestSig = sigs[0];
-    for (const s of sigs) processedSignalIds.add(s.id);
-
-    console.log(
-      `    [ENTRY SMART] ${coinLabel} — ${smartMoneyTags[0]}(T1) + ${confirmTag} confirmed`
-    );
-
-    qualified.push({
-      id: bestSig.id,
-      coin_address: coinAddress,
-      coin_name: bestSig.coin_name,
-      wallet_tag: `${smartMoneyTags[0]}+${confirmTag}${uniqueWallets.size > 2 ? `+${uniqueWallets.size - 2}more` : ""}`,
-      entry_mc: bestSig.entry_mc,
-      signal_time: bestSig.signal_time,
-      price_gap_minutes: bestSig.price_gap_minutes,
-      priority: smartMoneyTags.length >= 2 ? "HIGH" : "normal",
-    });
-  }
-
-  console.log(
-    `  [SCAN] Results: ${qualified.length} qualified | Skipped: ${skipGapTooOld} gap>${MAX_GAP_MINUTES}m, ${skipSingleWallet} single-wallet, ${skipMcTooHigh} MC>$${MAX_ENTRY_MC.toLocaleString()}, ${skipBundle} bundles, ${skipAlreadyOpen} open, ${skipAlreadyProcessed} processed`
-  );
-
-  return qualified;
-}
-
 // ─── Bankroll ────────────────────────────────────────────
-
-// POSITION_SIZE_PCT imported from config/smart-money.ts
 
 async function getBankroll(): Promise<{ id: string; current_balance: number }> {
   const { data } = await supabase
@@ -312,48 +109,7 @@ async function updateBankroll(pnlUsd: number): Promise<void> {
   );
 }
 
-// ─── Open Paper Position ─────────────────────────────────
-
-async function openPosition(signal: QualifiedSignal): Promise<void> {
-  const coinLabel = signal.coin_name || signal.coin_address.slice(0, 8) + "...";
-
-  console.log(
-    `  [DEBUG] Evaluating ${coinLabel}: gap=${signal.price_gap_minutes}min, MC=${signal.entry_mc ?? "unknown"}, mint=${signal.coin_address.slice(0, 12)}...`
-  );
-
-  const { price, source } = await getPrice(signal.coin_address);
-
-  console.log(
-    `  [DEBUG] Price for ${coinLabel}: $${price} (source: ${source})`
-  );
-
-  // Calculate position size: 1% of current bankroll
-  const bankroll = await getBankroll();
-  const positionSize = Number(bankroll.current_balance) * POSITION_SIZE_PCT;
-
-  const { error } = await supabase.from("paper_trades").insert({
-    coin_address: signal.coin_address,
-    coin_name: signal.coin_name,
-    wallet_tag: signal.wallet_tag,
-    entry_price: price,
-    entry_mc: signal.entry_mc,
-    status: "open",
-    priority: signal.priority,
-    entry_time: new Date().toISOString(),
-    position_size_usd: positionSize,
-  });
-
-  if (error) {
-    console.error("  [ERROR] Opening position:", error.message);
-    return;
-  }
-
-  const prioTag = signal.priority === "HIGH" ? " [MULTI-WALLET]" : "";
-  const srcTag = source !== "jupiter" ? ` [${source}]` : "";
-  console.log(
-    `  [ENTRY] ${coinLabel} @ $${price.toFixed(10)} | $${positionSize.toFixed(2)} position | gap: ${signal.price_gap_minutes}min | via: ${signal.wallet_tag}${prioTag}${srcTag}`
-  );
-}
+// Entry handled by /api/webhook — openPosition removed.
 
 // ─── Check Open Positions (Grid Exit) ────────────────────
 
