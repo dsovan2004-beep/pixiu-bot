@@ -49,6 +49,8 @@ const ELITE_WALLETS = [
   { address: "5dd3zjBQQvQqtmWF67nR6XaRKe79cYu4fP6LFXZ1YRR9", tag: "GMGN_SM_1" },
   { address: "J3Ez1WjZMpcnMua4xA9nirZwWTurAxY7wqhm4vPeJ8k5", tag: "GMGN_SM_2" },
   { address: "B3b1rDyViWRbnnXWHytpVJNmMRgNRMvMaADmpbn3EMYx", tag: "GMGN_SM_3" },
+  { address: "7q15WZ4iSUDvqfs5Kdh9bfptkQhs6qKUyCUq6GY6PGxg", tag: "GMGN_SM_4" },
+  { address: "6Dt9J7TXM3eqyQBAZMbGJCV6VsP13WVStwPJnLPFtw2Y", tag: "GMGN_SM_5" },
 ];
 
 async function main(): Promise<void> {
