@@ -15,7 +15,7 @@ import supabase from "../lib/supabase-server";
 const SIGNAL_POLL_MS = 30_000; // Check for new signals every 30s
 const POSITION_CHECK_MS = 15_000; // Check open positions every 15s — catch fast crashes
 
-// Entry filters — opened up for volume. 2-wallet rule stays.
+// Entry filters — Smart Money + confirmation
 const MAX_GAP_MINUTES = 30; // Wide — let trades flow
 const MAX_ENTRY_MC = 100_000; // Wide — don't miss runners
 const MIN_UNIQUE_WALLETS = 2; // KEEP — this is the edge
@@ -39,7 +39,19 @@ const KILL_SWITCH_MIN_WR = 0.55; // 55%
 const processedSignalIds = new Set<string>();
 let killSwitchActive = false;
 
-// Tier 1 Smart Money wallets for whale exit detection
+// Tier 1 Smart Money wallet ADDRESSES for entry confirmation + whale exit
+const TOP_ELITE_ADDRESSES = new Set([
+  "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o", // Cented
+  "8deJ9xeUvXSJwicYptA9mHsU2rN2pDx37KWzkDkEXhU6", // Cooker
+  "J3Ez1WjZMpcnMua4xA9nirZwWTurAxY7wqhm4vPeJ8k5", // GMGN_SM_2 90% WR
+  "4gyFNL92hgMZUb87Nv4BgfasYTZ247M2GSf8d2LS1Q99", // GMGN_FW_1 95% WR
+  "5BGiLEfrrrAHPdjomZXhXk8mu36xgSdoV38BPxwkB3mz", // GMGN_FW_2 100% WR
+  "4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk", // Jijo 55% WR
+  "G45wKGBuuHbfh2tkkNhWchfFquLM1DQ7xKs3VfygXQ5F", // GMGN_FW_3 93% WR
+  "Hrk1f2nEMme9tDY5yro4itW9cN7P8K7PKyReGatf5zRb", // GMGN_FW_4 85% WR
+]);
+
+// Tags for whale exit log (looked up from addresses at runtime)
 const SMART_MONEY_TAGS = new Set([
   "cented", "Cented",
   "Cooker",
@@ -111,6 +123,17 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
 
   console.log(`  [SCAN] Looking for signals since ${cutoff} (now: ${now.toISOString()})`);
 
+  // Load tag→address map for Smart Money check
+  const { data: walletRows } = await supabase
+    .from("tracked_wallets")
+    .select("wallet_address, tag")
+    .eq("active", true);
+
+  const tagToAddress = new Map<string, string>();
+  for (const w of walletRows || []) {
+    tagToAddress.set(w.tag, w.wallet_address);
+  }
+
   const { data: signals, error } = await supabase
     .from("coin_signals")
     .select("*")
@@ -178,7 +201,7 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
     .from("paper_trades")
     .select("coin_address")
     .eq("status", "closed")
-    .gte("exit_time", new Date(now.getTime() - 60 * 60_000).toISOString());
+    .gte("exit_time", new Date(now.getTime() - 120 * 60_000).toISOString());
 
   const recentlyTradedCoins = new Set(recentClosed?.map((p) => p.coin_address) || []);
 
@@ -223,30 +246,59 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
       continue;
     }
 
-    // ── REQUIRE 2+ DIFFERENT active wallets (no tier gate) ──
-    if (uniqueWallets.size < MIN_UNIQUE_WALLETS) {
+    // ── REQUIRE: 1 Smart Money wallet + 1 additional wallet ──
+    // Find which wallet tags map to TOP_ELITE addresses
+    const smartMoneyTags: string[] = [];
+    const otherTags: string[] = [];
+    for (const tag of uniqueWallets) {
+      const addr = tagToAddress.get(tag);
+      if (addr && TOP_ELITE_ADDRESSES.has(addr)) {
+        smartMoneyTags.push(tag);
+      } else {
+        otherTags.push(tag);
+      }
+    }
+
+    if (smartMoneyTags.length === 0) {
       skipSingleWallet++;
       if (skipSingleWallet <= 3) {
         console.log(
-          `    [SKIP] ${coinLabel} single-wallet (${Array.from(uniqueWallets)[0]} only)`
+          `    [SKIP] ${coinLabel} — no Smart Money confirmed (0 T1 wallets, ${uniqueWallets.size} total)`
         );
       }
       for (const s of sigs) processedSignalIds.add(s.id);
       continue;
     }
 
+    if (uniqueWallets.size < MIN_UNIQUE_WALLETS) {
+      skipSingleWallet++;
+      if (skipSingleWallet <= 3) {
+        console.log(
+          `    [SKIP] ${coinLabel} — Smart Money only, no confirmation (${smartMoneyTags[0]} alone)`
+        );
+      }
+      for (const s of sigs) processedSignalIds.add(s.id);
+      continue;
+    }
+
+    // We have 1+ Smart Money + 1+ other wallet = ENTER
+    const confirmTag = otherTags.length > 0 ? otherTags[0] : smartMoneyTags[1] || smartMoneyTags[0];
     const bestSig = sigs[0];
     for (const s of sigs) processedSignalIds.add(s.id);
+
+    console.log(
+      `    [ENTRY SMART] ${coinLabel} — ${smartMoneyTags[0]}(T1) + ${confirmTag} confirmed`
+    );
 
     qualified.push({
       id: bestSig.id,
       coin_address: coinAddress,
       coin_name: bestSig.coin_name,
-      wallet_tag: `${Array.from(uniqueWallets).slice(0, 3).join("+")}${uniqueWallets.size > 3 ? `+${uniqueWallets.size - 3}more` : ""}`,
+      wallet_tag: `${smartMoneyTags[0]}+${confirmTag}${uniqueWallets.size > 2 ? `+${uniqueWallets.size - 2}more` : ""}`,
       entry_mc: bestSig.entry_mc,
       signal_time: bestSig.signal_time,
       price_gap_minutes: bestSig.price_gap_minutes,
-      priority: uniqueWallets.size >= 3 ? "HIGH" : "normal",
+      priority: smartMoneyTags.length >= 2 ? "HIGH" : "normal",
     });
   }
 
@@ -565,8 +617,9 @@ async function main(): Promise<void> {
   console.log("  PIXIU BOT — Paper Trading Engine (Sprint 2)");
   console.log("═══════════════════════════════════════════════════════════");
   console.log(`  Mode:         PAPER ONLY — zero real SOL spent`);
-  console.log(`  Entry filter: gap < ${MAX_GAP_MINUTES}min, MC < $${MAX_ENTRY_MC.toLocaleString()}, ${MIN_UNIQUE_WALLETS}+ Tier1 wallets, VOLUME MODE`);
-  console.log(`  Mission:      Recover $3,325 — need 50 trades for validation`);
+  console.log(`  Entry filter: 1 Smart Money(T1) + 1 confirming wallet, gap < ${MAX_GAP_MINUTES}min, MC < $${MAX_ENTRY_MC.toLocaleString()}`);
+  console.log(`  Cooldown:     120min same-coin re-entry cooldown`);
+  console.log(`  Mission:      Recover $3,325`);
   console.log(`  Exit grid:    L1 +15% (50%) | L2 +40% (25%) | L3 +100% (25%)`);
   console.log(`  Stop loss:    -${STOP_LOSS_PCT}% on remaining | Timeout ${TIMEOUT_MINUTES}min`);
   console.log(`  Multi-wallet: 2+ wallets within ${MULTI_WALLET_WINDOW_MIN}min = HIGH priority`);
