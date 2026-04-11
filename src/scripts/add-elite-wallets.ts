@@ -35,6 +35,16 @@ const ELITE_WALLETS = [
   { address: "DKQn3DfrmM7acJwWx8D5eDZ4mzmhGFyJ8DFjSAqMpump", tag: "elite_3" },
   { address: "HXGNWyeiMXNrW9zts8pe9NtcuHRCeTop2wHFXUJLpump", tag: "elite_4" },
   { address: "35zCVZqst3vKGc7b3RMkbBRbdSowo8UAuGMS9denpump", tag: "elite_5" },
+  // Batch 4 — Kolscan weekly leaderboard
+  { address: "EaVboaPxFCYanjoNWdkxTbPvt57nhXGu5i6m9m6ZS2kK", tag: "danny" },
+  { address: "4PsbR8MrE4dxN11Jj4gf4rAntKss2Kd4BQbGv7uopump", tag: "elite_6" },
+  { address: "EhM5Q8puFsAW692BaXrU9aTeKB6S4712DEXVee6Tpump", tag: "elite_7" },
+  { address: "A3W8psibkTUvjxs4LRscbnjux6TFDXdvD4m4GsGpQ2KJ", tag: "Numer0" },
+  { address: "2fg5QD1eD7rzNNCsvnhmXFm5hqNgwTTG8p7kQ6f3rx6f", tag: "Cupsey" },
+  { address: "4Be9CvxqHW6BYiRAxW9Q3xu1ycTMWaL5z8NX4HR3ha7t", tag: "Mitch" },
+  { address: "5RQEcWJZdhkxRMbwjSq32RaocgYPaWDhi3ztimWUcrwo", tag: "EvansOfWeb" },
+  { address: "6EDaVsS6enYgJ81tmhEkiKFcb4HuzPUVFZeom6PHUqN3", tag: "Cowboy" },
+  { address: "64ymeD9XTAkNJgHtXgrG6JCNZmBC9fSVcmgkL54pFikE", tag: "Phineas.SOL" },
 ];
 
 async function main(): Promise<void> {
