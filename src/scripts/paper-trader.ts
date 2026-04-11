@@ -1,26 +1,18 @@
 /**
- * PixiuBot — Paper Trading Engine (Sprint 2)
+ * PixiuBot — Position Monitor (Sprint 2)
  * Usage: npx tsx src/scripts/paper-trader.ts
  *
- * Runs alongside feed.ts (separate process).
- * Polls coin_signals for fresh signals, opens paper positions,
- * monitors open positions, and auto-exits on TP/SL/timeout.
+ * Manages open positions: grid exits, stop loss, circuit breaker, whale exit.
+ * Entries handled by /api/webhook (instant, event-driven).
  * NO real SOL is spent. Paper only.
  */
 
 import supabase from "../lib/supabase-server";
+import { TOP_ELITE_ADDRESSES, PLACEHOLDER_PRICE, POSITION_SIZE_PCT } from "../config/smart-money";
 
 // ─── Config ──────────────────────────────────────────────
 
-const SIGNAL_POLL_MS = 30_000; // Check for new signals every 30s
 const POSITION_CHECK_MS = 15_000; // Check open positions every 15s — catch fast crashes
-
-// Entry filters — Smart Money + confirmation
-const MAX_GAP_MINUTES = 30; // Wide — let trades flow
-const MAX_ENTRY_MC = 100_000; // Wide — don't miss runners
-const MIN_UNIQUE_WALLETS = 2; // KEEP — this is the edge
-const MIN_SIGNAL_COUNT = 2; // 2+ signals minimum
-const MULTI_WALLET_WINDOW_MIN = 15; // Wider window for wallet convergence
 
 // Grid exit levels
 const GRID_LEVELS = [
@@ -39,32 +31,13 @@ const KILL_SWITCH_MIN_WR = 0.55; // 55%
 const processedSignalIds = new Set<string>();
 let killSwitchActive = false;
 
-// Tier 1 Smart Money wallet ADDRESSES for entry confirmation + whale exit
-const TOP_ELITE_ADDRESSES = new Set([
-  "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o", // Cented
-  "8deJ9xeUvXSJwicYptA9mHsU2rN2pDx37KWzkDkEXhU6", // Cooker
-  "J3Ez1WjZMpcnMua4xA9nirZwWTurAxY7wqhm4vPeJ8k5", // GMGN_SM_2 90% WR
-  "4gyFNL92hgMZUb87Nv4BgfasYTZ247M2GSf8d2LS1Q99", // GMGN_FW_1 95% WR
-  "5BGiLEfrrrAHPdjomZXhXk8mu36xgSdoV38BPxwkB3mz", // GMGN_FW_2 100% WR
-  "4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk", // Jijo 55% WR
-  "G45wKGBuuHbfh2tkkNhWchfFquLM1DQ7xKs3VfygXQ5F", // GMGN_FW_3 93% WR
-  "Hrk1f2nEMme9tDY5yro4itW9cN7P8K7PKyReGatf5zRb", // GMGN_FW_4 85% WR
-]);
-
-// Tags for whale exit log (looked up from addresses at runtime)
-const SMART_MONEY_TAGS = new Set([
-  "cented", "Cented",
-  "Cooker",
-  "GMGN_SM_2",
-  "GMGN_FW_1", "GMGN_FW_2", "GMGN_FW_3", "GMGN_FW_4",
-  "jijo", "Jijo",
-]);
+// TOP_ELITE_ADDRESSES imported from config/smart-money.ts
 
 // ─── Price Resolution (multi-source) ─────────────────────
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || "";
 const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
-const PLACEHOLDER_PRICE = 0.000001;
+// PLACEHOLDER_PRICE imported from config/smart-money.ts
 
 interface PriceResult {
   price: number;
@@ -311,7 +284,7 @@ async function findNewSignals(): Promise<QualifiedSignal[]> {
 
 // ─── Bankroll ────────────────────────────────────────────
 
-const POSITION_SIZE_PCT = 0.01; // 1% of bankroll per trade
+// POSITION_SIZE_PCT imported from config/smart-money.ts
 
 async function getBankroll(): Promise<{ id: string; current_balance: number }> {
   const { data } = await supabase
@@ -633,18 +606,15 @@ async function printStats(): Promise<void> {
 
 async function main(): Promise<void> {
   console.log("═══════════════════════════════════════════════════════════");
-  console.log("  PIXIU BOT — Paper Trading Engine (Sprint 2)");
+  console.log("  PIXIU BOT — Position Monitor (Sprint 2)");
   console.log("═══════════════════════════════════════════════════════════");
   console.log(`  Mode:         PAPER ONLY — zero real SOL spent`);
-  console.log(`  Entry filter: 1 Smart Money(T1) + 1 confirming wallet, gap < ${MAX_GAP_MINUTES}min, MC < $${MAX_ENTRY_MC.toLocaleString()}`);
-  console.log(`  Cooldown:     120min same-coin re-entry cooldown`);
-  console.log(`  Mission:      Recover $3,325`);
+  console.log(`  Entry:        Event-driven (webhook instant entry)`);
   console.log(`  Exit grid:    L1 +15% (50%) | L2 +40% (25%) | L3 +100% (25%)`);
-  console.log(`  Stop loss:    -${STOP_LOSS_PCT}% on remaining | Timeout ${TIMEOUT_MINUTES}min`);
-  console.log(`  Multi-wallet: 2+ wallets within ${MULTI_WALLET_WINDOW_MIN}min = HIGH priority`);
-  console.log(`  Kill switch:  WR < ${KILL_SWITCH_MIN_WR * 100}% after ${KILL_SWITCH_MIN_TRADES} trades`);
-  console.log(`  Signal poll:  Every ${SIGNAL_POLL_MS / 1000}s`);
+  console.log(`  Stop loss:    -${STOP_LOSS_PCT}% | Circuit breaker: -25%`);
+  console.log(`  Timeout:      ${TIMEOUT_MINUTES}min | Whale exit: T1 SELL detection`);
   console.log(`  Position chk: Every ${POSITION_CHECK_MS / 1000}s`);
+  console.log(`  Kill switch:  WR < ${KILL_SWITCH_MIN_WR * 100}% after ${KILL_SWITCH_MIN_TRADES} trades`);
   console.log(`  Started:      ${new Date().toISOString()}`);
   console.log("═══════════════════════════════════════════════════════════\n");
 
@@ -715,23 +685,7 @@ async function main(): Promise<void> {
 
   await syncBankroll();
 
-  // Signal poll loop
-  async function signalTick(): Promise<void> {
-    if (killSwitchActive) {
-      console.log("  [SCAN] Kill switch active — skipping signal scan");
-      return;
-    }
-
-    const signals = await findNewSignals();
-    if (signals.length === 0) {
-      console.log("  [SCAN] No new qualified signals this tick");
-    }
-    for (const sig of signals) {
-      await openPosition(sig);
-    }
-  }
-
-  // Position check loop
+  // Position check loop — exits only, entries handled by webhook
   async function positionTick(): Promise<void> {
     await checkPositions();
     await checkKillSwitch();
@@ -739,12 +693,12 @@ async function main(): Promise<void> {
   }
 
   // Run immediately
-  await signalTick();
   await positionTick();
 
-  // Set up intervals
-  setInterval(signalTick, SIGNAL_POLL_MS);
+  // Set up interval — exits every 15s
   setInterval(positionTick, POSITION_CHECK_MS);
+
+  console.log("  [POSITION MONITOR] Running — entries handled by /api/webhook\n");
 
   // Graceful shutdown
   process.on("SIGINT", () => {
