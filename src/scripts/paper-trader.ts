@@ -13,7 +13,7 @@ import supabase from "../lib/supabase-server";
 // ─── Config ──────────────────────────────────────────────
 
 const SIGNAL_POLL_MS = 30_000; // Check for new signals every 30s
-const POSITION_CHECK_MS = 60_000; // Check open positions every 60s
+const POSITION_CHECK_MS = 15_000; // Check open positions every 15s — catch fast crashes
 
 // Entry filters — opened up for volume. 2-wallet rule stays.
 const MAX_GAP_MINUTES = 30; // Wide — let trades flow
@@ -380,14 +380,15 @@ async function checkPositions(): Promise<void> {
       await updateBankroll(pnlUsd);
     }
 
-    // ── Circuit Breaker: hard exit on crash (>25% drop) ──
+    // ── Circuit Breaker: FIRST CHECK — hard exit on crash (>25% drop) ──
     const CIRCUIT_BREAKER_PCT = 25;
     if (pnlPct <= -CIRCUIT_BREAKER_PCT) {
+      // Use raw pnlPct for the full remaining position — no weighted calc
       const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
-      await closeTrade(finalPnl, "circuit_breaker", currentLevel);
       const pnlUsd = (finalPnl / 100) * posSize;
+      await closeTrade(finalPnl, "circuit_breaker", currentLevel);
       console.log(
-        `  [CIRCUIT BREAKER] 🚨 ${coinLabel} crashed ${pnlPct.toFixed(1)}% — emergency exit | PnL: ${finalPnl.toFixed(2)}% ($${pnlUsd.toFixed(2)}) | grid L${currentLevel}`
+        `  [CIRCUIT BREAKER] 🚨 ${coinLabel} crashed ${pnlPct.toFixed(1)}% — emergency exit | PnL: ${finalPnl.toFixed(2)}% (-$${Math.abs(pnlUsd).toFixed(2)}) | grid L${currentLevel} | price: $${currentPrice}`
       );
       continue;
     }
