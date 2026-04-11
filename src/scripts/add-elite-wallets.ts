@@ -28,6 +28,13 @@ const ELITE_WALLETS = [
   { address: "DEdEW3SMPU2dCfXEcgj2YppmX9H3bnMDJaU4ctn2BQDQ", tag: "King Solomon" },
   { address: "J9TYAsWWidbrcZybmLSfrLzryANf4CgJBLdvwdGuC8MB", tag: "Johnson" },
   { address: "4fZFcK8ms3bFMpo1ACzEUz8bH741fQW4zhAMGd5yZMHu", tag: "Rilsio" },
+  // Batch 3
+  { address: "8deJ9xeUvXSJwicYptA9mHsU2rN2pDx37KWzkDkEXhU6", tag: "Cooker" },
+  { address: "F42jFMmnH5JhW5Qib7cGZX18Qc59bEQ1q2fcQRWopump", tag: "elite_1" },
+  { address: "53GeYgJLaDVCbuRRwwztT51yQsS68u5aUKrUiaTxpump", tag: "elite_2" },
+  { address: "DKQn3DfrmM7acJwWx8D5eDZ4mzmhGFyJ8DFjSAqMpump", tag: "elite_3" },
+  { address: "HXGNWyeiMXNrW9zts8pe9NtcuHRCeTop2wHFXUJLpump", tag: "elite_4" },
+  { address: "35zCVZqst3vKGc7b3RMkbBRbdSowo8UAuGMS9denpump", tag: "elite_5" },
 ];
 
 async function main(): Promise<void> {
