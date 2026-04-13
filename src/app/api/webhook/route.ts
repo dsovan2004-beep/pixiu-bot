@@ -13,7 +13,6 @@ import {
   MAX_ENTRY_MC,
   RECENTLY_TRADED_COOLDOWN_MS,
   POSITION_SIZE_PCT,
-  PLACEHOLDER_PRICE,
 } from "@/config/smart-money";
 
 export const runtime = "edge";
@@ -83,7 +82,7 @@ async function getPrice(mint: string): Promise<{ price: number; source: string }
       if (p) { const price = parseFloat(p); if (price > 0) return { price, source: "dexscreener" }; }
     }
   } catch {}
-  return { price: PLACEHOLDER_PRICE, source: "placeholder" };
+  return { price: 0, source: "none" };
 }
 
 // ─── Wallet Helpers ──────────────────────────────────────
@@ -251,6 +250,11 @@ async function evaluateAndEnter(
 
   // ── ENTER TRADE ──
   const { price, source } = await getPrice(mint);
+
+  if (!price || price <= 0) {
+    console.log(`  [SKIP] ${coinName} — could not fetch price, skipping entry`);
+    return { entered: false, reason: `price fetch failed (source: ${source})` };
+  }
 
   // Get bankroll for position sizing
   const { data: bankrollRow } = await supabase

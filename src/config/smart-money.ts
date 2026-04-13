@@ -20,4 +20,3 @@ export const MAX_GAP_MINUTES = 30;
 export const MAX_ENTRY_MC = 100_000;
 export const RECENTLY_TRADED_COOLDOWN_MS = 120 * 60_000; // 120 min
 export const POSITION_SIZE_PCT = 0.01; // 1% of bankroll
-export const PLACEHOLDER_PRICE = 0.000001;

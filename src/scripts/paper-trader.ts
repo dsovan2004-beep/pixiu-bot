@@ -8,7 +8,7 @@
  */
 
 import supabase from "../lib/supabase-server";
-import { TOP_ELITE_ADDRESSES, PLACEHOLDER_PRICE } from "../config/smart-money";
+import { TOP_ELITE_ADDRESSES } from "../config/smart-money";
 
 // ─── Config ──────────────────────────────────────────────
 
@@ -33,7 +33,6 @@ let killSwitchActive = false;
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || "";
 const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
-// PLACEHOLDER_PRICE imported from config/smart-money.ts
 
 interface PriceResult {
   price: number;
@@ -68,8 +67,7 @@ async function getPrice(mint: string): Promise<PriceResult> {
     }
   } catch {}
 
-  // Source 3: Placeholder — still enter trade for signal validation
-  return { price: PLACEHOLDER_PRICE, source: "placeholder" };
+  return { price: 0, source: "none" };
 }
 
 // ─── Bankroll ────────────────────────────────────────────
@@ -134,8 +132,8 @@ async function checkPositions(): Promise<void> {
     const entryTime = new Date(pos.entry_time).getTime();
     const minutesOpen = (Date.now() - entryTime) / 60_000;
 
-    // Skip ONLY if both entry AND current are placeholder (no real data at all)
-    const bothPlaceholder = source === "placeholder" && entryPrice === PLACEHOLDER_PRICE;
+    // Skip if current price fetch failed (no real data)
+    const priceFetchFailed = source === "none" || currentPrice <= 0;
 
     // Calculate PnL — always, even with placeholder (for timeout at minimum)
     const pnlPct = entryPrice > 0 ? ((currentPrice - entryPrice) / entryPrice) * 100 : 0;
@@ -168,7 +166,7 @@ async function checkPositions(): Promise<void> {
       `  [CB CHECK] ${coinLabel} pnlPct=${pnlPct.toFixed(1)}% threshold=-${CIRCUIT_BREAKER_PCT}% (entry:$${entryPrice} now:$${currentPrice} src:${source})`
     );
 
-    if (!bothPlaceholder && pnlPct <= -CIRCUIT_BREAKER_PCT) {
+    if (!priceFetchFailed && pnlPct <= -CIRCUIT_BREAKER_PCT) {
       // Use raw pnlPct for the full remaining position — no weighted calc
       const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
       const pnlUsd = (finalPnl / 100) * posSize;
