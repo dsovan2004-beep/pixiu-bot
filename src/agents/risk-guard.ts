@@ -5,9 +5,9 @@
  * Manages all exits with priority order:
  *   1. Circuit breaker: -25% emergency exit
  *   2. Whale exit: T1 wallet SELL detected
- *   3. Grid levels: L1 +15% (50%) | L2 +40% (25%) | L3 +100% (25%)
- *   4. Stop loss: -10% full exit
- *   5. Timeout: 20min full exit
+ *   3. Stop loss: -10% full exit
+ *   4. Timeout: 20min full exit
+ *   5. Grid levels: L1 +15% (50%) | L2 +40% (25%) | L3 +100% (25%)
  */
 
 import supabase from "../lib/supabase-server";
@@ -138,6 +138,10 @@ async function checkPositions(): Promise<void> {
     }
 
     // 1. Circuit Breaker — ABSOLUTE FIRST CHECK
+    console.log(
+      `  [GUARD CB CHECK] ${coinLabel} pnlPct=${pnlPct.toFixed(1)}% threshold=-${CIRCUIT_BREAKER_PCT}% (entry:$${entryPrice} now:$${currentPrice} src:${source})`
+    );
+
     if (!priceFetchFailed && pnlPct <= -CIRCUIT_BREAKER_PCT) {
       const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
       await closeTrade(finalPnl, "circuit_breaker", currentLevel);

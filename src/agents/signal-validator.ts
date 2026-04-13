@@ -149,6 +149,27 @@ export async function startSignalValidator(): Promise<void> {
         }
       }
 
+      // 6. Whale hold time filter: if any confirming wallet sold same coin within 2min of buying = rug/test
+      const twoMinAgo = new Date(Date.now() - 2 * 60_000).toISOString();
+      const { data: quickSells } = await supabase
+        .from("coin_signals")
+        .select("wallet_tag")
+        .eq("coin_address", signal.coin_address)
+        .eq("transaction_type", "SELL")
+        .gte("signal_time", twoMinAgo);
+
+      if (quickSells && quickSells.length > 0) {
+        // Check if any of the selling wallets also bought this coin recently
+        const sellerTags = new Set(quickSells.map((s) => s.wallet_tag));
+        const overlap = Array.from(allTags).filter((t) => sellerTags.has(t));
+        if (overlap.length > 0) {
+          console.log(
+            `  [VALIDATOR] ❌ ${coin} — ${overlap[0]} sold within 2min (likely rug)`
+          );
+          return;
+        }
+      }
+
       // ALL CHECKS PASSED — publish ENTER event
       const confirmTag =
         otherNames.length > 0
