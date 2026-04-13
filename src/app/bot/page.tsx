@@ -197,9 +197,6 @@ export default function BotPage() {
       ? (losses.reduce((s, t) => s + Number(t.pnl_pct), 0) / losses.length).toFixed(2)
       : "0";
 
-  const killSwitchTriggered =
-    totalClosed >= 50 && Number(winRate) < 55;
-
   // ─── Recovery Tracker ──────────────────────────────────
   const RECOVERY_GOAL = 3325;
   const totalWinUsd = wins.reduce((s, t) => s + Math.max(0, Number(t.pnl_usd || 0)), 0);
@@ -217,17 +214,8 @@ export default function BotPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-amber-500">PixiuBot</h1>
-          <span className="text-xs text-zinc-600">Sprint 2 — Paper Trading</span>
+          <span className="text-xs text-zinc-600">Sprint 3 — Paper Trading</span>
         </div>
-
-        {/* Kill Switch Warning */}
-        {killSwitchTriggered && (
-          <div className="bg-red-900/50 border border-red-600 rounded-lg p-4 text-center">
-            <span className="text-red-400 font-bold font-mono">
-              KILL SWITCH: Win rate {winRate}% &lt; 55% after {totalClosed} trades — new entries paused
-            </span>
-          </div>
-        )}
 
         {/* Bankroll */}
         {bankroll && (
@@ -329,14 +317,8 @@ export default function BotPage() {
             <Card label="Total Trades" value={String(totalClosed)} />
             <Card
               label="Win Rate"
-              value={totalClosed < 50 ? `${winRate}% (${totalClosed}/50)` : `${winRate}%`}
-              color={
-                totalClosed < 50
-                  ? "text-white"
-                  : Number(winRate) >= 55
-                    ? "text-green-500"
-                    : "text-red-500"
-              }
+              value={`${winRate}%`}
+              color={Number(winRate) >= 55 ? "text-green-500" : "text-red-500"}
             />
             <Card
               label="Avg Gain"
