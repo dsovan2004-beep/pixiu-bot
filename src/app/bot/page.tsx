@@ -313,13 +313,17 @@ export default function BotPage() {
           <h2 className="text-lg font-semibold text-zinc-300 mb-3">
             Paper Trading
           </h2>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Card label="Total Trades" value={String(totalClosed)} />
             <Card
               label="Win Rate"
               value={`${winRate}%`}
               color={Number(winRate) >= 55 ? "text-green-500" : "text-red-500"}
             />
+            <Card label="Wins" value={String(wins.length)} color="text-green-500" />
+            <Card label="Losses" value={String(losses.length)} color="text-red-500" />
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-4">
             <Card
               label="Avg Gain"
               value={`+${avgGain}%`}
