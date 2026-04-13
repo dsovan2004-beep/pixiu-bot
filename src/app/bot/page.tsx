@@ -59,6 +59,10 @@ export default function BotPage() {
     current_balance: number;
     total_pnl_usd: number;
   } | null>(null);
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
+  const [whaleSells, setWhaleSells] = useState<
+    Record<string, Array<{ wallet_tag: string; signal_time: string }>>
+  >({});
 
   const fetchData = useCallback(async () => {
     const [stateRes, signalsRes, walletsRes, openRes, closedRes, allClosedRes, bankrollRes] =
@@ -107,6 +111,55 @@ export default function BotPage() {
     setClosedTrades(closedRes.data || []);
     setAllClosedStats(allClosedRes.data || []);
     if (bankrollRes.data) setBankroll(bankrollRes.data);
+
+    // Fetch live prices and whale sells for open positions
+    const opens = openRes.data || [];
+    if (opens.length > 0) {
+      // Fetch prices from DexScreener
+      const uniqueMints = [...new Set(opens.map((t) => t.coin_address))];
+      const priceMap: Record<string, number> = {};
+      await Promise.all(
+        uniqueMints.map(async (mint) => {
+          try {
+            const res = await fetch(
+              `https://api.dexscreener.com/latest/dex/tokens/${mint}`
+            );
+            if (res.ok) {
+              const data = await res.json();
+              const p = data.pairs?.[0]?.priceUsd;
+              if (p) {
+                const price = parseFloat(p);
+                if (price > 0) priceMap[mint] = price;
+              }
+            }
+          } catch {}
+        })
+      );
+      setLivePrices(priceMap);
+
+      // Fetch whale SELL signals for each open position
+      const sellMap: Record<
+        string,
+        Array<{ wallet_tag: string; signal_time: string }>
+      > = {};
+      await Promise.all(
+        opens.map(async (t) => {
+          const { data: sells } = await supabase
+            .from("coin_signals")
+            .select("wallet_tag, signal_time")
+            .eq("coin_address", t.coin_address)
+            .eq("transaction_type", "SELL")
+            .gte("signal_time", t.entry_time)
+            .order("signal_time", { ascending: false })
+            .limit(5);
+          if (sells && sells.length > 0) {
+            sellMap[t.coin_address] = sells;
+          }
+        })
+      );
+      setWhaleSells(sellMap);
+    }
+
     setLastFetch(new Date());
     setLoading(false);
   }, []);
@@ -299,66 +352,167 @@ export default function BotPage() {
           </div>
         </section>
 
-        {/* ─── Open Positions ─────────────────────────────── */}
+        {/* ─── Open Positions (Live Tracker) ──────────────── */}
         {openTrades.length > 0 && (
           <section>
             <h2 className="text-lg font-semibold text-zinc-300 mb-3">
               Open Positions
+              <span className="ml-2 text-xs text-zinc-600 font-normal">
+                live every 10s
+              </span>
             </h2>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm font-mono">
-                <thead>
-                  <tr className="text-zinc-500 border-b border-zinc-800">
-                    <th className="text-left py-2 px-3">Coin</th>
-                    <th className="text-left py-2 px-3">Wallet</th>
-                    <th className="text-right py-2 px-3">Entry Price</th>
-                    <th className="text-center py-2 px-3">Grid</th>
-                    <th className="text-left py-2 px-3">Verdict</th>
-                    <th className="text-right py-2 px-3">Remaining</th>
-                    <th className="text-right py-2 px-3">Locked PnL</th>
-                    <th className="text-left py-2 px-3">Opened</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {openTrades.map((t) => (
-                    <tr
-                      key={t.id}
-                      className="border-b border-zinc-900 hover:bg-zinc-900/50"
-                    >
-                      <td className="py-2 px-3 text-amber-500 font-bold">
-                        {t.coin_name || t.coin_address.slice(0, 8) + "..."}
-                      </td>
-                      <td className="py-2 px-3 text-zinc-400">{t.wallet_tag}</td>
-                      <td className="py-2 px-3 text-right">
-                        ${Number(t.entry_price).toFixed(10)}
-                      </td>
-                      <td className="py-2 px-3 text-center">
-                        <span className={t.grid_level > 0 ? "text-green-400" : "text-zinc-600"}>
-                          L{t.grid_level}/3
+            <div className="space-y-3">
+              {openTrades.map((t) => {
+                const entryPrice = Number(t.entry_price);
+                const currentPrice = livePrices[t.coin_address] || 0;
+                const pnlPct =
+                  entryPrice > 0 && currentPrice > 0
+                    ? ((currentPrice - entryPrice) / entryPrice) * 100
+                    : null;
+                const entryTime = new Date(t.entry_time).getTime();
+                const minutesOpen = (Date.now() - entryTime) / 60_000;
+                const timeoutMin = 20;
+                const timeRemaining = Math.max(0, timeoutMin - minutesOpen);
+                const sells = whaleSells[t.coin_address] || [];
+                const coinLabel =
+                  t.coin_name || t.coin_address.slice(0, 8) + "...";
+
+                return (
+                  <div
+                    key={t.id}
+                    className="bg-zinc-900 border border-zinc-800 rounded-lg p-4"
+                  >
+                    {/* Row 1: Coin name, PnL, timeout */}
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-3">
+                        <span className="text-amber-500 font-bold font-mono text-base">
+                          {coinLabel}
                         </span>
-                      </td>
-                      <td className="py-2 px-3">
-                        {t.grid_level >= 3
-                          ? "100x 💰"
-                          : t.grid_level === 2
-                            ? "Mooning 🚀"
-                            : t.grid_level === 1
-                              ? "Pumping 📈"
-                              : "Watching 👀"}
-                      </td>
-                      <td className="py-2 px-3 text-right text-zinc-400">
-                        {t.remaining_pct}%
-                      </td>
-                      <td className={`py-2 px-3 text-right ${t.partial_pnl > 0 ? "text-green-500" : "text-zinc-600"}`}>
-                        {t.partial_pnl > 0 ? `+${t.partial_pnl.toFixed(2)}%` : "—"}
-                      </td>
-                      <td className="py-2 px-3 text-zinc-600">
-                        {new Date(t.entry_time).toLocaleTimeString()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                        <span className="text-xs text-zinc-500">
+                          {t.wallet_tag}
+                        </span>
+                        {t.priority === "HIGH" && (
+                          <span className="text-xs bg-amber-900/50 text-amber-400 px-1.5 py-0.5 rounded">
+                            HIGH
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-4">
+                        {/* Live PnL */}
+                        {pnlPct !== null ? (
+                          <span
+                            className={`text-lg font-bold font-mono ${
+                              pnlPct >= 0 ? "text-green-500" : "text-red-500"
+                            }`}
+                          >
+                            {pnlPct >= 0 ? "+" : ""}
+                            {pnlPct.toFixed(2)}%
+                          </span>
+                        ) : (
+                          <span className="text-lg font-mono text-zinc-600">
+                            —
+                          </span>
+                        )}
+                        {/* Timeout countdown */}
+                        <span
+                          className={`text-xs font-mono px-2 py-1 rounded ${
+                            timeRemaining <= 5
+                              ? "bg-red-900/50 text-red-400"
+                              : timeRemaining <= 10
+                                ? "bg-amber-900/50 text-amber-400"
+                                : "bg-zinc-800 text-zinc-400"
+                          }`}
+                        >
+                          {timeRemaining <= 0
+                            ? "TIMEOUT"
+                            : `${timeRemaining.toFixed(0)}m left`}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Row 2: Prices */}
+                    <div className="flex items-center gap-6 mb-3 text-xs font-mono">
+                      <span className="text-zinc-500">
+                        Entry: ${entryPrice.toFixed(10)}
+                      </span>
+                      {currentPrice > 0 && (
+                        <span className="text-zinc-400">
+                          Now: ${currentPrice.toFixed(10)}
+                        </span>
+                      )}
+                      {t.partial_pnl > 0 && (
+                        <span className="text-green-600">
+                          Locked: +{t.partial_pnl.toFixed(2)}%
+                        </span>
+                      )}
+                      <span className="text-zinc-600">
+                        {t.remaining_pct}% remaining
+                      </span>
+                    </div>
+
+                    {/* Row 3: Grid Progress Bar */}
+                    <div className="mb-3">
+                      <div className="flex items-center gap-1 mb-1">
+                        {[0, 1, 2, 3].map((level) => (
+                          <div key={level} className="flex items-center">
+                            <div
+                              className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold border-2 ${
+                                t.grid_level >= level
+                                  ? level === 3
+                                    ? "bg-green-500 border-green-400 text-white"
+                                    : level > 0
+                                      ? "bg-amber-500 border-amber-400 text-white"
+                                      : "bg-zinc-600 border-zinc-500 text-white"
+                                  : "bg-zinc-900 border-zinc-700 text-zinc-600"
+                              }`}
+                            >
+                              {level === 0
+                                ? "E"
+                                : level}
+                            </div>
+                            {level < 3 && (
+                              <div
+                                className={`w-8 h-0.5 ${
+                                  t.grid_level > level
+                                    ? "bg-amber-500"
+                                    : "bg-zinc-800"
+                                }`}
+                              />
+                            )}
+                          </div>
+                        ))}
+                        <span className="ml-2 text-xs text-zinc-500">
+                          {t.grid_level >= 3
+                            ? "TP 100%"
+                            : t.grid_level === 2
+                              ? "+40% (25% left)"
+                              : t.grid_level === 1
+                                ? "+15% (50% left)"
+                                : "Watching"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Row 4: Whale Status */}
+                    <div className="text-xs font-mono">
+                      {sells.length === 0 ? (
+                        <span className="text-zinc-500">
+                          No whale exit yet
+                        </span>
+                      ) : (
+                        <div className="space-y-0.5">
+                          {sells.map((s, i) => (
+                            <div key={i} className="text-amber-400">
+                              {s.wallet_tag} sold at{" "}
+                              {new Date(s.signal_time).toLocaleTimeString()}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </section>
         )}
