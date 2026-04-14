@@ -85,8 +85,23 @@ export async function startSignalValidator(): Promise<void> {
         .gte("exit_time", cooldownCutoff);
 
       if ((recentCount || 0) > 0) {
-        console.log(`  [VALIDATOR] ❌ ${coin} — 120min cooldown active`);
+        console.log(`  [VALIDATOR] ❌ ${coin} — 120min cooldown active (same address)`);
         return;
+      }
+
+      // 2b. Name-based cooldown — block same-name scam tokens (different addresses, same name)
+      if (signal.coin_name) {
+        const { count: nameCount } = await supabase
+          .from("paper_trades")
+          .select("id", { count: "exact", head: true })
+          .eq("coin_name", signal.coin_name)
+          .eq("status", "closed")
+          .gte("exit_time", cooldownCutoff);
+
+        if ((nameCount || 0) > 0) {
+          console.log(`  [VALIDATOR] ❌ ${coin} — 120min cooldown active (same name, different address)`);
+          return;
+        }
       }
 
       // 3. Get all BUY signals for this coin in last 30min

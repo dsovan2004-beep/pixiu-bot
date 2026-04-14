@@ -199,7 +199,21 @@ async function evaluateAndEnter(
     .gte("exit_time", cooldownCutoff);
 
   if ((recentCount || 0) > 0) {
-    return { entered: false, reason: "recently traded (120min cooldown)" };
+    return { entered: false, reason: "recently traded (120min cooldown, same address)" };
+  }
+
+  // Name-based cooldown — block same-name scam tokens (different addresses, same name)
+  if (coinName) {
+    const { count: nameCount } = await supabase
+      .from("paper_trades")
+      .select("id", { count: "exact", head: true })
+      .eq("coin_name", coinName)
+      .eq("status", "closed")
+      .gte("exit_time", cooldownCutoff);
+
+    if ((nameCount || 0) > 0) {
+      return { entered: false, reason: `recently traded same name (120min cooldown): ${coinName}` };
+    }
   }
 
   // Check if THIS wallet is Smart Money
