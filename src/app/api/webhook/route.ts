@@ -17,6 +17,17 @@ import {
 
 export const runtime = "edge";
 
+// Stablecoin name filter — reject scam tokens using stablecoin names
+const STABLECOIN_KEYWORDS = [
+  "usd", "usdc", "usdt", "usds", "dai", "busd", "frax",
+  "stable", "peg", "dollar", "euro", "eur",
+];
+
+function isStablecoinName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return STABLECOIN_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -156,6 +167,11 @@ async function evaluateAndEnter(
   gapMinutes: number
 ): Promise<{ entered: boolean; reason: string }> {
   const startMs = Date.now();
+
+  // Stablecoin name filter — fastest rejection
+  if (coinName && isStablecoinName(coinName)) {
+    return { entered: false, reason: `stablecoin name filter: ${coinName}` };
+  }
 
   // Gap filter
   if (gapMinutes > MAX_GAP_MINUTES) {

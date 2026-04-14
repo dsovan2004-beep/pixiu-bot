@@ -17,6 +17,17 @@ import {
   RECENTLY_TRADED_COOLDOWN_MS,
 } from "../config/smart-money";
 
+// Stablecoin name filter — reject scam tokens using stablecoin names
+const STABLECOIN_KEYWORDS = [
+  "usd", "usdc", "usdt", "usds", "dai", "busd", "frax",
+  "stable", "peg", "dollar", "euro", "eur",
+];
+
+function isStablecoinName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return STABLECOIN_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
 interface SignalEvent {
   coin_address: string;
   coin_name: string;
@@ -44,6 +55,12 @@ export async function startSignalValidator(): Promise<void> {
       if (signal.transaction_type !== "BUY") return;
 
       const coin = signal.coin_name || signal.coin_address.slice(0, 8) + "...";
+
+      // 0. Stablecoin name filter — fastest rejection
+      if (signal.coin_name && isStablecoinName(signal.coin_name)) {
+        console.log(`  [VALIDATOR] ❌ ${coin} — stablecoin name filter (skipping)`);
+        return;
+      }
 
       // 1. Check if position already open for this coin
       const { count: openCount } = await supabase
