@@ -11,6 +11,7 @@ import { startSignalValidator } from "./signal-validator";
 import { startPriceScout } from "./price-scout";
 import { startTradeExecutor } from "./trade-executor";
 import { startRiskGuard } from "./risk-guard";
+import { startTierManager } from "./tier-manager";
 
 async function main(): Promise<void> {
   console.log("═══════════════════════════════════════════════════════════");
@@ -21,21 +22,23 @@ async function main(): Promise<void> {
   console.log("  Agent 3: Price Scout      — pixiubot:entries → pixiubot:confirmed");
   console.log("  Agent 4: Trade Executor   — pixiubot:confirmed → paper_trades");
   console.log("  Agent 5: Risk Guard       — paper_trades polling (5s)");
+  console.log("  Agent 6: Tier Manager     — auto-demote/promote T1↔T2");
   console.log("  Bus:     Supabase Realtime broadcast channels");
   console.log("  Mode:    PAPER ONLY — parallel with Sprint 2");
   console.log(`  Started: ${new Date().toISOString()}`);
   console.log("═══════════════════════════════════════════════════════════\n");
 
-  // Start all 5 agents in parallel
+  // Start all 6 agents in parallel
   await Promise.all([
     startWalletWatcher(),
     startSignalValidator(),
     startPriceScout(),
     startTradeExecutor(),
     startRiskGuard(),
+    startTierManager(),
   ]);
 
-  console.log("\n  [SWARM] All 5 agents running. Ctrl+C to stop.\n");
+  console.log("\n  [SWARM] All 6 agents running. Ctrl+C to stop.\n");
 
   // Graceful shutdown
   process.on("SIGINT", () => {
