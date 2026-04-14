@@ -12,6 +12,9 @@ import supabase from "../lib/supabase-server";
 
 const POSITION_SIZE_USD = 100;
 
+// In-memory dedup: track coins being inserted to prevent race condition duplicates
+const pendingInserts = new Set<string>();
+
 interface ConfirmedEntry {
   coin_address: string;
   coin_name: string;
@@ -33,6 +36,13 @@ export async function startTradeExecutor(): Promise<void> {
       const coin =
         entry.coin_name || entry.coin_address.slice(0, 8) + "...";
 
+      // In-memory dedup: if another event for this coin is already being processed, skip
+      if (pendingInserts.has(entry.coin_address)) {
+        console.log(`  [EXECUTOR] ❌ ${coin} — duplicate entry in progress, skipping`);
+        return;
+      }
+      pendingInserts.add(entry.coin_address);
+
       // Double-check no open position (race condition guard)
       const { count: openCount } = await supabase
         .from("paper_trades")
@@ -41,7 +51,8 @@ export async function startTradeExecutor(): Promise<void> {
         .eq("status", "open");
 
       if ((openCount || 0) > 0) {
-        console.log(`  [EXECUTOR] ${coin} — position already open, skipping`);
+        pendingInserts.delete(entry.coin_address);
+        console.log(`  [EXECUTOR] ❌ ${coin} — position already open, skipping`);
         return;
       }
 
@@ -56,6 +67,9 @@ export async function startTradeExecutor(): Promise<void> {
         entry_time: new Date().toISOString(),
         position_size_usd: POSITION_SIZE_USD,
       });
+
+      // Release the lock after insert attempt
+      pendingInserts.delete(entry.coin_address);
 
       if (error) {
         console.error(`  [EXECUTOR] DB error for ${coin}: ${error.message}`);

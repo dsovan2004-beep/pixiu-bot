@@ -109,7 +109,7 @@ async function checkPositions(): Promise<void> {
 
     const priceFetchFailed = source === "none" || currentPrice <= 0;
     const pnlPct =
-      entryPrice > 0
+      entryPrice > 0 && currentPrice > 0
         ? ((currentPrice - entryPrice) / entryPrice) * 100
         : 0;
 
@@ -117,13 +117,15 @@ async function checkPositions(): Promise<void> {
     async function closeTrade(
       finalPnl: number,
       exitReason: string,
-      gridLvl: number
+      gridLvl: number,
+      exitPrice?: number
     ) {
+      const ep = exitPrice ?? currentPrice;
       const pnlUsd = (finalPnl / 100) * posSize;
       await supabase
         .from("paper_trades")
         .update({
-          exit_price: currentPrice,
+          exit_price: ep,
           pnl_pct: finalPnl,
           pnl_usd: pnlUsd,
           status: "closed",
@@ -135,6 +137,18 @@ async function checkPositions(): Promise<void> {
         })
         .eq("id", pos.id);
       await updateBankroll(pnlUsd);
+    }
+
+    // 0. Rug Detection — price=0 means coin is dead, exit immediately
+    if (priceFetchFailed && minutesOpen >= 2) {
+      // Give new positions 2min grace period (DexScreener may not have data yet)
+      const rugPnl = -100; // assume total loss
+      const finalPnl = partialPnl + (rugPnl * remainingPct) / 100;
+      await closeTrade(finalPnl, "circuit_breaker", currentLevel, 0);
+      console.log(
+        `  [GUARD] 🚨 ${coinLabel} price=0 detected — treating as rug, exiting now | PnL: ${finalPnl.toFixed(2)}%`
+      );
+      continue;
     }
 
     // 1. Circuit Breaker — ABSOLUTE FIRST CHECK
