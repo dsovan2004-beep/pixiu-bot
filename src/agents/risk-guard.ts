@@ -1,7 +1,7 @@
 /**
  * PixiuBot Agent 5 — Risk Guard
  *
- * Polls open positions every 15s from paper_trades table.
+ * Polls open positions every 5s from paper_trades table.
  * Manages all exits with priority order:
  *   1. Circuit breaker: -25% emergency exit
  *   2. Whale exit: T1 wallet SELL detected
@@ -13,7 +13,7 @@
 import supabase from "../lib/supabase-server";
 import { TOP_ELITE_ADDRESSES } from "../config/smart-money";
 
-const POSITION_CHECK_MS = 15_000;
+const POSITION_CHECK_MS = 5_000;
 
 const GRID_LEVELS = [
   { level: 1, pct: 15, sellPct: 50 },
@@ -261,7 +261,7 @@ async function checkPositions(): Promise<void> {
 export async function startRiskGuard(): Promise<void> {
   console.log("  [GUARD] Starting risk guard...");
   console.log(
-    `  [GUARD] Exit priority: CB(-${CIRCUIT_BREAKER_PCT}%) > Whale > SL(-${STOP_LOSS_PCT}%) > TO(${TIMEOUT_MINUTES}min) > Grid`
+    `  [GUARD] Exit priority: CB(-${CIRCUIT_BREAKER_PCT}%) > Whale > SL(-${STOP_LOSS_PCT}%) > TO(${TIMEOUT_MINUTES}min) > Grid | Poll: ${POSITION_CHECK_MS / 1000}s`
   );
 
   // Run immediately
