@@ -49,6 +49,62 @@ async function fetchDexScreenerPrice(
   return { price: 0, source: "none" };
 }
 
+const MIN_LIQUIDITY_USD = 10_000;
+
+// ─── Liquidity Check ────────────────────────────────────
+
+async function checkLiquidity(
+  mint: string
+): Promise<{ liquidity: number | null; passed: boolean }> {
+  try {
+    const res = await fetch(
+      `https://api.dexscreener.com/latest/dex/tokens/${mint}`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const liq = data.pairs?.[0]?.liquidity?.usd;
+      if (typeof liq === "number") {
+        return { liquidity: liq, passed: liq >= MIN_LIQUIDITY_USD };
+      }
+    }
+  } catch {}
+  // API failure or null → allow entry (don't block on missing data)
+  return { liquidity: null, passed: true };
+}
+
+// ─── LP Burn & Holder Check via RugCheck ────────────────
+
+async function checkLpAndHolders(
+  mint: string
+): Promise<{ lpSafe: boolean; holdersSafe: boolean; reason: string }> {
+  try {
+    const res = await fetch(
+      `https://api.rugcheck.xyz/v1/tokens/${mint}/report`
+    );
+    if (res.ok) {
+      const data = await res.json();
+
+      // Check LP risks: any risk with 'lp' in name and level 'danger'
+      const risks: Array<{ name: string; level: string }> = data.risks || [];
+      const lpDanger = risks.some(
+        (r) =>
+          r.name?.toLowerCase().includes("lp") && r.level === "danger"
+      );
+
+      // Check top 10 holder concentration
+      const top10Pct: number = data.top10HoldersPercent ?? 0;
+      const holdersConcentrated = top10Pct > 80;
+
+      if (lpDanger) return { lpSafe: false, holdersSafe: !holdersConcentrated, reason: "LP not burned" };
+      if (holdersConcentrated) return { lpSafe: true, holdersSafe: false, reason: `top10 holders ${top10Pct.toFixed(0)}%` };
+
+      return { lpSafe: true, holdersSafe: true, reason: "healthy" };
+    }
+  } catch {}
+  // API failure → allow entry
+  return { lpSafe: true, holdersSafe: true, reason: "api_unavailable" };
+}
+
 export async function startPriceScout(): Promise<void> {
   console.log("  [SCOUT] Starting price scout...");
 
@@ -79,6 +135,40 @@ export async function startPriceScout(): Promise<void> {
       console.log(
         `  [SCOUT] ${coin} price confirmed $${price.toFixed(10)} (source: ${source})`
       );
+
+      // Filter 1: Minimum liquidity check
+      const { liquidity, passed: liqPassed } = await checkLiquidity(
+        entry.coin_address
+      );
+      if (!liqPassed) {
+        console.log(
+          `  [SCOUT] ❌ ${coin} — liquidity too low ($${liquidity?.toLocaleString() ?? "?"}) min $${MIN_LIQUIDITY_USD.toLocaleString()}`
+        );
+        return;
+      }
+      if (liquidity !== null) {
+        console.log(
+          `  [SCOUT] ✅ ${coin} — liquidity $${liquidity.toLocaleString()} confirmed`
+        );
+      }
+
+      // Filter 2: LP burned & holder concentration check
+      const { lpSafe, holdersSafe, reason: rugReason } = await checkLpAndHolders(
+        entry.coin_address
+      );
+      if (!lpSafe) {
+        console.log(`  [SCOUT] ❌ ${coin} — LP not burned (rug risk)`);
+        return;
+      }
+      if (!holdersSafe) {
+        console.log(
+          `  [SCOUT] ❌ ${coin} — top10 holders >80% (developer cluster)`
+        );
+        return;
+      }
+      if (lpSafe && holdersSafe && rugReason !== "api_unavailable") {
+        console.log(`  [SCOUT] ✅ ${coin} — LP burned, holders healthy`);
+      }
 
       confirmedChannel.send({
         type: "broadcast",

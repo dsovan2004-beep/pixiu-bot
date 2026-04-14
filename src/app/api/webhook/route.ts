@@ -32,6 +32,36 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+const MIN_LIQUIDITY_USD = 10_000;
+
+async function checkLiquidity(mint: string): Promise<{ liquidity: number | null; passed: boolean }> {
+  try {
+    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`);
+    if (res.ok) {
+      const data = await res.json();
+      const liq = data.pairs?.[0]?.liquidity?.usd;
+      if (typeof liq === "number") return { liquidity: liq, passed: liq >= MIN_LIQUIDITY_USD };
+    }
+  } catch {}
+  return { liquidity: null, passed: true };
+}
+
+async function checkLpAndHolders(mint: string): Promise<{ lpSafe: boolean; holdersSafe: boolean }> {
+  try {
+    const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`);
+    if (res.ok) {
+      const data = await res.json();
+      const risks: Array<{ name: string; level: string }> = data.risks || [];
+      const lpDanger = risks.some((r) => r.name?.toLowerCase().includes("lp") && r.level === "danger");
+      const top10Pct: number = data.top10HoldersPercent ?? 0;
+      if (lpDanger) return { lpSafe: false, holdersSafe: top10Pct <= 80 };
+      if (top10Pct > 80) return { lpSafe: true, holdersSafe: false };
+      return { lpSafe: true, holdersSafe: true };
+    }
+  } catch {}
+  return { lpSafe: true, holdersSafe: true };
+}
+
 const IGNORE_MINTS = new Set([
   "So11111111111111111111111111111111111111112",
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
@@ -284,6 +314,21 @@ async function evaluateAndEnter(
   if (!price || price <= 0) {
     console.log(`  [SKIP] ${coinName} — could not fetch price, skipping entry`);
     return { entered: false, reason: `price fetch failed (source: ${source})` };
+  }
+
+  // Liquidity check
+  const { liquidity, passed: liqPassed } = await checkLiquidity(mint);
+  if (!liqPassed) {
+    return { entered: false, reason: `liquidity too low ($${liquidity?.toLocaleString() ?? "?"})` };
+  }
+
+  // LP burn & holder check
+  const { lpSafe, holdersSafe } = await checkLpAndHolders(mint);
+  if (!lpSafe) {
+    return { entered: false, reason: "LP not burned (rug risk)" };
+  }
+  if (!holdersSafe) {
+    return { entered: false, reason: "top10 holders >80% (developer cluster)" };
   }
 
   // Get bankroll for position sizing
