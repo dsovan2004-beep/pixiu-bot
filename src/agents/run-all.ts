@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   console.log("  Agent 2: Signal Validator — pixiubot:signals → pixiubot:entries");
   console.log("  Agent 3: Price Scout      — pixiubot:entries → pixiubot:confirmed");
   console.log("  Agent 4: Trade Executor   — pixiubot:confirmed → paper_trades");
-  console.log("  Agent 5: Risk Guard       — paper_trades polling (15s)");
+  console.log("  Agent 5: Risk Guard       — paper_trades polling (5s)");
   console.log("  Bus:     Supabase Realtime broadcast channels");
   console.log("  Mode:    PAPER ONLY — parallel with Sprint 2");
   console.log(`  Started: ${new Date().toISOString()}`);
