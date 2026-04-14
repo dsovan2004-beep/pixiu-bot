@@ -139,7 +139,23 @@ async function checkPositions(): Promise<void> {
       await updateBankroll(pnlUsd);
     }
 
-    // 0. Rug Detection — price=0 means coin is dead, exit immediately
+    // 0a. Minimum hold time — skip all checks except CB if trade is < 30s old
+    // Prevents immediate exits from stale signals or price echo
+    const MIN_HOLD_SECONDS = 30;
+    const secondsOpen = minutesOpen * 60;
+    if (secondsOpen < MIN_HOLD_SECONDS) {
+      // Only allow circuit breaker through during hold period
+      if (!priceFetchFailed && pnlPct <= -CIRCUIT_BREAKER_PCT) {
+        const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
+        await closeTrade(finalPnl, "circuit_breaker", currentLevel);
+        console.log(
+          `  [GUARD] 🚨 ${coinLabel} crashed ${pnlPct.toFixed(1)}% during hold period — emergency exit`
+        );
+      }
+      continue;
+    }
+
+    // 0b. Rug Detection — price=0 means coin is dead, exit immediately
     if (priceFetchFailed && minutesOpen >= 2) {
       // Give new positions 2min grace period (DexScreener may not have data yet)
       const rugPnl = -100; // assume total loss
@@ -161,6 +177,14 @@ async function checkPositions(): Promise<void> {
       await closeTrade(finalPnl, "circuit_breaker", currentLevel);
       console.log(
         `  [GUARD] 🚨 ${coinLabel} crashed ${pnlPct.toFixed(1)}% — emergency exit | PnL: ${finalPnl.toFixed(2)}%`
+      );
+      continue;
+    }
+
+    // 1b. Skip non-timeout exits if pnlPct is exactly 0% (price echo / stale data)
+    if (pnlPct === 0 && !priceFetchFailed && minutesOpen < TIMEOUT_MINUTES) {
+      console.log(
+        `  [GUARD] ${coinLabel} pnlPct=0.0% (price echo) — skipping exit checks, waiting for real price movement`
       );
       continue;
     }
