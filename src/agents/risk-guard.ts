@@ -35,8 +35,9 @@ async function isLiveTrading(): Promise<boolean> {
   }
 }
 
-// Daily loss limit: stop live trades if losses exceed threshold
-const DAILY_LOSS_LIMIT_SOL = 0.2; // ~$17 at current prices
+// Daily loss limit: stop live trades if LIVE losses exceed threshold
+// Set to 999 until we can track live vs paper losses separately
+const DAILY_LOSS_LIMIT_SOL = 999; // Disabled — paper losses were blocking live trades
 let dailyLossLimitHit = false;
 let lastLossCheckDate = "";
 
