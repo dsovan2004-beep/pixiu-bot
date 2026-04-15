@@ -35,9 +35,8 @@ async function isLiveTrading(): Promise<boolean> {
   }
 }
 
-// Daily loss limit: stop live trades if LIVE losses exceed threshold
-// Set to 999 until we can track live vs paper losses separately
-const DAILY_LOSS_LIMIT_SOL = 999; // Disabled — paper losses were blocking live trades
+// Daily loss limit: stop live trades if LIVE-ONLY losses exceed threshold
+const DAILY_LOSS_LIMIT_SOL = 0.2; // ~$17 — only counts trades tagged [LIVE]
 let dailyLossLimitHit = false;
 let lastLossCheckDate = "";
 
@@ -55,14 +54,15 @@ async function checkDailyLossLimit(): Promise<void> {
 
   if (dailyLossLimitHit) return;
 
-  // Query today's closed trades with negative PnL
+  // Query today's closed LIVE trades with negative PnL (tagged with [LIVE])
   const todayStart = `${todayUTC}T00:00:00Z`;
   const { data: losses } = await supabase
     .from("paper_trades")
     .select("pnl_usd")
     .eq("status", "closed")
     .gte("exit_time", todayStart)
-    .lt("pnl_usd", 0);
+    .lt("pnl_usd", 0)
+    .like("wallet_tag", "%[LIVE]%");
 
   if (!losses || losses.length === 0) return;
 

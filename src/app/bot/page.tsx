@@ -61,6 +61,7 @@ export default function BotPage() {
   } | null>(null);
   const [liveTrading, setLiveTrading] = useState(false);
   const [togglingLive, setTogglingLive] = useState(false);
+  const [phantomBalance, setPhantomBalance] = useState<{ sol: number; usd: number } | null>(null);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [whaleSells, setWhaleSells] = useState<
     Record<string, Array<{ wallet_tag: string; signal_time: string }>>
@@ -165,6 +166,19 @@ export default function BotPage() {
       setWhaleSells(sellMap);
     }
 
+    // Fetch Phantom wallet balance when live trading
+    if (stateRes.data?.[0]?.mode === "live") {
+      try {
+        const balRes = await fetch("/api/phantom-balance");
+        if (balRes.ok) {
+          const bal = await balRes.json();
+          setPhantomBalance(bal);
+        }
+      } catch {}
+    } else {
+      setPhantomBalance(null);
+    }
+
     setLastFetch(new Date());
     setLoading(false);
   }, []);
@@ -235,6 +249,24 @@ export default function BotPage() {
           <h1 className="text-2xl font-bold text-amber-500">PixiuBot</h1>
           <span className="text-xs text-zinc-600">Sprint 3 — Paper Trading</span>
         </div>
+
+        {/* Phantom Wallet Balance (live mode only) */}
+        {liveTrading && phantomBalance && (
+          <div className="bg-red-900/30 border border-red-600 rounded-lg p-4 flex items-center justify-between">
+            <div>
+              <span className="text-red-400 font-bold text-sm font-mono">LIVE TRADING ACTIVE</span>
+              <span className="text-zinc-500 text-xs ml-2">0.05 SOL/trade</span>
+            </div>
+            <div className="text-right">
+              <span className="text-white font-bold font-mono text-lg">
+                {phantomBalance.sol.toFixed(4)} SOL
+              </span>
+              <span className="text-zinc-400 text-sm ml-2">
+                (${phantomBalance.usd.toFixed(2)})
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Bankroll */}
         {bankroll && (
