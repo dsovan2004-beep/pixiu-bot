@@ -2,15 +2,17 @@
  * PixiuBot — Jupiter Swap Integration
  *
  * Real on-chain swaps via Jupiter V6 aggregator.
- * Uses Helius RPC for transaction submission.
+ * Supports both mainnet (Helius RPC) and devnet.
  *
  * LIVE_TRADING must be true in .env.local to execute.
  * PHANTOM_PRIVATE_KEY must be set (base58 encoded).
+ * SOLANA_NETWORK = 'devnet' | 'mainnet-beta' (default: mainnet-beta)
  */
 
 import {
   Connection,
   Keypair,
+  LAMPORTS_PER_SOL,
   PublicKey,
   VersionedTransaction,
 } from "@solana/web3.js";
@@ -21,12 +23,39 @@ const JUPITER_QUOTE_URL = "https://quote-api.jup.ag/v6/quote";
 const JUPITER_SWAP_URL = "https://quote-api.jup.ag/v6/swap";
 const SLIPPAGE_BPS = 200; // 2% slippage
 
+function isDevnet(): boolean {
+  return process.env.SOLANA_NETWORK === "devnet";
+}
+
 function getConnection(): Connection {
+  if (isDevnet()) {
+    return new Connection("https://api.devnet.solana.com", "confirmed");
+  }
   const heliusKey = process.env.HELIUS_API_KEY || "";
   return new Connection(
     `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`,
     "confirmed"
   );
+}
+
+/**
+ * Airdrop free SOL on devnet for testing.
+ */
+export async function airdropDevnet(amountSol: number): Promise<void> {
+  if (!isDevnet()) {
+    console.error("  [JUPITER] Airdrop only available on devnet");
+    return;
+  }
+  const keypair = getKeypair();
+  if (!keypair) return;
+
+  const connection = getConnection();
+  const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
+
+  console.log(`  [JUPITER] Requesting airdrop of ${amountSol} SOL on devnet...`);
+  const sig = await connection.requestAirdrop(keypair.publicKey, lamports);
+  await connection.confirmTransaction(sig, "confirmed");
+  console.log(`  [JUPITER] Airdrop ${amountSol} SOL on devnet ✅ (${sig})`);
 }
 
 function getKeypair(): Keypair | null {
@@ -54,11 +83,13 @@ export async function buyToken(
   amountSol: number
 ): Promise<string | null> {
   try {
+    const network = isDevnet() ? "DEVNET" : "MAINNET";
     const keypair = getKeypair();
     if (!keypair) return null;
 
     const amountLamports = Math.floor(amountSol * 1e9);
     const walletPubkey = keypair.publicKey.toBase58();
+    console.log(`  [JUPITER] BUY on ${network}: ${coinAddress.slice(0, 8)}... for ${amountSol} SOL`);
 
     // 1. Get quote
     const quoteUrl = `${JUPITER_QUOTE_URL}?inputMint=${SOL_MINT}&outputMint=${coinAddress}&amount=${amountLamports}&slippageBps=${SLIPPAGE_BPS}`;
