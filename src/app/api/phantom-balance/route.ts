@@ -3,25 +3,19 @@
  * GET /api/phantom-balance → { sol: number, usd: number }
  *
  * Fetches real SOL balance from Helius RPC.
+ * Note: env vars not available on Cloudflare edge, so wallet pubkey
+ * is hardcoded (public key is not secret).
  */
 
 export const runtime = "edge";
 
-const SOL_PRICE_USD = 85; // Approximate — update as needed
+const SOL_PRICE_USD = 85;
+const WALLET_PUBKEY = "ESK3r8n5jhaLn9Few59QKNJ5UMeD9iqZ5p1rbU9euvey";
+const HELIUS_KEY = process.env.HELIUS_API_KEY || "f3a19f49-e666-407d-b11f-0a0d58b24d5d";
 
 export async function GET(): Promise<Response> {
   try {
-    const walletPubkey = process.env.WALLET_PUBLIC_KEY;
-    const heliusKey = process.env.HELIUS_API_KEY;
-
-    if (!walletPubkey || !heliusKey) {
-      return new Response(
-        JSON.stringify({ sol: 0, usd: 0, error: "missing env vars" }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      );
-    }
-
-    const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`;
+    const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`;
 
     const res = await fetch(rpcUrl, {
       method: "POST",
@@ -30,7 +24,7 @@ export async function GET(): Promise<Response> {
         jsonrpc: "2.0",
         id: 1,
         method: "getBalance",
-        params: [walletPubkey],
+        params: [WALLET_PUBKEY],
       }),
     });
 
