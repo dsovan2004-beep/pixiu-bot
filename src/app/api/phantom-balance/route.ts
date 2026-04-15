@@ -7,10 +7,21 @@
 
 export const runtime = "edge";
 
-const SOL_PRICE_USD = 85;
 const WALLET_PUBKEY = "ESK3r8n5jhaLn9Few59QKNJ5UMeD9iqZ5p1rbU9euvey";
 const HELIUS_KEY = process.env.HELIUS_API_KEY || "f3a19f49-e666-407d-b11f-0a0d58b24d5d";
 const STARTING_SOL = 3.6705; // Balance before first live trade
+
+async function getSolPrice(): Promise<number> {
+  try {
+    const res = await fetch("https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112");
+    if (res.ok) {
+      const data = await res.json();
+      const price = Number(data.data?.["So11111111111111111111111111111111111111112"]?.price);
+      if (price > 0) return price;
+    }
+  } catch {}
+  return 85; // fallback
+}
 
 const HEADERS = {
   "Content-Type": "application/json",
@@ -39,12 +50,12 @@ export async function GET(): Promise<Response> {
       );
     }
 
-    const data = await res.json();
+    const [data, solPrice] = await Promise.all([res.json(), getSolPrice()]);
     const lamports = data.result?.value ?? 0;
     const sol = lamports / 1e9;
-    const usd = sol * SOL_PRICE_USD;
+    const usd = sol * solPrice;
     const pnlSol = sol - STARTING_SOL;
-    const pnlUsd = pnlSol * SOL_PRICE_USD;
+    const pnlUsd = pnlSol * solPrice;
 
     return new Response(
       JSON.stringify({
