@@ -16,8 +16,7 @@ const POSITION_SIZE_USD = 100;
 const LIVE_BUY_SOL = 0.05; // Amount of SOL per live trade
 
 async function isLiveTrading(): Promise<boolean> {
-  // Check DB setting first (dashboard toggle)
-  // SAFETY: default to false (paper) on ANY failure — never accidentally go live
+  // Check DB first, then env var fallback
   try {
     const { data, error } = await supabase
       .from("bot_state")
@@ -25,13 +24,16 @@ async function isLiveTrading(): Promise<boolean> {
       .limit(1)
       .single();
     if (error || !data) {
-      console.error("  [EXECUTOR] ⚠️ Failed to read bot_state — defaulting to PAPER");
-      return false;
+      console.error("  [EXECUTOR] ⚠️ Failed to read bot_state");
+      // Fallback to env var
+      return process.env.LIVE_TRADING === "true";
     }
-    return data.mode === "live";
+    const dbLive = data.mode === "live";
+    const envLive = process.env.LIVE_TRADING === "true";
+    return dbLive || envLive;
   } catch {
-    console.error("  [EXECUTOR] ⚠️ bot_state query crashed — defaulting to PAPER");
-    return false;
+    console.error("  [EXECUTOR] ⚠️ bot_state query crashed");
+    return process.env.LIVE_TRADING === "true";
   }
 }
 
@@ -126,10 +128,14 @@ export async function startTradeExecutor(): Promise<void> {
         `  [EXECUTOR] Opened ${coin} @ $${entry.price.toFixed(10)} | $${POSITION_SIZE_USD} paper position [${entry.price_source}]`
       );
 
-      // Jupiter live swap (if enabled via dashboard)
+      // Jupiter live swap (if enabled via dashboard or env)
+      console.log(`  [EXECUTOR] Checking live mode...`);
       const live = await isLiveTrading();
+      console.log(`  [EXECUTOR] Live mode: ${live}`);
       if (live) {
+        console.log(`  [EXECUTOR] Attempting LIVE BUY for ${coin} (${entry.coin_address.slice(0, 8)}...) at ${LIVE_BUY_SOL} SOL`);
         const sig = await buyToken(entry.coin_address, LIVE_BUY_SOL);
+        console.log(`  [EXECUTOR] buyToken result: ${sig || "null"}`);
         if (sig) {
           console.log(`  [EXECUTOR] 🔴 LIVE BUY executed: ${sig}`);
           // Mark this trade as live in DB
@@ -141,6 +147,8 @@ export async function startTradeExecutor(): Promise<void> {
         } else {
           console.log(`  [EXECUTOR] ⚠️ LIVE BUY failed for ${coin} — paper trade still open`);
         }
+      } else {
+        console.log(`  [EXECUTOR] Paper only — live mode OFF`);
       }
     })
     .subscribe();
