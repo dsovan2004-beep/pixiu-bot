@@ -1,46 +1,39 @@
 # PixiuBot
 
-Autonomous Solana memecoin trading bot. Copies Smart Money wallet trades with a 6-agent swarm architecture, 10-layer entry filter pipeline, Jupiter V6 live swaps, and automated risk management.
+Autonomous Solana memecoin trading bot. Copies Smart Money wallet trades with a 6-agent swarm architecture, 9-layer entry filter pipeline, Jupiter V1 live swaps, and automated risk management.
+
+**Now trading LIVE with real SOL.**
 
 ## Current Status
 
 | Sprint | Status | Summary |
 |--------|--------|---------|
 | Sprint 1-2 | COMPLETE | Webhook + paper trader monolith |
-| Sprint 3 | COMPLETE | 6-agent swarm, 114 trades, 58.8% WR, $12,195 (+21.95%) |
-| Sprint 4 | COMPLETE | Jupiter live swaps, dashboard toggle, safety audit passed |
-| Sprint 5 | READY TO LAUNCH | Fund wallet + flip toggle |
-| Recovery Goal | $3,325 — REACHED | $3,415 gross wins from $10K start |
+| Sprint 3 | COMPLETE | 6-agent swarm, 131 trades, 56.5% WR, $11,325 (+13.26%) |
+| Sprint 4 | COMPLETE | Jupiter live swaps, dashboard toggle, safety audit |
+| Sprint 5 | **LIVE** | Real SOL trading, 4/5 wins (80% WR), +0.0224 SOL profit |
+| Recovery Goal | $3,325 — REACHED | $3,971 gross wins from $10K paper start |
 
 ## Architecture
 
-6-agent swarm connected via Supabase Realtime broadcast channels:
+Hybrid architecture: webhook handles entries (proven path), swarm handles live buys + exits.
 
 ```
-Helius Webhook → coin_signals table
-                      |
-              Agent 1: Wallet Watcher
-              coin_signals INSERT → pixiubot:signals
-              748 wallets tracked (11 T1 + 698 T2)
-                      |
-              Agent 2: Signal Validator
-              pixiubot:signals → pixiubot:entries
-              10-layer filter pipeline
-                      |
-              Agent 3: Price Scout
-              pixiubot:entries → pixiubot:confirmed
-              Price + liquidity + LP burn + holder checks
-                      |
-              Agent 4: Trade Executor
-              pixiubot:confirmed → paper_trades + Jupiter buy
-              In-memory dedup lock + 60s DB guard
-                      |
-              Agent 5: Risk Guard
-              paper_trades polling every 5s + Jupiter sell
-              CB > Whale > SL > Timeout > Grid exits
-                      |
-              Agent 6: Tier Manager
-              paper_trades changes → auto-demote/promote T1/T2
+Helius Webhook → coin_signals table → evaluateAndEnter() → paper_trades
+                                                                |
+                                              Agent 4: Trade Executor
+                                              Polls paper_trades every 3s
+                                              New trade found → Jupiter buy → [LIVE] tag
+                                                                |
+                                              Agent 5: Risk Guard
+                                              Polls positions every 5s
+                                              CB > Whale > SL > TO > Grid → Jupiter sell
+                                                                |
+                                              Agent 1: Wallet Watcher
+                                              Polls coin_signals every 3s (backup)
+                                                                |
+                                              Agent 6: Tier Manager
+                                              Auto-demote/promote T1/T2 wallets
 ```
 
 ## T1 Smart Money Wallets (11)
@@ -59,22 +52,23 @@ Helius Webhook → coin_signals table
 | LUKEY | DjM7Tu...uN7s | Kolscan #28 94% WR |
 | Cupsey | 2fg5QD...rx6f | GMGN.ai #3 56% WR |
 
-Demoted: Scharo (T1 → T2). Tier Manager auto-demotes at WR < 50% on 3+ trades in 24h, auto-promotes at WR > 65% on 5+ trades in 7d.
+Demoted: Scharo (T1 to T2). Tier Manager auto-demotes at WR < 50% on 3+ trades in 24h, auto-promotes at WR > 65% on 5+ trades in 7d.
 
-## 10-Layer Entry Filter Pipeline
+## 9-Layer Entry Filter Pipeline
+
+T1 solo buy = enter (no confirmer required since Sprint 5).
 
 | Layer | Filter | Location |
 |-------|--------|----------|
-| 1 | T1 Smart Money wallet required | Signal Validator |
-| 2 | Confirming wallet required (any tier) | Signal Validator |
-| 3 | Bundle detection (>80% from 1 wallet = skip) | Signal Validator |
-| 4 | 2-min rug hold filter (buy+sell within 2min = skip) | Signal Validator |
-| 5 | Stablecoin name filter (usd, dai, stable, etc.) | Signal Validator |
-| 6 | Name-based cooldown 120min (same name, any address) | Signal Validator |
-| 7 | Address-based cooldown 120min (same contract) | Signal Validator |
-| 8 | Price fetch > 0 (Jupiter then DexScreener) | Price Scout |
-| 9 | Liquidity > $10,000 USD (DexScreener) | Price Scout |
-| 10 | LP burned + top10 holders < 80% (RugCheck) | Price Scout |
+| 1 | T1 Smart Money wallet required | Webhook + Validator |
+| 2 | Rug storm detection (3/5 losses in 2h = pause 30min) | Entry Guards |
+| 3 | Stablecoin name filter (usd, dai, stable, etc.) | Webhook + Validator |
+| 4 | Address-based cooldown 120min | Webhook + Validator |
+| 5 | Name-based cooldown 120min (blocks same-name scams) | Webhook + Validator |
+| 6 | Bundle detection (>80% from 1 wallet = skip) | Webhook + Validator |
+| 7 | 2-min rug hold filter (buy+sell within 2min = skip) | Webhook + Validator |
+| 8 | Price fetch > 0 (Jupiter then DexScreener) | Webhook |
+| 9 | Liquidity > $10,000 USD + LP burned + top10 holders < 80% | Webhook |
 
 ## Exit Priority
 
@@ -94,53 +88,53 @@ Risk Guard checks open positions every 5 seconds:
     L3: +100% → sell 25% (fully closed)
 ```
 
-## Sprint 4 Features
+## Sprint 5 Live Trading Results (April 15, 2026)
 
-- **Jupiter V6 swap integration** — real buy/sell via Jupiter aggregator
-- **TX confirmation** — every swap confirmed on-chain before returning
-- **Token balance fetch** — sellToken() queries real on-chain balance before selling
-- **Daily loss limit** — 0.2 SOL ($17) cap, stops all live trades when hit
-- **Dashboard toggle** — PAPER ONLY / LIVE TRADING button at pixiu-bot.pages.dev/bot
-- **Safe defaults** — isLiveTrading() returns false on any DB failure
-- **Per-position live check** — re-reads mode before each sell (no stale state)
+| Trade | Coin | PnL | Result |
+|-------|------|-----|--------|
+| 1 | dawg | -13.83% | SL (stop loss) |
+| 2 | Shit And Piss 500 | +42.50% | TP L3 (take profit) |
+| 3 | #dog | +50.69% | L2 grid exit |
+| 4 | illustrator | +24.49% | L1 grid exit |
+| 5 | Yes chad | +42.50% | TP L3 (take profit) |
 
-## Sprint 4 Performance (April 14-15, 2026)
+**Live WR: 80% (4/5) | SOL P&L: +0.0224 SOL (+$1.90)**
 
-| Metric | Value |
-|--------|-------|
-| Starting bankroll | $10,000 |
-| Current bankroll | $12,195 (+21.95%) |
-| Win rate | 58.8% |
-| Avg gain | +46.93% |
-| Avg loss | -24.30% |
-| Total trades | 114 |
-| Recovery goal | $3,325 — REACHED |
+## Live Trading Configuration
 
-## Sprint 5 Launch Steps
+| Setting | Value |
+|---------|-------|
+| Position size | 0.05 SOL (~$4.25/trade) |
+| Slippage | 500 bps (5%) for pump.fun tokens |
+| Daily loss limit | 0.2 SOL (LIVE trades only) |
+| Wallet | ESK3r8n5jhaLn9Few59QKNJ5UMeD9iqZ5p1rbU9euvey |
+| Starting balance | 3.6705 SOL |
+| Jupiter API | api.jup.ag/swap/v1 (quote + swap) |
+| RPC | Helius mainnet |
+| TX confirmation | Non-blocking async |
 
-1. Fund Phantom wallet with $500 SOL to `ESK3r8n5jhaLn9Few59QKNJ5UMeD9iqZ5p1rbU9euvey`
-2. Go to `https://pixiu-bot.pages.dev/bot`
-3. Tap **PAPER ONLY** → **LIVE TRADING**
-4. Monitor first 50 trades at 0.05 SOL/trade (~$4.25 each)
-5. Daily loss limit auto-stops at 0.2 SOL ($17)
+## Key Bugs Fixed During Live Transition
 
-## Remaining Backlog
-
-- Cloudflare Workers migration (24/7 uptime, no caffeinate)
-- WebSocket price streaming (instant rug detection vs 5s polling)
-- Telegram alerts (trade notifications)
-- Grid partial live sells (currently only full close sells live)
-- SOL price oracle for daily loss limit (currently hardcoded $85)
+1. Jupiter V6 API dead → updated to V1 (api.jup.ag/swap/v1)
+2. Webhook bypassing swarm → restored webhook entry path (proven)
+3. Supabase Realtime silently dropping → replaced with 3s polling
+4. Rug storm deadlock → 2-hour window instead of all-time
+5. Daily loss limit counting paper losses → LIVE-only filter
+6. Sell slippage too low (2%) → increased to 5% for pump.fun
+7. TX confirmation blocking 30s → non-blocking async
+8. Phantom balance API failing on CF edge → DexScreener SOL price
+9. T1 solo buy blocked → removed confirmer requirement
 
 ## Tech Stack
 
 - **Runtime**: Node.js + TypeScript (tsx)
 - **Framework**: Next.js 16 (Cloudflare Pages)
-- **Database**: Supabase (PostgreSQL + Realtime)
+- **Database**: Supabase (PostgreSQL)
 - **Blockchain**: Helius enhanced webhooks (Solana)
-- **Swaps**: Jupiter V6 aggregator + Helius RPC
+- **Swaps**: Jupiter V1 aggregator + Helius RPC
 - **Price feeds**: Jupiter Price API, DexScreener REST API
 - **Rug detection**: RugCheck API
+- **SOL price**: DexScreener (CoinGecko/Jupiter fail on CF edge)
 - **Dashboard**: React + Tailwind CSS at /bot
 - **Wallet**: Solana Keypair (bs58, @solana/web3.js)
 
@@ -152,4 +146,6 @@ cd ~/PixiuBot && caffeinate -i npx tsx src/agents/run-all.ts
 
 ## Dashboard
 
-Live at `https://pixiu-bot.pages.dev/bot` — bankroll, win rate, open positions with live PnL, whale status, grid progress, timeout countdown, signal feed, and LIVE TRADING toggle.
+Live at `https://pixiu-bot.pages.dev/bot`
+
+Shows: SOL balance, real P&L, live/paper mode toggle, trade history, open positions with live PnL, whale status, grid progress, timeout countdown, signal feed.
