@@ -1,157 +1,97 @@
 /**
- * PixiuBot Agent 4 — Trade Executor
+ * PixiuBot Agent 4 — Trade Executor (Live Buy)
  *
- * Subscribes to pixiubot:confirmed channel.
- * Opens paper positions in Supabase paper_trades table.
- * Position size: $100 paper.
- *
- * Sprint 4: Jupiter live swap integration (LIVE_TRADING toggle).
+ * Polls paper_trades every 3s for new open positions.
+ * If live mode ON → fires Jupiter buy → tags [LIVE].
+ * Webhook handles all entry logic (evaluateAndEnter).
+ * This agent ONLY handles the live Jupiter buy layer.
  */
 
 import supabase from "../lib/supabase-server";
 import { buyToken } from "../lib/jupiter-swap";
-import { isRugStorm } from "../lib/entry-guards";
 
-const POSITION_SIZE_USD = 100;
-const LIVE_BUY_SOL = 0.05; // Amount of SOL per live trade
+const POLL_MS = 3_000;
+const LIVE_BUY_SOL = 0.05;
 
 async function isLiveTrading(): Promise<boolean> {
-  // Check DB first, then env var fallback
   try {
     const { data, error } = await supabase
       .from("bot_state")
       .select("mode")
       .limit(1)
       .single();
-    if (error || !data) {
-      console.error("  [EXECUTOR] ⚠️ Failed to read bot_state");
-      // Fallback to env var
-      return process.env.LIVE_TRADING === "true";
-    }
+    if (error || !data) return false;
     const dbLive = data.mode === "live";
     const envLive = process.env.LIVE_TRADING === "true";
     return dbLive || envLive;
   } catch {
-    console.error("  [EXECUTOR] ⚠️ bot_state query crashed");
-    return process.env.LIVE_TRADING === "true";
+    return false;
   }
 }
 
-// In-memory dedup: track coins being inserted to prevent race condition duplicates
-const pendingInserts = new Set<string>();
-
-interface ConfirmedEntry {
-  coin_address: string;
-  coin_name: string;
-  wallet_label: string;
-  smart_money_count: number;
-  price: number;
-  price_source: string;
-}
+// Track which trades we've already tried to buy
+const processedTrades = new Set<string>();
 
 export async function startTradeExecutor(): Promise<void> {
   const startLive = await isLiveTrading();
   console.log(`  [EXECUTOR] Starting trade executor... (LIVE: ${startLive ? "🔴 ON" : "⚪ OFF"} — dashboard controlled)`);
 
-  // Subscribe to pixiubot:confirmed channel
-  const confirmedChannel = supabase.channel("pixiubot:confirmed");
-
-  confirmedChannel
-    .on("broadcast", { event: "confirmed_entry" }, async ({ payload }) => {
-      const entry = payload as ConfirmedEntry;
-      const coin =
-        entry.coin_name || entry.coin_address.slice(0, 8) + "...";
-
-      // In-memory dedup: if another event for this coin is already being processed, skip
-      if (pendingInserts.has(entry.coin_address)) {
-        console.log(`  [EXECUTOR] ❌ ${coin} — duplicate entry in progress, skipping`);
-        return;
-      }
-      pendingInserts.add(entry.coin_address);
-
-      // Double-check no open position (race condition guard)
-      const { count: openCount } = await supabase
-        .from("paper_trades")
-        .select("id", { count: "exact", head: true })
-        .eq("coin_address", entry.coin_address)
-        .eq("status", "open");
-
-      if ((openCount || 0) > 0) {
-        pendingInserts.delete(entry.coin_address);
-        console.log(`  [EXECUTOR] ❌ ${coin} — duplicate entry blocked (already open)`);
-        return;
-      }
-
-      // Also check for any trade opened in the last 60s on same address (catches recently inserted dupes)
-      const recentCutoff = new Date(Date.now() - 60_000).toISOString();
-      const { count: recentOpenCount } = await supabase
-        .from("paper_trades")
-        .select("id", { count: "exact", head: true })
-        .eq("coin_address", entry.coin_address)
-        .gte("entry_time", recentCutoff);
-
-      if ((recentOpenCount || 0) > 0) {
-        pendingInserts.delete(entry.coin_address);
-        console.log(`  [EXECUTOR] ❌ ${coin} — duplicate entry blocked (opened in last 60s)`);
-        return;
-      }
-
-      // Entry guard — block new entries during rug storms
-      if (await isRugStorm()) {
-        pendingInserts.delete(entry.coin_address);
-        console.log(`  [EXECUTOR] 🛑 ${coin} blocked — rug storm active`);
-        return;
-      }
-
-      const { error } = await supabase.from("paper_trades").insert({
-        coin_address: entry.coin_address,
-        coin_name: entry.coin_name,
-        wallet_tag: entry.wallet_label,
-        entry_price: entry.price,
-        entry_mc: null,
-        status: "open",
-        priority: entry.smart_money_count >= 2 ? "HIGH" : "normal",
-        entry_time: new Date().toISOString(),
-        position_size_usd: POSITION_SIZE_USD,
-      });
-
-      // Hold the lock for 60s after insert — scout can take variable time
-      setTimeout(() => pendingInserts.delete(entry.coin_address), 60_000);
-
-      if (error) {
-        pendingInserts.delete(entry.coin_address); // release immediately on error so retries work
-        console.error(`  [EXECUTOR] DB error for ${coin}: ${error.message}`);
-        return;
-      }
-
-      console.log(
-        `  [EXECUTOR] Opened ${coin} @ $${entry.price.toFixed(10)} | $${POSITION_SIZE_USD} paper position [${entry.price_source}]`
-      );
-
-      // Jupiter live swap (if enabled via dashboard or env)
-      console.log(`  [EXECUTOR] Checking live mode...`);
+  // Poll for new open positions every 3s
+  setInterval(async () => {
+    try {
       const live = await isLiveTrading();
-      console.log(`  [EXECUTOR] Live mode: ${live}`);
-      if (live) {
-        console.log(`  [EXECUTOR] Attempting LIVE BUY for ${coin} (${entry.coin_address.slice(0, 8)}...) at ${LIVE_BUY_SOL} SOL`);
-        const sig = await buyToken(entry.coin_address, LIVE_BUY_SOL);
-        console.log(`  [EXECUTOR] buyToken result: ${sig || "null"}`);
+      if (!live) return;
+
+      // Find open positions NOT yet tagged [LIVE] and not already processed
+      const { data: newTrades } = await supabase
+        .from("paper_trades")
+        .select("id, coin_address, coin_name, wallet_tag")
+        .eq("status", "open")
+        .not("wallet_tag", "like", "%[LIVE]%");
+
+      if (!newTrades || newTrades.length === 0) return;
+
+      for (const trade of newTrades) {
+        // Skip if we already tried this one
+        if (processedTrades.has(trade.id)) continue;
+        processedTrades.add(trade.id);
+
+        const coin = trade.coin_name || trade.coin_address.slice(0, 8) + "...";
+        console.log(`  [EXECUTOR] New trade detected: ${coin} — attempting LIVE BUY...`);
+
+        // Check daily loss limit
+        const todayStart = `${new Date().toISOString().slice(0, 10)}T00:00:00Z`;
+        const { data: losses } = await supabase
+          .from("paper_trades")
+          .select("pnl_usd")
+          .eq("status", "closed")
+          .gte("exit_time", todayStart)
+          .lt("pnl_usd", 0)
+          .like("wallet_tag", "%[LIVE]%");
+        const totalLossUsd = (losses || []).reduce((s, t) => s + Math.abs(Number(t.pnl_usd || 0)), 0);
+        const totalLossSol = totalLossUsd / 85;
+
+        if (totalLossSol >= 0.2) {
+          console.log(`  [EXECUTOR] 🛑 LIVE BUY skipped — daily loss limit hit (${totalLossSol.toFixed(3)} SOL)`);
+          continue;
+        }
+
+        const sig = await buyToken(trade.coin_address, LIVE_BUY_SOL);
         if (sig) {
           console.log(`  [EXECUTOR] 🔴 LIVE BUY executed: ${sig}`);
-          // Mark this trade as live in DB
+          // Tag as [LIVE]
           await supabase
             .from("paper_trades")
-            .update({ wallet_tag: `${entry.wallet_label} [LIVE]` })
-            .eq("coin_address", entry.coin_address)
-            .eq("status", "open");
+            .update({ wallet_tag: `${trade.wallet_tag} [LIVE]` })
+            .eq("id", trade.id);
         } else {
           console.log(`  [EXECUTOR] ⚠️ LIVE BUY failed for ${coin} — paper trade still open`);
         }
-      } else {
-        console.log(`  [EXECUTOR] Paper only — live mode OFF`);
       }
-    })
-    .subscribe();
+    } catch (err: any) {
+      console.error("  [EXECUTOR] Poll error:", err.message);
+    }
+  }, POLL_MS);
 
-  console.log("  [EXECUTOR] Listening on pixiubot:confirmed channel");
+  console.log("  [EXECUTOR] Polling for new trades every 3s");
 }
