@@ -127,17 +127,21 @@ export async function buyToken(
       maxRetries: 3,
     });
 
-    // Confirm transaction landed on-chain
-    console.log(`  [JUPITER] BUY sent: ${signature} — confirming...`);
-    const confirmation = await connection.confirmTransaction(signature, "confirmed");
-    if (confirmation.value.err) {
-      console.error(`  [JUPITER] BUY tx failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
-      return null;
-    }
-
     console.log(
-      `  [JUPITER] BUY confirmed: ${coinAddress.slice(0, 8)}... ${amountSol} SOL → ${signature}`
+      `  [JUPITER] BUY sent: ${coinAddress.slice(0, 8)}... ${amountSol} SOL → ${signature}`
     );
+
+    // Non-blocking confirmation — don't wait 30s, just log result async
+    connection.confirmTransaction(signature, "confirmed").then((conf) => {
+      if (conf.value.err) {
+        console.error(`  [JUPITER] BUY tx FAILED on-chain: ${signature} — ${JSON.stringify(conf.value.err)}`);
+      } else {
+        console.log(`  [JUPITER] BUY confirmed on-chain: ${signature}`);
+      }
+    }).catch(() => {
+      console.error(`  [JUPITER] BUY confirmation timeout: ${signature} — check manually`);
+    });
+
     return signature;
   } catch (err: any) {
     console.error(`  [JUPITER] BUY failed: ${err.message}`);
@@ -237,17 +241,21 @@ export async function sellToken(
       maxRetries: 3,
     });
 
-    // Confirm transaction landed on-chain
-    console.log(`  [JUPITER] SELL sent: ${signature} — confirming...`);
-    const confirmation = await connection.confirmTransaction(signature, "confirmed");
-    if (confirmation.value.err) {
-      console.error(`  [JUPITER] SELL tx failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
-      return null;
-    }
-
     console.log(
-      `  [JUPITER] SELL confirmed: ${coinAddress.slice(0, 8)}... ${tokenAmount} → ${signature}`
+      `  [JUPITER] SELL sent: ${coinAddress.slice(0, 8)}... ${tokenAmount} → ${signature}`
     );
+
+    // Non-blocking confirmation — don't block the risk guard for 30s
+    connection.confirmTransaction(signature, "confirmed").then((conf) => {
+      if (conf.value.err) {
+        console.error(`  [JUPITER] SELL tx FAILED on-chain: ${signature} — ${JSON.stringify(conf.value.err)}`);
+      } else {
+        console.log(`  [JUPITER] SELL confirmed on-chain: ${signature}`);
+      }
+    }).catch(() => {
+      console.error(`  [JUPITER] SELL confirmation timeout: ${signature} — check manually`);
+    });
+
     return signature;
   } catch (err: any) {
     console.error(`  [JUPITER] SELL failed: ${err.message}`);
