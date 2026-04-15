@@ -21,7 +21,7 @@ import bs58 from "bs58";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUPITER_QUOTE_URL = "https://api.jup.ag/swap/v1/quote";
 const JUPITER_SWAP_URL = "https://api.jup.ag/swap/v1/swap";
-const SLIPPAGE_BPS = 200; // 2% slippage
+const SLIPPAGE_BPS = 500; // 5% slippage — pump.fun tokens need higher
 
 function isDevnet(): boolean {
   return process.env.SOLANA_NETWORK === "devnet";
