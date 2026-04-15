@@ -217,11 +217,30 @@ export default function BotPage() {
     setTogglingLive(false);
   }
 
-  // ─── Paper Trade Stats (from ALL closed trades, not just display limit) ──
+  // ─── Trade Stats — filter by live/paper mode ──
 
-  const totalClosed = allClosedStats.length;
-  const wins = allClosedStats.filter((t) => Number(t.pnl_pct) > 0);
-  const losses = allClosedStats.filter((t) => Number(t.pnl_pct) <= 0);
+  // Filter trades based on mode
+  const displayOpenTrades = liveTrading
+    ? openTrades.filter((t) => t.wallet_tag?.includes("[LIVE]"))
+    : openTrades;
+  const displayClosedTrades = liveTrading
+    ? closedTrades.filter((t) => t.wallet_tag?.includes("[LIVE]"))
+    : closedTrades;
+  const displayStats = liveTrading
+    ? allClosedStats.filter((t: any) => false) // No [LIVE] stats field — use separate query below
+    : allClosedStats;
+
+  // For live mode, filter closed stats from closedTrades (which has wallet_tag)
+  const liveClosedForStats = liveTrading
+    ? closedTrades.filter((t) => t.wallet_tag?.includes("[LIVE]"))
+    : [];
+  const statsSource = liveTrading
+    ? liveClosedForStats.map((t) => ({ pnl_pct: t.pnl_pct, pnl_usd: t.pnl_usd, exit_reason: t.exit_reason }))
+    : allClosedStats;
+
+  const totalClosed = statsSource.length;
+  const wins = statsSource.filter((t) => Number(t.pnl_pct) > 0);
+  const losses = statsSource.filter((t) => Number(t.pnl_pct) <= 0);
   const winRate = totalClosed > 0 ? ((wins.length / totalClosed) * 100).toFixed(1) : "0";
   const avgGain =
     wins.length > 0
@@ -249,7 +268,7 @@ export default function BotPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-amber-500">PixiuBot</h1>
-          <span className="text-xs text-zinc-600">Sprint 3 — Paper Trading</span>
+          <span className="text-xs text-zinc-600">{liveTrading ? "Sprint 5 — Live Trading" : "Sprint 3 — Paper Trading"}</span>
         </div>
 
         {/* Phantom Wallet Balance (live mode only) */}
@@ -281,8 +300,27 @@ export default function BotPage() {
           </div>
         )}
 
-        {/* Bankroll */}
-        {bankroll && (
+        {/* Bankroll — SOL when live, USD when paper */}
+        {liveTrading && phantomBalance ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Card label="Starting" value={`${phantomBalance.startingSol.toFixed(4)} SOL`} />
+            <Card
+              label="Current"
+              value={`${phantomBalance.sol.toFixed(4)} SOL`}
+              color={phantomBalance.pnlSol >= 0 ? "text-green-500" : "text-red-500"}
+            />
+            <Card
+              label="Real P&L"
+              value={`${phantomBalance.pnlSol >= 0 ? "+" : ""}${phantomBalance.pnlSol.toFixed(4)} SOL`}
+              color={phantomBalance.pnlSol >= 0 ? "text-green-500" : "text-red-500"}
+            />
+            <Card
+              label="Return"
+              value={`${phantomBalance.pnlSol >= 0 ? "+" : ""}${((phantomBalance.pnlSol / phantomBalance.startingSol) * 100).toFixed(2)}%`}
+              color={phantomBalance.pnlSol >= 0 ? "text-green-500" : "text-red-500"}
+            />
+          </div>
+        ) : bankroll ? (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Card label="Starting" value={`$${Number(bankroll.starting_balance).toLocaleString()}`} />
             <Card
@@ -301,7 +339,7 @@ export default function BotPage() {
               color={Number(bankroll.total_pnl_usd) >= 0 ? "text-green-500" : "text-red-500"}
             />
           </div>
-        )}
+        ) : null}
 
         {/* Recovery Tracker */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
@@ -347,7 +385,7 @@ export default function BotPage() {
             value={botState?.is_running ? "RUNNING" : "STOPPED"}
             color={botState?.is_running ? "text-green-500" : "text-red-500"}
           />
-          <Card label="Mode" value="PAPER" />
+          <Card label="Mode" value={liveTrading ? "LIVE" : "PAPER"} color={liveTrading ? "text-red-500" : "text-white"} />
           <Card label="Tracked Wallets" value={String(walletCount)} />
           <Card label="Signals" value={String(signals.length)} />
         </div>
@@ -390,7 +428,7 @@ export default function BotPage() {
         {/* ─── Paper Trading Stats ────────────────────────── */}
         <section>
           <h2 className="text-lg font-semibold text-zinc-300 mb-3">
-            Paper Trading
+            {liveTrading ? "Live Trades" : "Paper Trading"}
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Card label="Total Trades" value={String(totalClosed)} />
@@ -413,12 +451,12 @@ export default function BotPage() {
               value={`${avgLoss}%`}
               color="text-red-500"
             />
-            <Card label="Open Positions" value={String(openTrades.length)} />
+            <Card label="Open Positions" value={String(displayOpenTrades.length)} />
           </div>
         </section>
 
         {/* ─── Open Positions (Live Tracker) ──────────────── */}
-        {openTrades.length > 0 && (
+        {displayOpenTrades.length > 0 && (
           <section>
             <h2 className="text-lg font-semibold text-zinc-300 mb-3">
               Open Positions
@@ -427,7 +465,7 @@ export default function BotPage() {
               </span>
             </h2>
             <div className="space-y-3">
-              {openTrades.map((t) => {
+              {displayOpenTrades.map((t) => {
                 const entryPrice = Number(t.entry_price);
                 const currentPrice = livePrices[t.coin_address] || 0;
                 const pnlPct =
@@ -583,7 +621,7 @@ export default function BotPage() {
         )}
 
         {/* ─── Closed Trades ──────────────────────────────── */}
-        {closedTrades.length > 0 && (
+        {displayClosedTrades.length > 0 && (
           <section>
             <h2 className="text-lg font-semibold text-zinc-300 mb-3">
               Closed Trades
@@ -602,7 +640,7 @@ export default function BotPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {closedTrades.map((t) => {
+                  {displayClosedTrades.map((t) => {
                     const pnl = Number(t.pnl_pct);
                     return (
                       <tr
