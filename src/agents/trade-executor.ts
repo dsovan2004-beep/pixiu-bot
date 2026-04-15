@@ -52,7 +52,21 @@ export async function startTradeExecutor(): Promise<void> {
 
       if ((openCount || 0) > 0) {
         pendingInserts.delete(entry.coin_address);
-        console.log(`  [EXECUTOR] ❌ ${coin} — position already open, skipping`);
+        console.log(`  [EXECUTOR] ❌ ${coin} — duplicate entry blocked (already open)`);
+        return;
+      }
+
+      // Also check for any trade opened in the last 60s on same address (catches recently inserted dupes)
+      const recentCutoff = new Date(Date.now() - 60_000).toISOString();
+      const { count: recentOpenCount } = await supabase
+        .from("paper_trades")
+        .select("id", { count: "exact", head: true })
+        .eq("coin_address", entry.coin_address)
+        .gte("entry_time", recentCutoff);
+
+      if ((recentOpenCount || 0) > 0) {
+        pendingInserts.delete(entry.coin_address);
+        console.log(`  [EXECUTOR] ❌ ${coin} — duplicate entry blocked (opened in last 60s)`);
         return;
       }
 
@@ -68,10 +82,12 @@ export async function startTradeExecutor(): Promise<void> {
         position_size_usd: POSITION_SIZE_USD,
       });
 
-      // Release the lock after insert attempt
-      pendingInserts.delete(entry.coin_address);
+      // Hold the lock for 10s after insert to prevent race condition duplicates
+      // The DB row is now visible but a near-simultaneous event could still slip through
+      setTimeout(() => pendingInserts.delete(entry.coin_address), 10_000);
 
       if (error) {
+        pendingInserts.delete(entry.coin_address); // release immediately on error so retries work
         console.error(`  [EXECUTOR] DB error for ${coin}: ${error.message}`);
         return;
       }
