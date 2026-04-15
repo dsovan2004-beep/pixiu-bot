@@ -61,7 +61,9 @@ export default function BotPage() {
   } | null>(null);
   const [liveTrading, setLiveTrading] = useState(false);
   const [togglingLive, setTogglingLive] = useState(false);
-  const [phantomBalance, setPhantomBalance] = useState<{ sol: number; usd: number } | null>(null);
+  const [phantomBalance, setPhantomBalance] = useState<{
+    sol: number; usd: number; pnlSol: number; pnlUsd: number; startingSol: number;
+  } | null>(null);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [whaleSells, setWhaleSells] = useState<
     Record<string, Array<{ wallet_tag: string; signal_time: string }>>
@@ -166,10 +168,10 @@ export default function BotPage() {
       setWhaleSells(sellMap);
     }
 
-    // Fetch Phantom wallet balance when live trading
+    // Fetch Phantom wallet balance when live trading (no cache)
     if (stateRes.data?.[0]?.mode === "live") {
       try {
-        const balRes = await fetch("/api/phantom-balance");
+        const balRes = await fetch("/api/phantom-balance", { cache: "no-store" });
         if (balRes.ok) {
           const bal = await balRes.json();
           setPhantomBalance(bal);
@@ -252,17 +254,28 @@ export default function BotPage() {
 
         {/* Phantom Wallet Balance (live mode only) */}
         {liveTrading && phantomBalance && (
-          <div className="bg-red-900/30 border border-red-600 rounded-lg p-4 flex items-center justify-between">
-            <div>
-              <span className="text-red-400 font-bold text-sm font-mono">LIVE TRADING ACTIVE</span>
-              <span className="text-zinc-500 text-xs ml-2">0.05 SOL/trade</span>
+          <div className="bg-red-900/30 border border-red-600 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <span className="text-red-400 font-bold text-sm font-mono">LIVE TRADING ACTIVE</span>
+                <span className="text-zinc-500 text-xs ml-2">0.05 SOL/trade</span>
+              </div>
+              <div className="text-right">
+                <span className="text-white font-bold font-mono text-lg">
+                  {phantomBalance.sol.toFixed(4)} SOL
+                </span>
+                <span className="text-zinc-400 text-sm ml-2">
+                  (${phantomBalance.usd.toFixed(2)})
+                </span>
+              </div>
             </div>
-            <div className="text-right">
-              <span className="text-white font-bold font-mono text-lg">
-                {phantomBalance.sol.toFixed(4)} SOL
+            <div className="flex items-center justify-between text-xs font-mono">
+              <span className="text-zinc-500">
+                Start: {phantomBalance.startingSol.toFixed(4)} SOL
               </span>
-              <span className="text-zinc-400 text-sm ml-2">
-                (${phantomBalance.usd.toFixed(2)})
+              <span className={phantomBalance.pnlSol >= 0 ? "text-green-400" : "text-red-400"}>
+                Real P&L: {phantomBalance.pnlSol >= 0 ? "+" : ""}{phantomBalance.pnlSol.toFixed(4)} SOL
+                ({phantomBalance.pnlUsd >= 0 ? "+" : ""}${phantomBalance.pnlUsd.toFixed(2)})
               </span>
             </div>
           </div>
