@@ -12,12 +12,13 @@ const HELIUS_KEY = process.env.HELIUS_API_KEY || "f3a19f49-e666-407d-b11f-0a0d58
 const STARTING_SOL = 3.6705; // Balance before first live trade
 
 async function getSolPrice(): Promise<number> {
+  // CoinGecko — reliable and free
   try {
-    const res = await fetch("https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112");
+    const res = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd");
     if (res.ok) {
       const data = await res.json();
-      const price = Number(data.data?.["So11111111111111111111111111111111111111112"]?.price);
-      if (price > 0) return price;
+      const price = data?.solana?.usd;
+      if (typeof price === "number" && price > 0) return price;
     }
   } catch {}
   return 85; // fallback
