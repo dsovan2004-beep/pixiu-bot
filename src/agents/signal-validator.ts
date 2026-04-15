@@ -16,6 +16,7 @@ import {
   TOP_ELITE_ADDRESSES,
   RECENTLY_TRADED_COOLDOWN_MS,
 } from "../config/smart-money";
+import { isWithinTradingHours, isRugStorm } from "../lib/entry-guards";
 
 // Stablecoin name filter — reject scam tokens using stablecoin names
 const STABLECOIN_KEYWORDS = [
@@ -56,7 +57,19 @@ export async function startSignalValidator(): Promise<void> {
 
       const coin = signal.coin_name || signal.coin_address.slice(0, 8) + "...";
 
-      // 0. Stablecoin name filter — fastest rejection
+      // 0a. Trading hours filter — 8AM-8PM Pacific
+      if (!isWithinTradingHours()) {
+        console.log(`  [VALIDATOR] ⏰ ${coin} blocked — outside trading hours (8AM-8PM PT)`);
+        return;
+      }
+
+      // 0b. Rug storm detection — 3+ losses in last 5 trades → pause 30min
+      if (await isRugStorm()) {
+        console.log(`  [VALIDATOR] 🛑 ${coin} blocked — rug storm active`);
+        return;
+      }
+
+      // 0c. Stablecoin name filter — fastest rejection
       if (signal.coin_name && isStablecoinName(signal.coin_name)) {
         console.log(`  [VALIDATOR] ❌ ${coin} — stablecoin name filter (skipping)`);
         return;
