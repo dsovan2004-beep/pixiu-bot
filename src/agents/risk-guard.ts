@@ -56,26 +56,25 @@ async function checkDailyLossLimit(): Promise<void> {
 
   if (dailyLossLimitHit) return;
 
-  // Query today's closed LIVE trades with negative PnL (tagged with [LIVE])
+  // Count losing LIVE trades today × 0.05 SOL per trade (actual exposure)
   const todayStart = `${todayUTC}T00:00:00Z`;
-  const { data: losses } = await supabase
+  const { count: lossCount } = await supabase
     .from("paper_trades")
-    .select("pnl_usd")
+    .select("id", { count: "exact", head: true })
     .eq("status", "closed")
     .gte("exit_time", todayStart)
-    .lt("pnl_usd", 0)
+    .lt("pnl_pct", 0)
     .like("wallet_tag", "%[LIVE]%");
 
-  if (!losses || losses.length === 0) return;
+  if (!lossCount || lossCount === 0) return;
 
-  const totalLossUsd = losses.reduce((sum, t) => sum + Math.abs(Number(t.pnl_usd || 0)), 0);
-  // Rough SOL conversion ($85/SOL approximate)
-  const totalLossSol = totalLossUsd / 85;
+  // Each losing trade = 0.05 SOL real exposure
+  const totalLossSol = (lossCount || 0) * 0.05;
 
   if (totalLossSol >= DAILY_LOSS_LIMIT_SOL) {
     dailyLossLimitHit = true;
     console.log(
-      `  [GUARD] 🛑 Daily loss limit hit — ${totalLossSol.toFixed(3)} SOL ($${totalLossUsd.toFixed(2)}) lost today. Stopping live trades.`
+      `  [GUARD] 🛑 Daily loss limit hit — ${lossCount} losing trades × 0.05 = ${totalLossSol.toFixed(2)} SOL. Stopping live trades.`
     );
   }
 }
@@ -149,6 +148,9 @@ async function updateBankroll(pnlUsd: number): Promise<void> {
   );
 }
 
+// Track positions already being closed to prevent duplicate exits
+const closingPositions = new Set<string>();
+
 // ─── Position Check Loop ────────────────────────────────
 
 async function checkPositions(): Promise<void> {
@@ -166,6 +168,8 @@ async function checkPositions(): Promise<void> {
   console.log(`  [GUARD] Checking ${positions.length} open position(s)...`);
 
   for (const pos of positions) {
+    // Skip if this position is already being closed
+    if (closingPositions.has(pos.id)) continue;
     const { price: currentPrice, source } = await getPrice(pos.coin_address);
     const entryPrice = Number(pos.entry_price);
     const coinLabel = pos.coin_name || pos.coin_address.slice(0, 8) + "...";
@@ -189,6 +193,11 @@ async function checkPositions(): Promise<void> {
       gridLvl: number,
       exitPrice?: number
     ) {
+      // Prevent duplicate close
+      if (closingPositions.has(pos.id)) return;
+      closingPositions.add(pos.id);
+      setTimeout(() => closingPositions.delete(pos.id), 60_000);
+
       const ep = exitPrice ?? currentPrice;
       const pnlUsd = (finalPnl / 100) * posSize;
       await supabase

@@ -59,20 +59,19 @@ export async function startTradeExecutor(): Promise<void> {
         const coin = trade.coin_name || trade.coin_address.slice(0, 8) + "...";
         console.log(`  [EXECUTOR] New trade detected: ${coin} — attempting LIVE BUY...`);
 
-        // Check daily loss limit
+        // Check daily loss limit — count losing LIVE trades × 0.05 SOL
         const todayStart = `${new Date().toISOString().slice(0, 10)}T00:00:00Z`;
-        const { data: losses } = await supabase
+        const { count: lossCount } = await supabase
           .from("paper_trades")
-          .select("pnl_usd")
+          .select("id", { count: "exact", head: true })
           .eq("status", "closed")
           .gte("exit_time", todayStart)
-          .lt("pnl_usd", 0)
+          .lt("pnl_pct", 0)
           .like("wallet_tag", "%[LIVE]%");
-        const totalLossUsd = (losses || []).reduce((s, t) => s + Math.abs(Number(t.pnl_usd || 0)), 0);
-        const totalLossSol = totalLossUsd / 85;
+        const totalLossSol = (lossCount || 0) * 0.05;
 
         if (totalLossSol >= 2.0) {
-          console.log(`  [EXECUTOR] 🛑 LIVE BUY skipped — daily loss limit hit (${totalLossSol.toFixed(3)} SOL)`);
+          console.log(`  [EXECUTOR] 🛑 LIVE BUY skipped — daily loss limit: ${lossCount} losses × 0.05 = ${totalLossSol.toFixed(2)} SOL`);
           continue;
         }
 
