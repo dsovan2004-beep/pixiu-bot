@@ -149,8 +149,13 @@ export async function buyToken(
   }
 }
 
+// Standard SPL Token and Token 2022 program IDs
+const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+
 /**
  * Fetch on-chain token balance for a given mint.
+ * Checks both SPL Token and Token 2022 programs.
  * Returns raw amount (smallest unit) or 0 if not found.
  */
 async function getTokenBalance(
@@ -158,22 +163,50 @@ async function getTokenBalance(
   walletPubkey: PublicKey,
   mintAddress: string
 ): Promise<number> {
+  const mintPubkey = new PublicKey(mintAddress);
+
+  // Try standard SPL Token program first
   try {
-    const mintPubkey = new PublicKey(mintAddress);
     const accounts = await connection.getParsedTokenAccountsByOwner(
       walletPubkey,
-      { mint: mintPubkey }
+      { mint: mintPubkey, programId: TOKEN_PROGRAM_ID }
     );
+    if (accounts.value.length > 0) {
+      const rawAmount = accounts.value[0].account.data.parsed?.info?.tokenAmount?.amount;
+      if (rawAmount && Number(rawAmount) > 0) return Number(rawAmount);
+    }
+  } catch {}
 
-    if (accounts.value.length === 0) return 0;
+  // Try Token 2022 program (pump.fun tokens use this)
+  try {
+    const accounts = await connection.getParsedTokenAccountsByOwner(
+      walletPubkey,
+      { mint: mintPubkey, programId: TOKEN_2022_PROGRAM_ID }
+    );
+    if (accounts.value.length > 0) {
+      const rawAmount = accounts.value[0].account.data.parsed?.info?.tokenAmount?.amount;
+      if (rawAmount && Number(rawAmount) > 0) return Number(rawAmount);
+    }
+  } catch {}
 
-    const info = accounts.value[0].account.data.parsed?.info;
-    const rawAmount = info?.tokenAmount?.amount;
-    return rawAmount ? Number(rawAmount) : 0;
+  // Retry once after 2s (account may not be indexed yet)
+  await new Promise((r) => setTimeout(r, 2000));
+
+  try {
+    const accounts = await connection.getParsedTokenAccountsByOwner(
+      walletPubkey,
+      { mint: mintPubkey, programId: TOKEN_2022_PROGRAM_ID }
+    );
+    if (accounts.value.length > 0) {
+      const rawAmount = accounts.value[0].account.data.parsed?.info?.tokenAmount?.amount;
+      if (rawAmount && Number(rawAmount) > 0) return Number(rawAmount);
+    }
   } catch (err: any) {
-    console.error(`  [JUPITER] Token balance fetch failed: ${err.message}`);
-    return 0;
+    console.error(`  [JUPITER] Token balance fetch failed after retry: ${err.message}`);
   }
+
+  console.log(`  [JUPITER] Token balance is 0 — already sold or rugged`);
+  return 0;
 }
 
 /**
