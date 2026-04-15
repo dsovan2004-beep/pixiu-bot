@@ -12,16 +12,35 @@ const HELIUS_KEY = process.env.HELIUS_API_KEY || "f3a19f49-e666-407d-b11f-0a0d58
 const STARTING_SOL = 3.6705; // Balance before first live trade
 
 async function getSolPrice(): Promise<number> {
-  // CoinGecko — reliable and free
+  // DexScreener — works on CF edge (SOL/USDC pair on Raydium)
   try {
-    const res = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd");
+    const res = await fetch("https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112");
     if (res.ok) {
       const data = await res.json();
-      const price = data?.solana?.usd;
+      const p = data.pairs?.find((pair: any) =>
+        pair.quoteToken?.symbol === "USDC" || pair.quoteToken?.symbol === "USDT"
+      );
+      const price = p ? parseFloat(p.priceUsd) : 0;
+      if (price > 0) return price;
+    }
+  } catch {}
+  // Fallback: Helius getPrice for SOL
+  try {
+    const res = await fetch(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 2, method: "getAsset",
+        params: { id: "So11111111111111111111111111111111111111112" },
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const price = data.result?.token_info?.price_info?.price_per_token;
       if (typeof price === "number" && price > 0) return price;
     }
   } catch {}
-  return 85; // fallback
+  return 84; // last known approximate
 }
 
 const HEADERS = {
@@ -66,6 +85,7 @@ export async function GET(): Promise<Response> {
         startingSol: STARTING_SOL,
         pnlSol: Number(pnlSol.toFixed(4)),
         pnlUsd: Number(pnlUsd.toFixed(2)),
+        solPrice: Number(solPrice.toFixed(2)),
       }),
       { status: 200, headers: HEADERS }
     );
