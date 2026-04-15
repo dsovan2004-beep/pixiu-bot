@@ -1,73 +1,46 @@
 # PixiuBot
 
-Autonomous Solana memecoin trading bot. Copies Smart Money wallet trades with a 6-agent swarm architecture, 10-layer entry filter pipeline, and automated risk management.
+Autonomous Solana memecoin trading bot. Copies Smart Money wallet trades with a 6-agent swarm architecture, 10-layer entry filter pipeline, Jupiter V6 live swaps, and automated risk management.
 
-Paper trading only. Zero real SOL spent.
+## Current Status
 
-## Agent Swarm Topology
+| Sprint | Status | Summary |
+|--------|--------|---------|
+| Sprint 1-2 | COMPLETE | Webhook + paper trader monolith |
+| Sprint 3 | COMPLETE | 6-agent swarm, 114 trades, 58.8% WR, $12,195 (+21.95%) |
+| Sprint 4 | COMPLETE | Jupiter live swaps, dashboard toggle, safety audit passed |
+| Sprint 5 | READY TO LAUNCH | Fund wallet + flip toggle |
+| Recovery Goal | $3,325 — REACHED | $3,415 gross wins from $10K start |
 
-6-agent pipeline connected via Supabase Realtime broadcast channels:
+## Architecture
+
+6-agent swarm connected via Supabase Realtime broadcast channels:
 
 ```
 Helius Webhook → coin_signals table
-                      │
+                      |
               Agent 1: Wallet Watcher
               coin_signals INSERT → pixiubot:signals
-              748 wallets tracked via Helius enhanced webhooks
-                      │
+              748 wallets tracked (11 T1 + 698 T2)
+                      |
               Agent 2: Signal Validator
               pixiubot:signals → pixiubot:entries
-              10-layer filter pipeline (see below)
-                      │
+              10-layer filter pipeline
+                      |
               Agent 3: Price Scout
               pixiubot:entries → pixiubot:confirmed
-              Price fetch + liquidity check + LP burn check
-                      │
+              Price + liquidity + LP burn + holder checks
+                      |
               Agent 4: Trade Executor
-              pixiubot:confirmed → paper_trades
-              Opens position with in-memory duplicate lock
-                      │
+              pixiubot:confirmed → paper_trades + Jupiter buy
+              In-memory dedup lock + 60s DB guard
+                      |
               Agent 5: Risk Guard
-              paper_trades polling every 5s
-              CB → Whale → SL → Timeout → Grid exits
-                      │
+              paper_trades polling every 5s + Jupiter sell
+              CB > Whale > SL > Timeout > Grid exits
+                      |
               Agent 6: Tier Manager
               paper_trades changes → auto-demote/promote T1/T2
-```
-
-## 10-Layer Entry Filter Pipeline
-
-Every signal must pass all 10 layers before a trade opens:
-
-| Layer | Filter | Location |
-|-------|--------|----------|
-| 1 | T1 Smart Money wallet required | Signal Validator |
-| 2 | Confirming wallet required (any tier) | Signal Validator |
-| 3 | Bundle detection (>80% from 1 wallet = skip) | Signal Validator |
-| 4 | 2-min rug hold filter (buy+sell within 2min = skip) | Signal Validator |
-| 5 | Stablecoin name filter (usd, dai, stable, etc.) | Signal Validator |
-| 6 | Name-based cooldown 120min (same name, any address) | Signal Validator |
-| 7 | Address-based cooldown 120min (same contract) | Signal Validator |
-| 8 | Price fetch > 0 (Jupiter then DexScreener) | Price Scout |
-| 9 | Liquidity > $10,000 USD (DexScreener) | Price Scout |
-| 10 | LP burned + top10 holders < 80% (RugCheck) | Price Scout |
-
-## Exit Priority
-
-Risk Guard checks open positions every 5 seconds in this order:
-
-```
-0a. Minimum hold time (30s) — skip all except CB
-0b. Rug detection — price=0 after 2min = exit at -100%
- 1. Circuit Breaker — pnlPct <= -25% → emergency exit
- 1b. Price echo guard — pnlPct === 0% → skip (wait for real movement)
- 2. Whale Exit — T1 wallet SELL detected → exit with whale
- 3. Stop Loss — pnlPct <= -10% → full exit
- 4. Timeout — 20 minutes → full exit
- 5. Grid Levels:
-    L1: +15% → sell 50% (break-even lock)
-    L2: +40% → sell 25%
-    L3: +100% → sell 25% (fully closed)
 ```
 
 ## T1 Smart Money Wallets (11)
@@ -86,29 +59,78 @@ Risk Guard checks open positions every 5 seconds in this order:
 | LUKEY | DjM7Tu...uN7s | Kolscan #28 94% WR |
 | Cupsey | 2fg5QD...rx6f | GMGN.ai #3 56% WR |
 
-Tier Manager auto-demotes T1 wallets with WR < 50% on 3+ trades in 24h, and auto-promotes T2 wallets with WR > 65% on 5+ trades in 7 days.
+Demoted: Scharo (T1 → T2). Tier Manager auto-demotes at WR < 50% on 3+ trades in 24h, auto-promotes at WR > 65% on 5+ trades in 7d.
 
-## Sprint 3 Key Discoveries (April 14, 2026)
+## 10-Layer Entry Filter Pipeline
 
-- Whale exit protecting from large losses (avg loss -24% reduced to -22%)
-- Small losses (-0.49%, -2.63%) = system working correctly
-- Fast whale exit = saves ~$7 per bad trade vs waiting for SL
-- Expected value per trade: +20.72% (WR 62.5%, avg gain +46.44%, avg loss -22.16%)
-- commotitties +570%, fatfilms +178%, Gas Town +164% = whale second wave strategy validated
-- Cupsey best T1 addition: triggered fatfilms, glep, commotitties all winners
-- Name cooldown fix saved -$148 (Pepe By Matt Furie x3 bug)
-- 0.00% exit bug fixed: 30s minimum hold + price echo guard
+| Layer | Filter | Location |
+|-------|--------|----------|
+| 1 | T1 Smart Money wallet required | Signal Validator |
+| 2 | Confirming wallet required (any tier) | Signal Validator |
+| 3 | Bundle detection (>80% from 1 wallet = skip) | Signal Validator |
+| 4 | 2-min rug hold filter (buy+sell within 2min = skip) | Signal Validator |
+| 5 | Stablecoin name filter (usd, dai, stable, etc.) | Signal Validator |
+| 6 | Name-based cooldown 120min (same name, any address) | Signal Validator |
+| 7 | Address-based cooldown 120min (same contract) | Signal Validator |
+| 8 | Price fetch > 0 (Jupiter then DexScreener) | Price Scout |
+| 9 | Liquidity > $10,000 USD (DexScreener) | Price Scout |
+| 10 | LP burned + top10 holders < 80% (RugCheck) | Price Scout |
 
-## Sprint 3 Performance (April 14, 2026)
+## Exit Priority
+
+Risk Guard checks open positions every 5 seconds:
+
+```
+0a. Minimum hold time (30s) — skip all except CB
+0b. Rug detection — price=0 after 2min = exit at -100%
+ 1. Circuit Breaker — pnlPct <= -25% → emergency exit
+ 1b. Price echo guard — pnlPct === 0% → skip (wait for real movement)
+ 2. Whale Exit — T1 wallet SELL detected → exit with whale
+ 3. Stop Loss — pnlPct <= -10% → full exit
+ 4. Timeout — 20 minutes → full exit
+ 5. Grid Levels:
+    L1: +15% → sell 50% (break-even lock)
+    L2: +40% → sell 25%
+    L3: +100% → sell 25% (fully closed)
+```
+
+## Sprint 4 Features
+
+- **Jupiter V6 swap integration** — real buy/sell via Jupiter aggregator
+- **TX confirmation** — every swap confirmed on-chain before returning
+- **Token balance fetch** — sellToken() queries real on-chain balance before selling
+- **Daily loss limit** — 0.2 SOL ($17) cap, stops all live trades when hit
+- **Dashboard toggle** — PAPER ONLY / LIVE TRADING button at pixiu-bot.pages.dev/bot
+- **Safe defaults** — isLiveTrading() returns false on any DB failure
+- **Per-position live check** — re-reads mode before each sell (no stale state)
+
+## Sprint 4 Performance (April 14-15, 2026)
 
 | Metric | Value |
 |--------|-------|
 | Starting bankroll | $10,000 |
-| Peak bankroll | $12,170 (+21.70%) |
-| Win rate | 62.5% |
-| Avg gain | +46.44% |
-| Avg loss | -22.16% |
-| Total trades | 96 |
+| Current bankroll | $12,195 (+21.95%) |
+| Win rate | 58.8% |
+| Avg gain | +46.93% |
+| Avg loss | -24.30% |
+| Total trades | 114 |
+| Recovery goal | $3,325 — REACHED |
+
+## Sprint 5 Launch Steps
+
+1. Fund Phantom wallet with $500 SOL to `ESK3r8n5jhaLn9Few59QKNJ5UMeD9iqZ5p1rbU9euvey`
+2. Go to `https://pixiu-bot.pages.dev/bot`
+3. Tap **PAPER ONLY** → **LIVE TRADING**
+4. Monitor first 50 trades at 0.05 SOL/trade (~$4.25 each)
+5. Daily loss limit auto-stops at 0.2 SOL ($17)
+
+## Remaining Backlog
+
+- Cloudflare Workers migration (24/7 uptime, no caffeinate)
+- WebSocket price streaming (instant rug detection vs 5s polling)
+- Telegram alerts (trade notifications)
+- Grid partial live sells (currently only full close sells live)
+- SOL price oracle for daily loss limit (currently hardcoded $85)
 
 ## Tech Stack
 
@@ -116,9 +138,11 @@ Tier Manager auto-demotes T1 wallets with WR < 50% on 3+ trades in 24h, and auto
 - **Framework**: Next.js 16 (Cloudflare Pages)
 - **Database**: Supabase (PostgreSQL + Realtime)
 - **Blockchain**: Helius enhanced webhooks (Solana)
+- **Swaps**: Jupiter V6 aggregator + Helius RPC
 - **Price feeds**: Jupiter Price API, DexScreener REST API
 - **Rug detection**: RugCheck API
 - **Dashboard**: React + Tailwind CSS at /bot
+- **Wallet**: Solana Keypair (bs58, @solana/web3.js)
 
 ## Restart Command
 
@@ -128,4 +152,4 @@ cd ~/PixiuBot && caffeinate -i npx tsx src/agents/run-all.ts
 
 ## Dashboard
 
-Live at `https://pixiu-bot.pages.dev/bot` — shows bankroll, win rate, open positions with live PnL, whale status, grid progress, timeout countdown, and signal feed.
+Live at `https://pixiu-bot.pages.dev/bot` — bankroll, win rate, open positions with live PnL, whale status, grid progress, timeout countdown, signal feed, and LIVE TRADING toggle.
