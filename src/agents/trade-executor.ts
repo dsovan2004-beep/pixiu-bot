@@ -10,7 +10,7 @@
 
 import supabase from "../lib/supabase-server";
 import { buyToken } from "../lib/jupiter-swap";
-import { isWithinTradingHours, isRugStorm } from "../lib/entry-guards";
+import { isRugStorm } from "../lib/entry-guards";
 
 const POSITION_SIZE_USD = 100;
 const LIVE_BUY_SOL = 0.05; // Amount of SOL per live trade
@@ -94,12 +94,7 @@ export async function startTradeExecutor(): Promise<void> {
         return;
       }
 
-      // Entry guards — block new entries outside trading hours or during rug storms
-      if (!isWithinTradingHours()) {
-        pendingInserts.delete(entry.coin_address);
-        console.log(`  [EXECUTOR] ⏰ ${coin} blocked — outside trading hours (8AM-8PM PT)`);
-        return;
-      }
+      // Entry guard — block new entries during rug storms
       if (await isRugStorm()) {
         pendingInserts.delete(entry.coin_address);
         console.log(`  [EXECUTOR] 🛑 ${coin} blocked — rug storm active`);

@@ -4,25 +4,10 @@
  * Shared guards for signal-validator and trade-executor.
  * These only block NEW entries, never exits.
  *
- * 1. Trading hours: 8AM-8PM Pacific Time
- * 2. Rug storm: 3+ losses in last 5 trades → pause 30min
+ * Rug storm: 3+ losses in last 5 trades → pause 30min
  */
 
 import supabase from "./supabase-server";
-
-// ─── Trading Hours (8AM-8PM Pacific) ────────────────────
-
-export function isWithinTradingHours(): boolean {
-  // Get current hour in Pacific Time
-  const now = new Date();
-  const ptString = now.toLocaleString("en-US", {
-    timeZone: "America/Los_Angeles",
-    hour12: false,
-    hour: "2-digit",
-  });
-  const hour = parseInt(ptString, 10);
-  return hour >= 8 && hour < 20; // 8:00 AM to 7:59 PM PT
-}
 
 // ─── Rug Storm Detection ────────────────────────────────
 
