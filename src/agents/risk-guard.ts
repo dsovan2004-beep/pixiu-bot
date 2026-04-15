@@ -260,7 +260,7 @@ async function checkPositions(): Promise<void> {
 
     // 1. Circuit Breaker — ABSOLUTE FIRST CHECK
     console.log(
-      `  [GUARD CB CHECK] ${coinLabel} pnlPct=${pnlPct.toFixed(1)}% threshold=-${CIRCUIT_BREAKER_PCT}% (entry:$${entryPrice} now:$${currentPrice} src:${source})`
+      `  [GUARD CB CHECK] ${coinLabel} pnlPct=${pnlPct.toFixed(1)}% L${currentLevel} ${remainingPct}% remaining (entry:$${entryPrice} now:$${currentPrice} src:${source})`
     );
 
     if (!priceFetchFailed && pnlPct <= -CIRCUIT_BREAKER_PCT) {

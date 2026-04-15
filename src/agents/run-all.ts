@@ -6,6 +6,7 @@
  * Runs alongside existing webhook + paper-trader until validated.
  */
 
+import supabase from "../lib/supabase-server";
 import { startWalletWatcher } from "./wallet-watcher";
 import { startSignalValidator } from "./signal-validator";
 import { startPriceScout } from "./price-scout";
@@ -39,11 +40,21 @@ async function main(): Promise<void> {
     startTierManager(),
   ]);
 
-  console.log("\n  [SWARM] All 6 agents running. Ctrl+C to stop.\n");
+  // Set bot_state to RUNNING
+  await supabase
+    .from("bot_state")
+    .update({ is_running: true, last_updated: new Date().toISOString() })
+    .neq("id", "00000000-0000-0000-0000-000000000000");
+  console.log("\n  [SWARM] All 6 agents running. bot_state set to RUNNING. Ctrl+C to stop.\n");
 
   // Graceful shutdown
-  process.on("SIGINT", () => {
+  process.on("SIGINT", async () => {
     console.log("\n  [SWARM] Shutting down all agents...");
+    await supabase
+      .from("bot_state")
+      .update({ is_running: false, last_updated: new Date().toISOString() })
+      .neq("id", "00000000-0000-0000-0000-000000000000");
+    console.log("  [SWARM] bot_state set to STOPPED.");
     process.exit(0);
   });
 }
