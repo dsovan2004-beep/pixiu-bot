@@ -127,8 +127,16 @@ export async function buyToken(
       maxRetries: 3,
     });
 
+    // Confirm transaction landed on-chain
+    console.log(`  [JUPITER] BUY sent: ${signature} — confirming...`);
+    const confirmation = await connection.confirmTransaction(signature, "confirmed");
+    if (confirmation.value.err) {
+      console.error(`  [JUPITER] BUY tx failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
+      return null;
+    }
+
     console.log(
-      `  [JUPITER] BUY ${coinAddress.slice(0, 8)}... ${amountSol} SOL → ${signature}`
+      `  [JUPITER] BUY confirmed: ${coinAddress.slice(0, 8)}... ${amountSol} SOL → ${signature}`
     );
     return signature;
   } catch (err: any) {
@@ -229,8 +237,16 @@ export async function sellToken(
       maxRetries: 3,
     });
 
+    // Confirm transaction landed on-chain
+    console.log(`  [JUPITER] SELL sent: ${signature} — confirming...`);
+    const confirmation = await connection.confirmTransaction(signature, "confirmed");
+    if (confirmation.value.err) {
+      console.error(`  [JUPITER] SELL tx failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
+      return null;
+    }
+
     console.log(
-      `  [JUPITER] SELL ${coinAddress.slice(0, 8)}... ${tokenAmount} → ${signature}`
+      `  [JUPITER] SELL confirmed: ${coinAddress.slice(0, 8)}... ${tokenAmount} → ${signature}`
     );
     return signature;
   } catch (err: any) {

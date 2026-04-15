@@ -15,15 +15,23 @@ const POSITION_SIZE_USD = 100;
 const LIVE_BUY_SOL = 0.05; // Amount of SOL per live trade
 
 async function isLiveTrading(): Promise<boolean> {
-  // Check DB setting first (dashboard toggle), fall back to env var
-  const { data } = await supabase
-    .from("bot_state")
-    .select("mode")
-    .limit(1)
-    .single();
-  if (data?.mode === "live") return true;
-  if (data?.mode === "paper") return false;
-  return process.env.LIVE_TRADING === "true";
+  // Check DB setting first (dashboard toggle)
+  // SAFETY: default to false (paper) on ANY failure — never accidentally go live
+  try {
+    const { data, error } = await supabase
+      .from("bot_state")
+      .select("mode")
+      .limit(1)
+      .single();
+    if (error || !data) {
+      console.error("  [EXECUTOR] ⚠️ Failed to read bot_state — defaulting to PAPER");
+      return false;
+    }
+    return data.mode === "live";
+  } catch {
+    console.error("  [EXECUTOR] ⚠️ bot_state query crashed — defaulting to PAPER");
+    return false;
+  }
 }
 
 // In-memory dedup: track coins being inserted to prevent race condition duplicates

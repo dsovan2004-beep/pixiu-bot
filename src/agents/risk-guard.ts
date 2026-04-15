@@ -17,14 +17,22 @@ import { sellToken } from "../lib/jupiter-swap";
 const POSITION_CHECK_MS = 5_000;
 
 async function isLiveTrading(): Promise<boolean> {
-  const { data } = await supabase
-    .from("bot_state")
-    .select("mode")
-    .limit(1)
-    .single();
-  if (data?.mode === "live") return true;
-  if (data?.mode === "paper") return false;
-  return process.env.LIVE_TRADING === "true";
+  // SAFETY: default to false (paper) on ANY failure — never accidentally go live
+  try {
+    const { data, error } = await supabase
+      .from("bot_state")
+      .select("mode")
+      .limit(1)
+      .single();
+    if (error || !data) {
+      console.error("  [GUARD] ⚠️ Failed to read bot_state — defaulting to PAPER");
+      return false;
+    }
+    return data.mode === "live";
+  } catch {
+    console.error("  [GUARD] ⚠️ bot_state query crashed — defaulting to PAPER");
+    return false;
+  }
 }
 
 // Daily loss limit: stop live trades if losses exceed threshold
@@ -196,15 +204,16 @@ async function checkPositions(): Promise<void> {
         .eq("id", pos.id);
       await updateBankroll(pnlUsd);
 
-      // Jupiter live sell (if enabled via dashboard and daily limit not hit)
-      if (liveMode && !dailyLossLimitHit) {
+      // Jupiter live sell — re-check live mode for each position (not cached from loop start)
+      const liveSellMode = await isLiveTrading();
+      if (liveSellMode && !dailyLossLimitHit) {
         const sig = await sellToken(pos.coin_address);
         if (sig) {
           console.log(`  [GUARD] 🔴 LIVE SELL executed: ${sig} (${exitReason})`);
         } else {
           console.log(`  [GUARD] ⚠️ LIVE SELL failed for ${coinLabel} — paper close still recorded`);
         }
-      } else if (liveMode && dailyLossLimitHit) {
+      } else if (liveSellMode && dailyLossLimitHit) {
         console.log(`  [GUARD] 🛑 LIVE SELL skipped for ${coinLabel} — daily loss limit hit`);
       }
     }
