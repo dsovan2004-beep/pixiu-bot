@@ -101,11 +101,26 @@ export async function startTradeExecutor(): Promise<void> {
 
       // Jupiter live swap (if enabled)
       if (LIVE_TRADING) {
-        const sig = await buyToken(entry.coin_address, LIVE_BUY_SOL);
-        if (sig) {
-          console.log(`  [EXECUTOR] 🔴 LIVE BUY executed: ${sig}`);
+        // Check daily loss limit before buying
+        const todayStart = `${new Date().toISOString().slice(0, 10)}T00:00:00Z`;
+        const { data: losses } = await supabase
+          .from("paper_trades")
+          .select("pnl_usd")
+          .eq("status", "closed")
+          .gte("exit_time", todayStart)
+          .lt("pnl_usd", 0);
+        const totalLossUsd = (losses || []).reduce((s, t) => s + Math.abs(Number(t.pnl_usd || 0)), 0);
+        const totalLossSol = totalLossUsd / 85;
+
+        if (totalLossSol >= 0.2) {
+          console.log(`  [EXECUTOR] 🛑 LIVE BUY skipped — daily loss limit hit (${totalLossSol.toFixed(3)} SOL)`);
         } else {
-          console.log(`  [EXECUTOR] ⚠️ LIVE BUY failed for ${coin} — paper trade still open`);
+          const sig = await buyToken(entry.coin_address, LIVE_BUY_SOL);
+          if (sig) {
+            console.log(`  [EXECUTOR] 🔴 LIVE BUY executed: ${sig}`);
+          } else {
+            console.log(`  [EXECUTOR] ⚠️ LIVE BUY failed for ${coin} — paper trade still open`);
+          }
         }
       }
     })

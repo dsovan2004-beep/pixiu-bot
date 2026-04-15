@@ -17,6 +17,48 @@ import { sellToken } from "../lib/jupiter-swap";
 const POSITION_CHECK_MS = 5_000;
 const LIVE_TRADING = process.env.LIVE_TRADING === "true";
 
+// Daily loss limit: stop live trades if losses exceed threshold
+const DAILY_LOSS_LIMIT_SOL = 0.2; // ~$17 at current prices
+let dailyLossLimitHit = false;
+let lastLossCheckDate = "";
+
+async function checkDailyLossLimit(): Promise<void> {
+  const todayUTC = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+  // Reset at midnight UTC
+  if (todayUTC !== lastLossCheckDate) {
+    if (dailyLossLimitHit) {
+      console.log(`  [GUARD] Daily loss limit reset for ${todayUTC}`);
+    }
+    dailyLossLimitHit = false;
+    lastLossCheckDate = todayUTC;
+  }
+
+  if (dailyLossLimitHit) return;
+
+  // Query today's closed trades with negative PnL
+  const todayStart = `${todayUTC}T00:00:00Z`;
+  const { data: losses } = await supabase
+    .from("paper_trades")
+    .select("pnl_usd")
+    .eq("status", "closed")
+    .gte("exit_time", todayStart)
+    .lt("pnl_usd", 0);
+
+  if (!losses || losses.length === 0) return;
+
+  const totalLossUsd = losses.reduce((sum, t) => sum + Math.abs(Number(t.pnl_usd || 0)), 0);
+  // Rough SOL conversion ($85/SOL approximate)
+  const totalLossSol = totalLossUsd / 85;
+
+  if (totalLossSol >= DAILY_LOSS_LIMIT_SOL) {
+    dailyLossLimitHit = true;
+    console.log(
+      `  [GUARD] 🛑 Daily loss limit hit — ${totalLossSol.toFixed(3)} SOL ($${totalLossUsd.toFixed(2)}) lost today. Stopping live trades.`
+    );
+  }
+}
+
 const GRID_LEVELS = [
   { level: 1, pct: 15, sellPct: 50 },
   { level: 2, pct: 40, sellPct: 25 },
@@ -96,6 +138,9 @@ async function checkPositions(): Promise<void> {
 
   if (error || !positions || positions.length === 0) return;
 
+  // Check daily loss limit (for live trading)
+  if (LIVE_TRADING) await checkDailyLossLimit();
+
   console.log(`  [GUARD] Checking ${positions.length} open position(s)...`);
 
   for (const pos of positions) {
@@ -140,12 +185,16 @@ async function checkPositions(): Promise<void> {
         .eq("id", pos.id);
       await updateBankroll(pnlUsd);
 
-      // Jupiter live sell (if enabled)
-      if (LIVE_TRADING) {
-        // TODO: calculate actual token balance from on-chain
-        // For now, sell uses a placeholder amount — real implementation
-        // needs to query token account balance via getTokenAccountsByOwner
-        console.log(`  [GUARD] 🔴 LIVE SELL would execute for ${coinLabel} (${exitReason})`);
+      // Jupiter live sell (if enabled and daily limit not hit)
+      if (LIVE_TRADING && !dailyLossLimitHit) {
+        const sig = await sellToken(pos.coin_address);
+        if (sig) {
+          console.log(`  [GUARD] 🔴 LIVE SELL executed: ${sig} (${exitReason})`);
+        } else {
+          console.log(`  [GUARD] ⚠️ LIVE SELL failed for ${coinLabel} — paper close still recorded`);
+        }
+      } else if (LIVE_TRADING && dailyLossLimitHit) {
+        console.log(`  [GUARD] 🛑 LIVE SELL skipped for ${coinLabel} — daily loss limit hit`);
       }
     }
 

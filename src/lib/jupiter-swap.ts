@@ -11,6 +11,7 @@
 import {
   Connection,
   Keypair,
+  PublicKey,
   VersionedTransaction,
 } from "@solana/web3.js";
 import bs58 from "bs58";
@@ -106,23 +107,64 @@ export async function buyToken(
 }
 
 /**
+ * Fetch on-chain token balance for a given mint.
+ * Returns raw amount (smallest unit) or 0 if not found.
+ */
+async function getTokenBalance(
+  connection: Connection,
+  walletPubkey: PublicKey,
+  mintAddress: string
+): Promise<number> {
+  try {
+    const mintPubkey = new PublicKey(mintAddress);
+    const accounts = await connection.getParsedTokenAccountsByOwner(
+      walletPubkey,
+      { mint: mintPubkey }
+    );
+
+    if (accounts.value.length === 0) return 0;
+
+    const info = accounts.value[0].account.data.parsed?.info;
+    const rawAmount = info?.tokenAmount?.amount;
+    return rawAmount ? Number(rawAmount) : 0;
+  } catch (err: any) {
+    console.error(`  [JUPITER] Token balance fetch failed: ${err.message}`);
+    return 0;
+  }
+}
+
+/**
  * Sell a token for SOL via Jupiter.
+ * Automatically fetches on-chain token balance.
  * @param coinAddress - Token mint address to sell
- * @param tokenAmount - Raw token amount (in smallest unit)
  * @returns Transaction signature or null on failure
  */
 export async function sellToken(
-  coinAddress: string,
-  tokenAmount: number
+  coinAddress: string
 ): Promise<string | null> {
   try {
     const keypair = getKeypair();
     if (!keypair) return null;
 
     const walletPubkey = keypair.publicKey.toBase58();
+    const connection = getConnection();
+
+    // Fetch actual token balance from chain
+    const tokenAmount = await getTokenBalance(
+      connection,
+      keypair.publicKey,
+      coinAddress
+    );
+
+    if (tokenAmount <= 0) {
+      console.log(`  [JUPITER] No token balance found for ${coinAddress.slice(0, 8)}..., skipping sell`);
+      return null;
+    }
+
+    console.log(`  [JUPITER] Token balance: ${tokenAmount} for ${coinAddress.slice(0, 8)}...`);
 
     // 1. Get quote (token → SOL)
-    const quoteUrl = `${JUPITER_QUOTE_URL}?inputMint=${coinAddress}&outputMint=${SOL_MINT}&amount=${Math.floor(tokenAmount)}&slippageBps=${SLIPPAGE_BPS}`;
+    const quoteUrl = `${JUPITER_QUOTE_URL}?inputMint=${coinAddress}&outputMint=${SOL_MINT}&amount=${tokenAmount}&slippageBps=${SLIPPAGE_BPS}`;
     const quoteRes = await fetch(quoteUrl);
     if (!quoteRes.ok) {
       console.error(`  [JUPITER] Sell quote failed: ${quoteRes.status}`);
@@ -147,7 +189,6 @@ export async function sellToken(
     const { swapTransaction } = await swapRes.json();
 
     // 3. Deserialize, sign, and send
-    const connection = getConnection();
     const txBuf = Buffer.from(swapTransaction, "base64");
     const tx = VersionedTransaction.deserialize(txBuf);
     tx.sign([keypair]);
