@@ -36,7 +36,9 @@ async function isLiveTrading(): Promise<boolean> {
 }
 
 // Daily loss limit: stop live trades if LIVE-ONLY losses exceed threshold
-const DAILY_LOSS_LIMIT_SOL = 0.2; // ~$17 — only counts trades tagged [LIVE]
+// Note: pnl_usd is based on paper position size ($100), not actual SOL spent (0.05)
+// Real exposure per trade is 0.05 SOL, so 2 SOL limit = ~40 losing trades
+const DAILY_LOSS_LIMIT_SOL = 2.0;
 let dailyLossLimitHit = false;
 let lastLossCheckDate = "";
 

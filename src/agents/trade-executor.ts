@@ -71,7 +71,7 @@ export async function startTradeExecutor(): Promise<void> {
         const totalLossUsd = (losses || []).reduce((s, t) => s + Math.abs(Number(t.pnl_usd || 0)), 0);
         const totalLossSol = totalLossUsd / 85;
 
-        if (totalLossSol >= 0.2) {
+        if (totalLossSol >= 2.0) {
           console.log(`  [EXECUTOR] 🛑 LIVE BUY skipped — daily loss limit hit (${totalLossSol.toFixed(3)} SOL)`);
           continue;
         }
