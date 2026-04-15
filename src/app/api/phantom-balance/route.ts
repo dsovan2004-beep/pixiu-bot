@@ -26,11 +26,10 @@ export async function GET(): Promise<Response> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         jsonrpc: "2.0",
-        id: 1,
+        id: Date.now(), // Unique ID prevents any caching
         method: "getBalance",
         params: [WALLET_PUBKEY],
       }),
-      cache: "no-store" as RequestCache,
     });
 
     if (!res.ok) {
