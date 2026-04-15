@@ -434,12 +434,12 @@ export async function POST(request: Request): Promise<Response> {
         });
         signalCount++;
 
-        // ── INSTANT ENTRY EVALUATION ──
-        const result = await evaluateAndEnter(mint, wallet, walletTag, coinName, gapMinutes);
-        if (result.entered) {
-          entryCount++;
-          console.log(`  ${result.reason}`);
-        }
+        // ── ENTRY DISABLED — swarm handles all entries now ──
+        // The webhook only inserts signals into coin_signals.
+        // The swarm pipeline (watcher → validator → scout → executor)
+        // handles entry evaluation + live Jupiter buys.
+        // evaluateAndEnter() was bypassing the swarm and entering
+        // paper-only trades without live buy capability.
       }
     }
 
