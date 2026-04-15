@@ -286,13 +286,9 @@ async function evaluateAndEnter(
     }
   }
 
-  // REQUIRE: 1 Smart Money + 1 confirming wallet
+  // REQUIRE: at least 1 T1 Smart Money — solo T1 buy is enough
   if (smartMoneyCount === 0) {
     return { entered: false, reason: `no Smart Money (${allTags.size} wallets, 0 T1)` };
-  }
-
-  if (allTags.size < 2) {
-    return { entered: false, reason: `Smart Money only, no confirmation (${smartMoneyNames[0]} alone)` };
   }
 
   // Bundle check: any wallet = 80%+ of signals

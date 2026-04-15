@@ -159,18 +159,10 @@ export async function startSignalValidator(): Promise<void> {
         }
       }
 
-      // REQUIRE: at least 1 T1 Smart Money
+      // REQUIRE: at least 1 T1 Smart Money — solo T1 buy is enough
       if (smartMoneyCount === 0) {
         console.log(
           `  [VALIDATOR] ❌ ${coin} — no T1 Smart Money (${allTags.size} wallets, 0 T1)`
-        );
-        return;
-      }
-
-      // REQUIRE: at least 1 confirming wallet
-      if (allTags.size < 2) {
-        console.log(
-          `  [VALIDATOR] ❌ ${coin} — no confirmation (${smartMoneyNames[0]} alone)`
         );
         return;
       }
@@ -226,11 +218,15 @@ export async function startSignalValidator(): Promise<void> {
       const confirmTag =
         otherNames.length > 0
           ? otherNames[0]
-          : smartMoneyNames[1] || smartMoneyNames[0];
-      const walletLabel = `${smartMoneyNames[0]}+${confirmTag}${allTags.size > 2 ? `+${allTags.size - 2}more` : ""}`;
+          : smartMoneyNames[1] || null;
+      const walletLabel = confirmTag
+        ? `${smartMoneyNames[0]}+${confirmTag}${allTags.size > 2 ? `+${allTags.size - 2}more` : ""}`
+        : smartMoneyNames[0];
 
       console.log(
-        `  [VALIDATOR] ✅ ${coin} — ${smartMoneyNames[0]}(T1) + ${confirmTag} confirmed`
+        confirmTag
+          ? `  [VALIDATOR] ✅ ${coin} — ${smartMoneyNames[0]}(T1) + ${confirmTag} confirmed`
+          : `  [VALIDATOR] ✅ ${coin} — ${smartMoneyNames[0]}(T1) solo entry`
       );
 
       entryChannel.send({
