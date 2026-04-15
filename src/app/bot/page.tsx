@@ -217,30 +217,20 @@ export default function BotPage() {
     setTogglingLive(false);
   }
 
-  // ─── Trade Stats — filter by live/paper mode ──
+  // ─── Trade display — table/positions filter by [LIVE], stats always show all ──
 
-  // Filter trades based on mode
+  // Table and positions: filter to [LIVE] only when live mode
   const displayOpenTrades = liveTrading
     ? openTrades.filter((t) => t.wallet_tag?.includes("[LIVE]"))
     : openTrades;
   const displayClosedTrades = liveTrading
     ? closedTrades.filter((t) => t.wallet_tag?.includes("[LIVE]"))
     : closedTrades;
-  const displayStats = liveTrading
-    ? allClosedStats.filter((t: any) => false) // No [LIVE] stats field — use separate query below
-    : allClosedStats;
 
-  // For live mode, filter closed stats from closedTrades (which has wallet_tag)
-  const liveClosedForStats = liveTrading
-    ? closedTrades.filter((t) => t.wallet_tag?.includes("[LIVE]"))
-    : [];
-  const statsSource = liveTrading
-    ? liveClosedForStats.map((t) => ({ pnl_pct: t.pnl_pct, pnl_usd: t.pnl_usd, exit_reason: t.exit_reason }))
-    : allClosedStats;
-
-  const totalClosed = statsSource.length;
-  const wins = statsSource.filter((t) => Number(t.pnl_pct) > 0);
-  const losses = statsSource.filter((t) => Number(t.pnl_pct) <= 0);
+  // Stats cards: ALWAYS use all trades (full bot history)
+  const totalClosed = allClosedStats.length;
+  const wins = allClosedStats.filter((t) => Number(t.pnl_pct) > 0);
+  const losses = allClosedStats.filter((t) => Number(t.pnl_pct) <= 0);
   const winRate = totalClosed > 0 ? ((wins.length / totalClosed) * 100).toFixed(1) : "0";
   const avgGain =
     wins.length > 0
