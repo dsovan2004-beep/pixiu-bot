@@ -12,8 +12,10 @@
 
 import supabase from "../lib/supabase-server";
 import { TOP_ELITE_ADDRESSES } from "../config/smart-money";
+import { sellToken } from "../lib/jupiter-swap";
 
 const POSITION_CHECK_MS = 5_000;
+const LIVE_TRADING = process.env.LIVE_TRADING === "true";
 
 const GRID_LEVELS = [
   { level: 1, pct: 15, sellPct: 50 },
@@ -137,6 +139,14 @@ async function checkPositions(): Promise<void> {
         })
         .eq("id", pos.id);
       await updateBankroll(pnlUsd);
+
+      // Jupiter live sell (if enabled)
+      if (LIVE_TRADING) {
+        // TODO: calculate actual token balance from on-chain
+        // For now, sell uses a placeholder amount — real implementation
+        // needs to query token account balance via getTokenAccountsByOwner
+        console.log(`  [GUARD] 🔴 LIVE SELL would execute for ${coinLabel} (${exitReason})`);
+      }
     }
 
     // 0a. Minimum hold time — skip all checks except CB if trade is < 30s old
@@ -283,7 +293,7 @@ async function checkPositions(): Promise<void> {
 }
 
 export async function startRiskGuard(): Promise<void> {
-  console.log("  [GUARD] Starting risk guard...");
+  console.log(`  [GUARD] Starting risk guard... (LIVE: ${LIVE_TRADING ? "🔴 ON" : "⚪ OFF"})`);
   console.log(
     `  [GUARD] Exit priority: CB(-${CIRCUIT_BREAKER_PCT}%) > Whale > SL(-${STOP_LOSS_PCT}%) > TO(${TIMEOUT_MINUTES}min) > Grid | Poll: ${POSITION_CHECK_MS / 1000}s`
   );

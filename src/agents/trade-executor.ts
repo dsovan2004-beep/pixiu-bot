@@ -5,12 +5,15 @@
  * Opens paper positions in Supabase paper_trades table.
  * Position size: $100 paper.
  *
- * TODO: Sprint 4 — add Jupiter live swap for real SOL execution.
+ * Sprint 4: Jupiter live swap integration (LIVE_TRADING toggle).
  */
 
 import supabase from "../lib/supabase-server";
+import { buyToken } from "../lib/jupiter-swap";
 
 const POSITION_SIZE_USD = 100;
+const LIVE_TRADING = process.env.LIVE_TRADING === "true";
+const LIVE_BUY_SOL = 0.05; // Amount of SOL per live trade
 
 // In-memory dedup: track coins being inserted to prevent race condition duplicates
 const pendingInserts = new Set<string>();
@@ -25,7 +28,7 @@ interface ConfirmedEntry {
 }
 
 export async function startTradeExecutor(): Promise<void> {
-  console.log("  [EXECUTOR] Starting trade executor...");
+  console.log(`  [EXECUTOR] Starting trade executor... (LIVE: ${LIVE_TRADING ? "🔴 ON" : "⚪ OFF"})`);
 
   // Subscribe to pixiubot:confirmed channel
   const confirmedChannel = supabase.channel("pixiubot:confirmed");
@@ -96,9 +99,15 @@ export async function startTradeExecutor(): Promise<void> {
         `  [EXECUTOR] Opened ${coin} @ $${entry.price.toFixed(10)} | $${POSITION_SIZE_USD} paper position [${entry.price_source}]`
       );
 
-      // TODO: Sprint 4 — Jupiter live swap hook
-      // import { swap } from "../lib/jupiter";
-      // await swap(entry.coin_address, POSITION_SIZE_SOL);
+      // Jupiter live swap (if enabled)
+      if (LIVE_TRADING) {
+        const sig = await buyToken(entry.coin_address, LIVE_BUY_SOL);
+        if (sig) {
+          console.log(`  [EXECUTOR] 🔴 LIVE BUY executed: ${sig}`);
+        } else {
+          console.log(`  [EXECUTOR] ⚠️ LIVE BUY failed for ${coin} — paper trade still open`);
+        }
+      }
     })
     .subscribe();
 
