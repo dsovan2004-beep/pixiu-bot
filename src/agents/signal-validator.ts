@@ -29,6 +29,10 @@ function isStablecoinName(name: string): boolean {
   return STABLECOIN_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
+// In-memory dedup: prevent same coin from being validated twice within 60s
+const recentlyValidated = new Map<string, number>(); // coin_address → timestamp
+const VALIDATION_COOLDOWN_MS = 60_000;
+
 interface SignalEvent {
   coin_address: string;
   coin_name: string;
@@ -67,6 +71,12 @@ export async function startSignalValidator(): Promise<void> {
       if (signal.coin_name && isStablecoinName(signal.coin_name)) {
         console.log(`  [VALIDATOR] ❌ ${coin} — stablecoin name filter (skipping)`);
         return;
+      }
+
+      // 0d. In-memory dedup — block same coin_address within 60s
+      const lastValidated = recentlyValidated.get(signal.coin_address);
+      if (lastValidated && Date.now() - lastValidated < VALIDATION_COOLDOWN_MS) {
+        return; // silently skip — already validated recently
       }
 
       // 1. Check if position already open for this coin
@@ -209,7 +219,10 @@ export async function startSignalValidator(): Promise<void> {
         }
       }
 
-      // ALL CHECKS PASSED — publish ENTER event
+      // ALL CHECKS PASSED — mark as validated to prevent duplicates
+      recentlyValidated.set(signal.coin_address, Date.now());
+
+      // Publish ENTER event
       const confirmTag =
         otherNames.length > 0
           ? otherNames[0]

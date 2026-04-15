@@ -113,9 +113,8 @@ export async function startTradeExecutor(): Promise<void> {
         position_size_usd: POSITION_SIZE_USD,
       });
 
-      // Hold the lock for 10s after insert to prevent race condition duplicates
-      // The DB row is now visible but a near-simultaneous event could still slip through
-      setTimeout(() => pendingInserts.delete(entry.coin_address), 10_000);
+      // Hold the lock for 60s after insert — scout can take variable time
+      setTimeout(() => pendingInserts.delete(entry.coin_address), 60_000);
 
       if (error) {
         pendingInserts.delete(entry.coin_address); // release immediately on error so retries work
