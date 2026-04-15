@@ -41,11 +41,14 @@ export async function isRugStorm(): Promise<boolean> {
     return rugStormCache.active;
   }
 
-  // Query last 5 closed trades
+  // Query last 5 closed trades within the last 2 hours only
+  // Old losses (>2h ago) should not block entries forever
+  const twoHoursAgo = new Date(now - 2 * 60 * 60_000).toISOString();
   const { data: recentTrades } = await supabase
     .from("paper_trades")
     .select("pnl_pct")
     .eq("status", "closed")
+    .gte("exit_time", twoHoursAgo)
     .order("exit_time", { ascending: false })
     .limit(RUG_STORM_WINDOW);
 
