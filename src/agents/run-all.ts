@@ -25,7 +25,7 @@ async function main(): Promise<void> {
   console.log("  Agent 6: Tier Manager     — auto-demote/promote T1↔T2");
   console.log("  Bus:     Supabase Realtime broadcast channels");
   console.log("  Trading: 24/7 | Rug Storm Protection: ON");
-  console.log("  Mode:    PAPER ONLY — parallel with Sprint 2");
+  console.log("  Mode:    LIVE TRADING — real Jupiter swaps ON");
   console.log(`  Started: ${new Date().toISOString()}`);
   console.log("═══════════════════════════════════════════════════════════\n");
 
