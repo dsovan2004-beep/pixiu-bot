@@ -12,8 +12,19 @@ import supabase from "../lib/supabase-server";
 import { buyToken } from "../lib/jupiter-swap";
 
 const POSITION_SIZE_USD = 100;
-const LIVE_TRADING = process.env.LIVE_TRADING === "true";
 const LIVE_BUY_SOL = 0.05; // Amount of SOL per live trade
+
+async function isLiveTrading(): Promise<boolean> {
+  // Check DB setting first (dashboard toggle), fall back to env var
+  const { data } = await supabase
+    .from("bot_state")
+    .select("mode")
+    .limit(1)
+    .single();
+  if (data?.mode === "live") return true;
+  if (data?.mode === "paper") return false;
+  return process.env.LIVE_TRADING === "true";
+}
 
 // In-memory dedup: track coins being inserted to prevent race condition duplicates
 const pendingInserts = new Set<string>();
@@ -28,7 +39,8 @@ interface ConfirmedEntry {
 }
 
 export async function startTradeExecutor(): Promise<void> {
-  console.log(`  [EXECUTOR] Starting trade executor... (LIVE: ${LIVE_TRADING ? "🔴 ON" : "⚪ OFF"})`);
+  const startLive = await isLiveTrading();
+  console.log(`  [EXECUTOR] Starting trade executor... (LIVE: ${startLive ? "🔴 ON" : "⚪ OFF"} — dashboard controlled)`);
 
   // Subscribe to pixiubot:confirmed channel
   const confirmedChannel = supabase.channel("pixiubot:confirmed");
@@ -99,8 +111,9 @@ export async function startTradeExecutor(): Promise<void> {
         `  [EXECUTOR] Opened ${coin} @ $${entry.price.toFixed(10)} | $${POSITION_SIZE_USD} paper position [${entry.price_source}]`
       );
 
-      // Jupiter live swap (if enabled)
-      if (LIVE_TRADING) {
+      // Jupiter live swap (if enabled via dashboard or env)
+      const live = await isLiveTrading();
+      if (live) {
         // Check daily loss limit before buying
         const todayStart = `${new Date().toISOString().slice(0, 10)}T00:00:00Z`;
         const { data: losses } = await supabase

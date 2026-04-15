@@ -15,7 +15,17 @@ import { TOP_ELITE_ADDRESSES } from "../config/smart-money";
 import { sellToken } from "../lib/jupiter-swap";
 
 const POSITION_CHECK_MS = 5_000;
-const LIVE_TRADING = process.env.LIVE_TRADING === "true";
+
+async function isLiveTrading(): Promise<boolean> {
+  const { data } = await supabase
+    .from("bot_state")
+    .select("mode")
+    .limit(1)
+    .single();
+  if (data?.mode === "live") return true;
+  if (data?.mode === "paper") return false;
+  return process.env.LIVE_TRADING === "true";
+}
 
 // Daily loss limit: stop live trades if losses exceed threshold
 const DAILY_LOSS_LIMIT_SOL = 0.2; // ~$17 at current prices
@@ -139,7 +149,8 @@ async function checkPositions(): Promise<void> {
   if (error || !positions || positions.length === 0) return;
 
   // Check daily loss limit (for live trading)
-  if (LIVE_TRADING) await checkDailyLossLimit();
+  const liveMode = await isLiveTrading();
+  if (liveMode) await checkDailyLossLimit();
 
   console.log(`  [GUARD] Checking ${positions.length} open position(s)...`);
 
@@ -185,15 +196,15 @@ async function checkPositions(): Promise<void> {
         .eq("id", pos.id);
       await updateBankroll(pnlUsd);
 
-      // Jupiter live sell (if enabled and daily limit not hit)
-      if (LIVE_TRADING && !dailyLossLimitHit) {
+      // Jupiter live sell (if enabled via dashboard and daily limit not hit)
+      if (liveMode && !dailyLossLimitHit) {
         const sig = await sellToken(pos.coin_address);
         if (sig) {
           console.log(`  [GUARD] 🔴 LIVE SELL executed: ${sig} (${exitReason})`);
         } else {
           console.log(`  [GUARD] ⚠️ LIVE SELL failed for ${coinLabel} — paper close still recorded`);
         }
-      } else if (LIVE_TRADING && dailyLossLimitHit) {
+      } else if (liveMode && dailyLossLimitHit) {
         console.log(`  [GUARD] 🛑 LIVE SELL skipped for ${coinLabel} — daily loss limit hit`);
       }
     }
@@ -342,7 +353,8 @@ async function checkPositions(): Promise<void> {
 }
 
 export async function startRiskGuard(): Promise<void> {
-  console.log(`  [GUARD] Starting risk guard... (LIVE: ${LIVE_TRADING ? "🔴 ON" : "⚪ OFF"})`);
+  const startLive = await isLiveTrading();
+  console.log(`  [GUARD] Starting risk guard... (LIVE: ${startLive ? "🔴 ON" : "⚪ OFF"} — dashboard controlled)`);
   console.log(
     `  [GUARD] Exit priority: CB(-${CIRCUIT_BREAKER_PCT}%) > Whale > SL(-${STOP_LOSS_PCT}%) > TO(${TIMEOUT_MINUTES}min) > Grid | Poll: ${POSITION_CHECK_MS / 1000}s`
   );

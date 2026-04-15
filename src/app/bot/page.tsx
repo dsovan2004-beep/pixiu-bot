@@ -59,6 +59,8 @@ export default function BotPage() {
     current_balance: number;
     total_pnl_usd: number;
   } | null>(null);
+  const [liveTrading, setLiveTrading] = useState(false);
+  const [togglingLive, setTogglingLive] = useState(false);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [whaleSells, setWhaleSells] = useState<
     Record<string, Array<{ wallet_tag: string; signal_time: string }>>
@@ -104,7 +106,10 @@ export default function BotPage() {
           .single(),
       ]);
 
-    if (stateRes.data && stateRes.data.length > 0) setBotState(stateRes.data[0]);
+    if (stateRes.data && stateRes.data.length > 0) {
+      setBotState(stateRes.data[0]);
+      setLiveTrading(stateRes.data[0].mode === "live");
+    }
     setSignals(signalsRes.data || []);
     setWalletCount(walletsRes.count || 0);
     setOpenTrades(openRes.data || []);
@@ -180,6 +185,20 @@ export default function BotPage() {
       .eq("id", botState.id);
     setBotState({ ...botState, is_running: newState });
     setToggling(false);
+  }
+
+  async function toggleLiveTrading() {
+    if (!botState) return;
+    setTogglingLive(true);
+    const newLive = !liveTrading;
+    const newMode = newLive ? "live" : "paper";
+    await supabase
+      .from("bot_state")
+      .update({ mode: newMode, last_updated: new Date().toISOString() })
+      .eq("id", botState.id);
+    setLiveTrading(newLive);
+    setBotState({ ...botState, mode: newMode });
+    setTogglingLive(false);
   }
 
   // ─── Paper Trade Stats (from ALL closed trades, not just display limit) ──
@@ -288,7 +307,7 @@ export default function BotPage() {
           <Card label="Signals" value={String(signals.length)} />
         </div>
 
-        {/* Start/Stop Button */}
+        {/* Start/Stop + Live Trading Toggle */}
         <div className="flex items-center gap-4">
           <button
             onClick={toggleBot}
@@ -300,6 +319,21 @@ export default function BotPage() {
             } disabled:opacity-50 disabled:cursor-not-allowed`}
           >
             {toggling ? "..." : botState?.is_running ? "STOP BOT" : "START BOT"}
+          </button>
+          <button
+            onClick={toggleLiveTrading}
+            disabled={togglingLive}
+            className={`px-6 py-2 rounded-lg font-mono font-bold text-sm transition-colors ${
+              liveTrading
+                ? "bg-red-600 hover:bg-red-700 text-white border-2 border-red-400"
+                : "bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border-2 border-zinc-700"
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
+          >
+            {togglingLive
+              ? "..."
+              : liveTrading
+                ? "LIVE TRADING"
+                : "PAPER ONLY"}
           </button>
           {lastFetch && (
             <span className="text-zinc-600 text-xs">
