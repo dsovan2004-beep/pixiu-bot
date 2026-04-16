@@ -269,7 +269,7 @@ export default function BotPage() {
             <div className="flex items-center justify-between mb-2">
               <div>
                 <span className="text-red-400 font-bold text-sm font-mono">LIVE TRADING ACTIVE</span>
-                <span className="text-zinc-500 text-xs ml-2">0.10 SOL/trade</span>
+                <span className="text-zinc-500 text-xs ml-2">0.05 SOL/trade</span>
               </div>
               <div className="text-right">
                 <span className="text-white font-bold font-mono text-lg">
