@@ -14,7 +14,9 @@ import {
   RECENTLY_TRADED_COOLDOWN_MS,
   POSITION_SIZE_PCT,
 } from "@/config/smart-money";
-import { isPriceTooHigh } from "@/lib/entry-guards";
+// Inline price guard — can't import entry-guards.ts here because it pulls in
+// supabase-server.ts which uses Node 'path' module (incompatible with Edge Runtime)
+const MAX_ENTRY_PRICE = 0.001; // $0.001 USD — must match entry-guards.ts
 
 export const runtime = "edge";
 
@@ -314,7 +316,7 @@ async function evaluateAndEnter(
   }
 
   // Max entry price filter — reject high-priced stable tokens
-  if (isPriceTooHigh(price)) {
+  if (price > MAX_ENTRY_PRICE) {
     console.log(`  [VALIDATOR] Rejected — price too high: $${price.toFixed(10)} (max $0.001)`);
     return { entered: false, reason: `price too high: $${price}` };
   }
