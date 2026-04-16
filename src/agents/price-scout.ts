@@ -8,6 +8,7 @@
  */
 
 import supabase from "../lib/supabase-server";
+import { isPriceTooHigh } from "../lib/entry-guards";
 
 interface EntryEvent {
   coin_address: string;
@@ -135,6 +136,14 @@ export async function startPriceScout(): Promise<void> {
       console.log(
         `  [SCOUT] ${coin} price confirmed $${price.toFixed(10)} (source: ${source})`
       );
+
+      // Filter 0: Max entry price — reject high-priced stable tokens
+      if (isPriceTooHigh(price)) {
+        console.log(
+          `  [VALIDATOR] Rejected — price too high: $${price.toFixed(10)} (max $0.001)`
+        );
+        return;
+      }
 
       // Filter 1: Minimum liquidity check
       const { liquidity, passed: liqPassed } = await checkLiquidity(
