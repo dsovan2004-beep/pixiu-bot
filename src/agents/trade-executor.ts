@@ -39,6 +39,10 @@ export async function startTradeExecutor(): Promise<void> {
   // Poll for new open positions every 3s
   setInterval(async () => {
     try {
+      // Check if bot is stopped via dashboard
+      const { data: botState } = await supabase.from("bot_state").select("is_running").limit(1).single();
+      if (botState && botState.is_running === false) return;
+
       const live = await isLiveTrading();
       if (!live) return;
 

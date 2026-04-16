@@ -154,6 +154,10 @@ const closingPositions = new Set<string>();
 // ─── Position Check Loop ────────────────────────────────
 
 async function checkPositions(): Promise<void> {
+  // Check if bot is stopped via dashboard
+  const { data: botState } = await supabase.from("bot_state").select("is_running").limit(1).single();
+  if (botState && botState.is_running === false) return;
+
   const { data: positions, error } = await supabase
     .from("paper_trades")
     .select("*")
@@ -216,17 +220,16 @@ async function checkPositions(): Promise<void> {
         .eq("id", pos.id);
       await updateBankroll(pnlUsd);
 
-      // Jupiter live sell — re-check live mode for each position (not cached from loop start)
-      const liveSellMode = await isLiveTrading();
-      if (liveSellMode && !dailyLossLimitHit) {
+      // Jupiter live sell — only for [LIVE] tagged trades, always attempt regardless of grid level
+      const isLiveTrade = pos.wallet_tag?.includes("[LIVE]");
+      if (isLiveTrade) {
+        console.log(`  [GUARD] [LIVE SELL] ${coinLabel} grid_level=${gridLvl} remaining=${remainingPct}% — selling via Jupiter`);
         const sig = await sellToken(pos.coin_address);
         if (sig) {
           console.log(`  [GUARD] 🔴 LIVE SELL executed: ${sig} (${exitReason})`);
         } else {
-          console.log(`  [GUARD] ⚠️ LIVE SELL failed for ${coinLabel} — paper close still recorded`);
+          console.log(`  [GUARD] ⚠️ LIVE SELL failed for ${coinLabel} — no tokens found (buy may have failed)`);
         }
-      } else if (liveSellMode && dailyLossLimitHit) {
-        console.log(`  [GUARD] 🛑 LIVE SELL skipped for ${coinLabel} — daily loss limit hit`);
       }
     }
 
