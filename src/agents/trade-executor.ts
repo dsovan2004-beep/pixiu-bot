@@ -90,7 +90,11 @@ export async function startTradeExecutor(): Promise<void> {
             .update({ wallet_tag: `${trade.wallet_tag} [LIVE]` })
             .eq("id", trade.id);
         } else {
-          console.log(`  [EXECUTOR] ⚠️ LIVE BUY failed for ${coin} — paper trade still open`);
+          console.log(`  [EXECUTOR] ⚠️ Buy failed — marking trade as failed, skipping guard monitoring`);
+          await supabase
+            .from("paper_trades")
+            .update({ status: "failed", exit_reason: "buy_failed" })
+            .eq("id", trade.id);
         }
       }
     } catch (err: any) {
