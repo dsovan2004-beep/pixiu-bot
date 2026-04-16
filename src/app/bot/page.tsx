@@ -97,10 +97,10 @@ export default function BotPage() {
           .eq("status", "closed")
           .order("exit_time", { ascending: false })
           .limit(50),
-        // Fetch ALL closed trades for accurate stats (just pnl fields, not full rows)
+        // Fetch ALL closed trades for stats (include wallet_tag for [LIVE] filter)
         supabase
           .from("paper_trades")
-          .select("pnl_pct, pnl_usd, exit_reason")
+          .select("pnl_pct, pnl_usd, exit_reason, wallet_tag")
           .eq("status", "closed"),
         supabase
           .from("paper_bankroll")
@@ -217,9 +217,8 @@ export default function BotPage() {
     setTogglingLive(false);
   }
 
-  // ─── Trade display — table/positions filter by [LIVE], stats always show all ──
+  // ─── Trade display — filter by [LIVE] when live mode ──
 
-  // Table and positions: filter to [LIVE] only when live mode
   const displayOpenTrades = liveTrading
     ? openTrades.filter((t) => t.wallet_tag?.includes("[LIVE]"))
     : openTrades;
@@ -227,10 +226,13 @@ export default function BotPage() {
     ? closedTrades.filter((t) => t.wallet_tag?.includes("[LIVE]"))
     : closedTrades;
 
-  // Stats cards: ALWAYS use all trades (full bot history)
-  const totalClosed = allClosedStats.length;
-  const wins = allClosedStats.filter((t) => Number(t.pnl_pct) > 0);
-  const losses = allClosedStats.filter((t) => Number(t.pnl_pct) <= 0);
+  // Stats: filter to [LIVE] only when live mode
+  const statsData = liveTrading
+    ? allClosedStats.filter((t: any) => t.wallet_tag?.includes("[LIVE]"))
+    : allClosedStats;
+  const totalClosed = statsData.length;
+  const wins = statsData.filter((t) => Number(t.pnl_pct) > 0);
+  const losses = statsData.filter((t) => Number(t.pnl_pct) <= 0);
   const winRate = totalClosed > 0 ? ((wins.length / totalClosed) * 100).toFixed(1) : "0";
   const avgGain =
     wins.length > 0
@@ -418,7 +420,7 @@ export default function BotPage() {
         {/* ─── Paper Trading Stats ────────────────────────── */}
         <section>
           <h2 className="text-lg font-semibold text-zinc-300 mb-3">
-            {liveTrading ? "Live Trades" : "Paper Trading"}
+            {liveTrading ? "Live Trade Performance" : "Paper Trading"}
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Card label="Total Trades" value={String(totalClosed)} />
