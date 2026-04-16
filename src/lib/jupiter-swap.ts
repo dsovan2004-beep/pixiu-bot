@@ -361,9 +361,9 @@ export async function sellToken(
           continue; // Try next slippage level for any on-chain error
         }
 
-        // Unknown status after all retries
-        console.error(`  [JUPITER] SELL status unknown after 60s — check manually: ${signature}`);
-        return signature; // Return sig so caller knows a tx was attempted
+        // Unknown status after all retries — tx likely expired, retry at next slippage
+        console.error(`  [JUPITER] SELL status unknown after 60s — tx likely expired, retrying at higher slippage...`);
+        continue; // Try next slippage level with fresh tx
       } catch (err: any) {
         console.error(`  [JUPITER] SELL attempt at ${slippage / 100}% failed: ${err.message}`);
       }
