@@ -8,7 +8,6 @@
 
 import { createClient } from "@supabase/supabase-js";
 import {
-  TOP_ELITE_ADDRESSES,
   MAX_GAP_MINUTES,
   MAX_ENTRY_MC,
   RECENTLY_TRADED_COOLDOWN_MS,
@@ -247,9 +246,6 @@ async function evaluateAndEnter(
     }
   }
 
-  // Check if THIS wallet is Smart Money
-  const isSmartMoney = TOP_ELITE_ADDRESSES.has(walletAddress);
-
   // Get all BUY signals for this coin in last 30 min
   const signalCutoff = new Date(Date.now() - 30 * 60_000).toISOString();
   const { data: recentSignals } = await supabase
@@ -263,23 +259,27 @@ async function evaluateAndEnter(
   const allTags = new Set((recentSignals || []).map((s) => s.wallet_tag));
   allTags.add(walletTag); // Include current signal
 
-  // Get wallet addresses for all tags to check Smart Money
+  // DB-backed T1 check — tier=1 can trigger solo, tier=2 needs T1 confirmation
+  // Replaces hardcoded TOP_ELITE_ADDRESSES so demotions in DB take effect instantly
   const { data: walletRows } = await supabase
     .from("tracked_wallets")
-    .select("wallet_address, tag")
-    .in("tag", Array.from(allTags));
+    .select("tag, tier, active")
+    .in("tag", Array.from(allTags))
+    .eq("active", true);
 
-  const tagToAddr = new Map<string, string>();
-  for (const w of walletRows || []) tagToAddr.set(w.tag, w.wallet_address);
+  const tagToTier = new Map<string, number>();
+  for (const w of walletRows || []) {
+    tagToTier.set(w.tag, w.tier ?? 0);
+  }
 
-  // Count Smart Money wallets and total unique wallets
+  // Count T1 wallets via DB tier (not hardcoded Set)
   let smartMoneyCount = 0;
   const smartMoneyNames: string[] = [];
   const otherNames: string[] = [];
 
   for (const tag of allTags) {
-    const addr = tagToAddr.get(tag);
-    if (addr && TOP_ELITE_ADDRESSES.has(addr)) {
+    const tier = tagToTier.get(tag);
+    if (tier === 1) {
       smartMoneyCount++;
       smartMoneyNames.push(tag);
     } else {
@@ -289,7 +289,11 @@ async function evaluateAndEnter(
 
   // REQUIRE: at least 1 T1 Smart Money — solo T1 buy is enough
   if (smartMoneyCount === 0) {
-    return { entered: false, reason: `no Smart Money (${allTags.size} wallets, 0 T1)` };
+    const t2Names = Array.from(allTags).filter((t) => tagToTier.get(t) === 2);
+    const reason = t2Names.length > 0
+      ? `no T1 Smart Money — ${t2Names.length} T2 wallet(s) need T1 confirmation: ${t2Names.join(",")}`
+      : `no T1 Smart Money (${allTags.size} wallets, 0 T1)`;
+    return { entered: false, reason };
   }
 
   // Bundle check: any wallet = 80%+ of signals
