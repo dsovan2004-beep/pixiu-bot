@@ -77,14 +77,3 @@ export async function isRugStorm(): Promise<boolean> {
   return false;
 }
 
-// ─── Max Entry Price Filter ────────────────────────────
-// Reject tokens priced above $0.001 — the strategy only works
-// on micro-cap pump.fun meme coins that can 2-5x quickly.
-// Higher-priced stable tokens (Drift, unc, Normie) barely move
-// and net-lose after ~2% fees/slippage.
-
-const MAX_ENTRY_PRICE = 0.001; // $0.001 USD
-
-export function isPriceTooHigh(priceUsd: number): boolean {
-  return priceUsd > MAX_ENTRY_PRICE;
-}

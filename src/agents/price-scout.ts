@@ -8,7 +8,7 @@
  */
 
 import supabase from "../lib/supabase-server";
-import { isPriceTooHigh } from "../lib/entry-guards";
+import { isPriceTooHigh } from "../lib/price-guards";
 
 interface EntryEvent {
   coin_address: string;
