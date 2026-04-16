@@ -13,10 +13,33 @@
 
 import supabase from "../lib/supabase-server";
 import {
-  TOP_ELITE_ADDRESSES,
   RECENTLY_TRADED_COOLDOWN_MS,
 } from "../config/smart-money";
 import { isRugStorm } from "../lib/entry-guards";
+
+// ─── DB-backed T1 tier check with 60s cache ────────────
+// Replaces hardcoded TOP_ELITE_ADDRESSES — tier changes in DB take effect immediately
+const tierCache = new Map<string, { tier: number; cachedAt: number }>();
+const TIER_CACHE_MS = 60_000; // 60s cache per wallet address
+
+async function isT1Wallet(walletAddress: string): Promise<boolean> {
+  const cached = tierCache.get(walletAddress);
+  if (cached && Date.now() - cached.cachedAt < TIER_CACHE_MS) {
+    return cached.tier === 1;
+  }
+
+  const { data } = await supabase
+    .from("tracked_wallets")
+    .select("tier")
+    .eq("wallet_address", walletAddress)
+    .eq("active", true)
+    .limit(1)
+    .single();
+
+  const tier = data?.tier ?? 0;
+  tierCache.set(walletAddress, { tier, cachedAt: Date.now() });
+  return tier === 1;
+}
 
 // Stablecoin name filter — reject scam tokens using stablecoin names
 const STABLECOIN_KEYWORDS = [
@@ -151,10 +174,17 @@ export async function startSignalValidator(): Promise<void> {
 
       for (const tag of allTags) {
         const addr = tagToAddr.get(tag);
-        if (addr && TOP_ELITE_ADDRESSES.has(addr)) {
+        if (addr && (await isT1Wallet(addr))) {
           smartMoneyCount++;
           smartMoneyNames.push(tag);
         } else {
+          if (addr) {
+            // Check if this is a known T2 wallet (demoted but still tracked)
+            const cached = tierCache.get(addr);
+            if (cached && cached.tier === 2) {
+              console.log(`  [VALIDATOR] T2 wallet — needs T1 confirmation: ${tag}`);
+            }
+          }
           otherNames.push(tag);
         }
       }
