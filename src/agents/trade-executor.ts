@@ -11,7 +11,7 @@ import supabase from "../lib/supabase-server";
 import { buyToken } from "../lib/jupiter-swap";
 
 const POLL_MS = 3_000;
-const LIVE_BUY_SOL = 0.10;
+const LIVE_BUY_SOL = 0.05; // Reduced from 0.10 to limit losses while stabilizing
 const DAILY_LOSS_LIMIT_SOL = 5.0; // Max 50 losses × 0.10 SOL before blocking
 
 async function isLiveTrading(): Promise<boolean> {
