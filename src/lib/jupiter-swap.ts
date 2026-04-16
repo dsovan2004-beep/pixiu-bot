@@ -101,7 +101,7 @@ export async function buyToken(
     }
     const quoteResponse = await quoteRes.json();
 
-    // 2. Get swap transaction
+    // 2. Get swap transaction with priority fee
     const swapRes = await fetch(JUPITER_SWAP_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -109,6 +109,7 @@ export async function buyToken(
         quoteResponse,
         userPublicKey: walletPubkey,
         wrapAndUnwrapSol: true,
+        prioritizationFeeLamports: "auto",
       }),
     });
     if (!swapRes.ok) {
@@ -276,6 +277,7 @@ export async function sellToken(
             quoteResponse,
             userPublicKey: walletPubkey,
             wrapAndUnwrapSol: true,
+            prioritizationFeeLamports: "auto",
           }),
         });
         if (!swapRes.ok) {
