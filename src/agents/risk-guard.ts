@@ -154,9 +154,9 @@ const closingPositions = new Set<string>();
 // ─── Position Check Loop ────────────────────────────────
 
 async function checkPositions(): Promise<void> {
-  // Check if bot is stopped via dashboard
+  // Check if bot is stopped via dashboard — MUST be first check
   const { data: botState } = await supabase.from("bot_state").select("is_running").limit(1).single();
-  if (botState && botState.is_running === false) return;
+  if (!botState || !botState.is_running) return;
 
   const { data: positions, error } = await supabase
     .from("paper_trades")
