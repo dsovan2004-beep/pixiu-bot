@@ -16,6 +16,7 @@ import {
   RECENTLY_TRADED_COOLDOWN_MS,
 } from "../config/smart-money";
 import { isRugStorm } from "../lib/entry-guards";
+import { isOffensiveName } from "../lib/price-guards";
 
 // ─── DB-backed T1 tier check with 60s cache ────────────
 // Replaces hardcoded TOP_ELITE_ADDRESSES — tier changes in DB take effect immediately
@@ -87,6 +88,12 @@ export async function startSignalValidator(): Promise<void> {
       // 0a. Rug storm detection — 3+ losses in last 5 trades → pause 30min
       if (await isRugStorm()) {
         console.log(`  [VALIDATOR] 🛑 ${coin} blocked — rug storm active`);
+        return;
+      }
+
+      // 0b. Offensive name filter — block hate speech / slurs
+      if (isOffensiveName(signal.coin_name)) {
+        console.log(`  [FILTER] Blocked offensive coin name: ${signal.coin_name}`);
         return;
       }
 

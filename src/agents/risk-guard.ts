@@ -74,8 +74,20 @@ async function checkDailyLossLimit(): Promise<void> {
   if (totalLossSol >= DAILY_LOSS_LIMIT_SOL) {
     dailyLossLimitHit = true;
     console.log(
-      `  [GUARD] 🛑 Daily loss limit hit — ${lossCount} losing trades × 0.05 = ${totalLossSol.toFixed(2)} SOL. Stopping live trades.`
+      `  [GUARD] 🛑 Daily loss limit hit — ${lossCount} losing trades × 0.05 = ${totalLossSol.toFixed(2)} SOL`
     );
+    // Stop the bot via Supabase — executor checks is_running on every poll
+    try {
+      await supabase
+        .from("bot_state")
+        .update({ is_running: false })
+        .eq("is_running", true);
+      console.log(
+        `  [GUARD] Daily loss limit reached — setting bot to STOPPED.`
+      );
+    } catch (err: any) {
+      console.error(`  [GUARD] Failed to stop bot: ${err.message}`);
+    }
   }
 }
 

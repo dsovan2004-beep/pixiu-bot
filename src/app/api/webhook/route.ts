@@ -13,7 +13,7 @@ import {
   RECENTLY_TRADED_COOLDOWN_MS,
   POSITION_SIZE_PCT,
 } from "@/config/smart-money";
-import { isPriceTooHigh } from "@/lib/price-guards";
+import { isPriceTooHigh, isOffensiveName } from "@/lib/price-guards";
 
 export const runtime = "edge";
 
@@ -201,6 +201,12 @@ async function evaluateAndEnter(
   // Stablecoin name filter — fastest rejection
   if (coinName && isStablecoinName(coinName)) {
     return { entered: false, reason: `stablecoin name filter: ${coinName}` };
+  }
+
+  // Offensive name filter — block hate speech / slurs
+  if (isOffensiveName(coinName)) {
+    console.log(`  [FILTER] Blocked offensive coin name: ${coinName}`);
+    return { entered: false, reason: `offensive name filter: ${coinName}` };
   }
 
   // Gap filter
