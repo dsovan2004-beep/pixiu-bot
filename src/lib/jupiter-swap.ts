@@ -309,15 +309,35 @@ export async function sellToken(
           `  [JUPITER] SELL sent at ${slippage / 100}%: ${coinAddress.slice(0, 8)}... → ${signature}`
         );
 
-        // Non-blocking confirmation
+        // Confirm sell with retries — same as buy: 6 retries × 10s
+        console.log(`  [JUPITER] SELL waiting for confirmation (up to 60s)...`);
         connection.confirmTransaction(signature, "confirmed").then((conf) => {
           if (conf.value.err) {
             console.error(`  [JUPITER] SELL tx FAILED on-chain: ${signature} — ${JSON.stringify(conf.value.err)}`);
           } else {
             console.log(`  [JUPITER] SELL confirmed on-chain: ${signature}`);
           }
-        }).catch(() => {
-          console.error(`  [JUPITER] SELL confirmation timeout: ${signature} — check manually`);
+        }).catch(async () => {
+          console.log(`  [JUPITER] SELL confirmation timeout — polling tx status (6 retries, 10s intervals)...`);
+          for (let attempt = 1; attempt <= 6; attempt++) {
+            await new Promise((r) => setTimeout(r, 10_000));
+            try {
+              const status = await connection.getSignatureStatus(signature);
+              const cs = status.value?.confirmationStatus;
+              if (cs === "confirmed" || cs === "finalized") {
+                if (status.value!.err) {
+                  console.error(`  [JUPITER] SELL verified FAILED (attempt ${attempt}): ${signature}`);
+                  return;
+                }
+                console.log(`  [JUPITER] SELL verified SUCCESS (attempt ${attempt}, late confirm): ${signature}`);
+                return;
+              }
+              console.log(`  [JUPITER] SELL status check ${attempt}/6: ${cs || "not found yet"}`);
+            } catch {
+              console.log(`  [JUPITER] SELL status check ${attempt}/6: RPC error, retrying...`);
+            }
+          }
+          console.error(`  [JUPITER] SELL status unknown after 60s — check manually: ${signature}`);
         });
 
         return signature;

@@ -14,6 +14,7 @@ import {
   RECENTLY_TRADED_COOLDOWN_MS,
   POSITION_SIZE_PCT,
 } from "@/config/smart-money";
+import { isPriceTooHigh } from "@/lib/entry-guards";
 
 export const runtime = "edge";
 
@@ -310,6 +311,12 @@ async function evaluateAndEnter(
   if (!price || price <= 0) {
     console.log(`  [SKIP] ${coinName} — could not fetch price, skipping entry`);
     return { entered: false, reason: `price fetch failed (source: ${source})` };
+  }
+
+  // Max entry price filter — reject high-priced stable tokens
+  if (isPriceTooHigh(price)) {
+    console.log(`  [VALIDATOR] Rejected — price too high: $${price.toFixed(10)} (max $0.001)`);
+    return { entered: false, reason: `price too high: $${price}` };
   }
 
   // Liquidity check
