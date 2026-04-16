@@ -21,7 +21,8 @@ import bs58 from "bs58";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUPITER_QUOTE_URL = "https://api.jup.ag/swap/v1/quote";
 const JUPITER_SWAP_URL = "https://api.jup.ag/swap/v1/swap";
-const SLIPPAGE_BPS = 500; // 5% slippage — pump.fun tokens need higher
+const BUY_SLIPPAGE_BPS = 500; // 5% for buys
+const SELL_SLIPPAGE_BPS = [500, 1000, 2000]; // Auto-escalate: 5% → 10% → 20% on retry
 
 function isDevnet(): boolean {
   return process.env.SOLANA_NETWORK === "devnet";
@@ -92,7 +93,7 @@ export async function buyToken(
     console.log(`  [JUPITER] BUY on ${network}: ${coinAddress.slice(0, 8)}... for ${amountSol} SOL`);
 
     // 1. Get quote
-    const quoteUrl = `${JUPITER_QUOTE_URL}?inputMint=${SOL_MINT}&outputMint=${coinAddress}&amount=${amountLamports}&slippageBps=${SLIPPAGE_BPS}`;
+    const quoteUrl = `${JUPITER_QUOTE_URL}?inputMint=${SOL_MINT}&outputMint=${coinAddress}&amount=${amountLamports}&slippageBps=${BUY_SLIPPAGE_BPS}`;
     const quoteRes = await fetch(quoteUrl);
     if (!quoteRes.ok) {
       console.error(`  [JUPITER] Quote failed: ${quoteRes.status}`);
@@ -239,57 +240,69 @@ export async function sellToken(
 
     console.log(`  [JUPITER] Token balance: ${tokenAmount} for ${coinAddress.slice(0, 8)}...`);
 
-    // 1. Get quote (token → SOL)
-    const quoteUrl = `${JUPITER_QUOTE_URL}?inputMint=${coinAddress}&outputMint=${SOL_MINT}&amount=${tokenAmount}&slippageBps=${SLIPPAGE_BPS}`;
-    const quoteRes = await fetch(quoteUrl);
-    if (!quoteRes.ok) {
-      console.error(`  [JUPITER] Sell quote failed: ${quoteRes.status}`);
-      return null;
-    }
-    const quoteResponse = await quoteRes.json();
+    // Auto-escalate slippage: try 5% → 10% → 20%
+    for (const slippage of SELL_SLIPPAGE_BPS) {
+      try {
+        console.log(`  [JUPITER] Trying sell at ${slippage / 100}% slippage...`);
 
-    // 2. Get swap transaction
-    const swapRes = await fetch(JUPITER_SWAP_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        quoteResponse,
-        userPublicKey: walletPubkey,
-        wrapAndUnwrapSol: true,
-      }),
-    });
-    if (!swapRes.ok) {
-      console.error(`  [JUPITER] Sell swap tx failed: ${swapRes.status}`);
-      return null;
-    }
-    const { swapTransaction } = await swapRes.json();
+        // 1. Get quote
+        const quoteUrl = `${JUPITER_QUOTE_URL}?inputMint=${coinAddress}&outputMint=${SOL_MINT}&amount=${tokenAmount}&slippageBps=${slippage}`;
+        const quoteRes = await fetch(quoteUrl);
+        if (!quoteRes.ok) {
+          console.error(`  [JUPITER] Sell quote failed: ${quoteRes.status}`);
+          continue;
+        }
+        const quoteResponse = await quoteRes.json();
 
-    // 3. Deserialize, sign, and send
-    const txBuf = Buffer.from(swapTransaction, "base64");
-    const tx = VersionedTransaction.deserialize(txBuf);
-    tx.sign([keypair]);
+        // 2. Get swap transaction
+        const swapRes = await fetch(JUPITER_SWAP_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            quoteResponse,
+            userPublicKey: walletPubkey,
+            wrapAndUnwrapSol: true,
+          }),
+        });
+        if (!swapRes.ok) {
+          console.error(`  [JUPITER] Sell swap tx failed: ${swapRes.status}`);
+          continue;
+        }
+        const { swapTransaction } = await swapRes.json();
 
-    const signature = await connection.sendRawTransaction(tx.serialize(), {
-      skipPreflight: true,
-      maxRetries: 3,
-    });
+        // 3. Deserialize, sign, and send
+        const txBuf = Buffer.from(swapTransaction, "base64");
+        const tx = VersionedTransaction.deserialize(txBuf);
+        tx.sign([keypair]);
 
-    console.log(
-      `  [JUPITER] SELL sent: ${coinAddress.slice(0, 8)}... ${tokenAmount} → ${signature}`
-    );
+        const signature = await connection.sendRawTransaction(tx.serialize(), {
+          skipPreflight: true,
+          maxRetries: 3,
+        });
 
-    // Non-blocking confirmation — don't block the risk guard for 30s
-    connection.confirmTransaction(signature, "confirmed").then((conf) => {
-      if (conf.value.err) {
-        console.error(`  [JUPITER] SELL tx FAILED on-chain: ${signature} — ${JSON.stringify(conf.value.err)}`);
-      } else {
-        console.log(`  [JUPITER] SELL confirmed on-chain: ${signature}`);
+        console.log(
+          `  [JUPITER] SELL sent at ${slippage / 100}%: ${coinAddress.slice(0, 8)}... → ${signature}`
+        );
+
+        // Non-blocking confirmation
+        connection.confirmTransaction(signature, "confirmed").then((conf) => {
+          if (conf.value.err) {
+            console.error(`  [JUPITER] SELL tx FAILED on-chain: ${signature} — ${JSON.stringify(conf.value.err)}`);
+          } else {
+            console.log(`  [JUPITER] SELL confirmed on-chain: ${signature}`);
+          }
+        }).catch(() => {
+          console.error(`  [JUPITER] SELL confirmation timeout: ${signature} — check manually`);
+        });
+
+        return signature;
+      } catch (err: any) {
+        console.error(`  [JUPITER] SELL attempt at ${slippage / 100}% failed: ${err.message}`);
       }
-    }).catch(() => {
-      console.error(`  [JUPITER] SELL confirmation timeout: ${signature} — check manually`);
-    });
+    }
 
-    return signature;
+    console.error(`  [JUPITER] SELL failed after all slippage attempts for ${coinAddress.slice(0, 8)}...`);
+    return null;
   } catch (err: any) {
     console.error(`  [JUPITER] SELL failed: ${err.message}`);
     return null;
