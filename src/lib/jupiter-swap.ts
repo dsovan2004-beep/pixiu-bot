@@ -21,7 +21,7 @@ import bs58 from "bs58";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUPITER_QUOTE_URL = "https://api.jup.ag/swap/v1/quote";
 const JUPITER_SWAP_URL = "https://api.jup.ag/swap/v1/swap";
-const BUY_SLIPPAGE_BPS = 500; // 5% for buys
+const BUY_SLIPPAGE_BPS = 1000; // 10% for buys — pump.fun tokens need higher
 const SELL_SLIPPAGE_BPS = [500, 1000, 2000]; // Auto-escalate: 5% → 10% → 20% on retry
 
 function isDevnet(): boolean {
