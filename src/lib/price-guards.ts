@@ -23,11 +23,17 @@ export function isPriceTooHigh(priceUsd: number): boolean {
 // Case-insensitive substring match on normalized name (spaces/punct stripped).
 
 const OFFENSIVE_TERMS = [
-  // Nazi / fascism
-  "nazi", "reich", "hitler", "fuhrer", "fuehrer", "heil", "swastika",
-  "thirdreich", "ss ", " ss", "gestapo", "holocaust",
+  // Nazi / fascism (with leet-speak variants to catch evasion attempts)
+  "nazi", "n4zi", "naz1",
+  "reich", "r3ich", "re1ch",
+  "thirdreich", "thirdr3ich", "3rdreich", "3rdr3ich",
+  "hitler", "h1tler", "hitl3r",
+  "fuhrer", "fuehrer", "fuhr3r",
+  "heil", "h3il",
+  "swastika",
+  "ss ", " ss", "gestapo", "holocaust",
   // Racial slurs (variations)
-  "nigger", "nigga", "n1gger", "n1gga", "niggr",
+  "nigger", "nigga", "n1gger", "n1gga", "niggr", "n1ggr",
   "chink", "gook", "spic", "kike", "wetback", "raghead",
   "tranny", "faggot", "f4ggot", "fagg0t",
   "retard", "retrd",
