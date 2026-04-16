@@ -174,6 +174,17 @@ async function checkPositions(): Promise<void> {
   for (const pos of positions) {
     // Skip if this position is already being closed
     if (closingPositions.has(pos.id)) continue;
+
+    // Skip pre-confirmation positions in live mode
+    // If live mode + no [LIVE] tag + less than 2min old → buy is still confirming
+    // Avoids running grid/SL on positions that may never actually land on-chain
+    if (liveMode && !pos.wallet_tag?.includes("[LIVE]")) {
+      const ageMs = Date.now() - new Date(pos.entry_time).getTime();
+      if (ageMs < 120_000) {
+        continue; // Buy still confirming, don't track yet
+      }
+    }
+
     const { price: currentPrice, source } = await getPrice(pos.coin_address);
     const entryPrice = Number(pos.entry_price);
     const coinLabel = pos.coin_name || pos.coin_address.slice(0, 8) + "...";
