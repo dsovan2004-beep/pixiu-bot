@@ -11,7 +11,7 @@ import supabase from "../lib/supabase-server";
 import { buyToken } from "../lib/jupiter-swap";
 
 const POLL_MS = 3_000;
-const LIVE_BUY_SOL = 0.05;
+const LIVE_BUY_SOL = 0.10;
 
 async function isLiveTrading(): Promise<boolean> {
   try {
@@ -65,7 +65,7 @@ export async function startTradeExecutor(): Promise<void> {
         const coin = trade.coin_name || trade.coin_address.slice(0, 8) + "...";
         console.log(`  [EXECUTOR] New trade detected: ${coin} — attempting LIVE BUY...`);
 
-        // Check daily loss limit — count losing LIVE trades × 0.05 SOL
+        // Check daily loss limit — count losing LIVE trades × 0.10 SOL
         const todayStart = `${new Date().toISOString().slice(0, 10)}T00:00:00Z`;
         const { count: lossCount } = await supabase
           .from("paper_trades")
@@ -74,10 +74,10 @@ export async function startTradeExecutor(): Promise<void> {
           .gte("exit_time", todayStart)
           .lt("pnl_pct", 0)
           .like("wallet_tag", "%[LIVE]%");
-        const totalLossSol = (lossCount || 0) * 0.05;
+        const totalLossSol = (lossCount || 0) * 0.10;
 
         if (totalLossSol >= 2.0) {
-          console.log(`  [EXECUTOR] 🛑 LIVE BUY skipped — daily loss limit: ${lossCount} losses × 0.05 = ${totalLossSol.toFixed(2)} SOL`);
+          console.log(`  [EXECUTOR] 🛑 LIVE BUY skipped — daily loss limit: ${lossCount} losses × 0.10 = ${totalLossSol.toFixed(2)} SOL`);
           continue;
         }
 
