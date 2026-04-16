@@ -32,6 +32,8 @@ async function isLiveTrading(): Promise<boolean> {
 
 // Track which trades we've already tried to buy
 const processedTrades = new Set<string>();
+// In-memory lock: coin addresses with a buy currently in-flight (confirming)
+const activeBuys = new Set<string>();
 
 export async function startTradeExecutor(): Promise<void> {
   const startLive = await isLiveTrading();
@@ -65,7 +67,13 @@ export async function startTradeExecutor(): Promise<void> {
 
         const coin = trade.coin_name || trade.coin_address.slice(0, 8) + "...";
 
-        // Duplicate buy check — skip if another open/pending LIVE trade exists for same mint
+        // In-memory lock — block duplicate buys while confirmation is in-flight
+        if (activeBuys.has(trade.coin_address)) {
+          console.log(`  [EXECUTOR] Skipping — buy already in progress for ${coin}`);
+          continue;
+        }
+
+        // DB-level duplicate check — skip if another open LIVE trade exists for same mint
         const { count: liveOpenCount } = await supabase
           .from("paper_trades")
           .select("id", { count: "exact", head: true })
@@ -97,20 +105,25 @@ export async function startTradeExecutor(): Promise<void> {
           continue;
         }
 
-        const sig = await buyToken(trade.coin_address, LIVE_BUY_SOL);
-        if (sig) {
-          console.log(`  [EXECUTOR] 🔴 LIVE BUY executed: ${sig}`);
-          // Tag as [LIVE]
-          await supabase
-            .from("paper_trades")
-            .update({ wallet_tag: `${trade.wallet_tag} [LIVE]` })
-            .eq("id", trade.id);
-        } else {
-          console.log(`  [EXECUTOR] ⚠️ Buy failed — marking trade as failed, skipping guard monitoring`);
-          await supabase
-            .from("paper_trades")
-            .update({ status: "failed", exit_reason: "buy_failed" })
-            .eq("id", trade.id);
+        activeBuys.add(trade.coin_address);
+        try {
+          const sig = await buyToken(trade.coin_address, LIVE_BUY_SOL);
+          if (sig) {
+            console.log(`  [EXECUTOR] 🔴 LIVE BUY executed: ${sig}`);
+            // Tag as [LIVE]
+            await supabase
+              .from("paper_trades")
+              .update({ wallet_tag: `${trade.wallet_tag} [LIVE]` })
+              .eq("id", trade.id);
+          } else {
+            console.log(`  [EXECUTOR] ⚠️ Buy failed — marking trade as failed, skipping guard monitoring`);
+            await supabase
+              .from("paper_trades")
+              .update({ status: "failed", exit_reason: "buy_failed" })
+              .eq("id", trade.id);
+          }
+        } finally {
+          activeBuys.delete(trade.coin_address);
         }
       }
     } catch (err: any) {
