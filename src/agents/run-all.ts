@@ -40,12 +40,14 @@ async function main(): Promise<void> {
     startTierManager(),
   ]);
 
-  // Set bot_state to RUNNING
-  await supabase
+  // Preserve existing bot_state — don't override dashboard STOP
+  const { data: currentState } = await supabase
     .from("bot_state")
-    .update({ is_running: true, last_updated: new Date().toISOString() })
-    .neq("id", "00000000-0000-0000-0000-000000000000");
-  console.log("\n  [SWARM] All 6 agents running. bot_state set to RUNNING. Ctrl+C to stop.\n");
+    .select("is_running")
+    .limit(1)
+    .single();
+  const isRunning = currentState?.is_running ?? true;
+  console.log(`\n  [SWARM] All 6 agents running. bot_state preserved: ${isRunning ? "RUNNING" : "STOPPED"}. Ctrl+C to stop.\n`);
 
   // Graceful shutdown
   process.on("SIGINT", async () => {
