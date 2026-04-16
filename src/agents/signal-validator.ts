@@ -16,7 +16,7 @@ import {
   RECENTLY_TRADED_COOLDOWN_MS,
 } from "../config/smart-money";
 import { isRugStorm } from "../lib/entry-guards";
-import { isOffensiveName } from "../lib/price-guards";
+import { isOffensiveName, checkTokenSafety } from "../lib/price-guards";
 
 // ─── DB-backed T1 tier check with 60s cache ────────────
 // Replaces hardcoded TOP_ELITE_ADDRESSES — tier changes in DB take effect immediately
@@ -246,6 +246,17 @@ export async function startSignalValidator(): Promise<void> {
           );
           return;
         }
+      }
+
+      // 7. Token safety check (DexScreener) — block low-liquidity rugs
+      // This is the most expensive check (~200ms API call) so it runs LAST,
+      // only on signals that would otherwise fire. Prevents owkd-style -91% losses.
+      const safety = await checkTokenSafety(signal.coin_address);
+      if (!safety.safe) {
+        console.log(
+          `  [FILTER] Blocked low-liquidity token: ${coin} (${safety.reason})`
+        );
+        return;
       }
 
       // ALL CHECKS PASSED — mark as validated to prevent duplicates
