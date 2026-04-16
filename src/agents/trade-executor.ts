@@ -64,6 +64,20 @@ export async function startTradeExecutor(): Promise<void> {
         processedTrades.add(trade.id);
 
         const coin = trade.coin_name || trade.coin_address.slice(0, 8) + "...";
+
+        // Duplicate buy check — skip if another open/pending LIVE trade exists for same mint
+        const { count: liveOpenCount } = await supabase
+          .from("paper_trades")
+          .select("id", { count: "exact", head: true })
+          .eq("coin_address", trade.coin_address)
+          .eq("status", "open")
+          .like("wallet_tag", "%[LIVE]%");
+
+        if ((liveOpenCount || 0) > 0) {
+          console.log(`  [EXECUTOR] Skipping duplicate — already have open LIVE position for ${coin}`);
+          continue;
+        }
+
         console.log(`  [EXECUTOR] New trade detected: ${coin} — attempting LIVE BUY...`);
 
         // Check daily loss limit — count losing LIVE trades since midnight UTC

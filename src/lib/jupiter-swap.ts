@@ -22,7 +22,7 @@ const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUPITER_QUOTE_URL = "https://api.jup.ag/swap/v1/quote";
 const JUPITER_SWAP_URL = "https://api.jup.ag/swap/v1/swap";
 const BUY_SLIPPAGE_BPS = 1000; // 10% for buys — pump.fun tokens need higher
-const SELL_SLIPPAGE_BPS = [500, 1000, 2000]; // Auto-escalate: 5% → 10% → 20% on retry
+const SELL_SLIPPAGE_BPS = [500, 1000, 2000, 3000]; // Auto-escalate: 5% → 10% → 20% → 30% on retry
 
 function isDevnet(): boolean {
   return process.env.SOLANA_NETWORK === "devnet";
@@ -264,7 +264,8 @@ export async function sellToken(
 
     console.log(`  [JUPITER] Token balance: ${tokenAmount} for ${coinAddress.slice(0, 8)}...`);
 
-    // Auto-escalate slippage: try 5% → 10% → 20%
+    // Auto-escalate slippage: try 5% → 10% → 20% → 30%
+    // On-chain 6001 failures (slippage exceeded) trigger next level
     for (const slippage of SELL_SLIPPAGE_BPS) {
       try {
         console.log(`  [JUPITER] Trying sell at ${slippage / 100}% slippage...`);
@@ -309,15 +310,20 @@ export async function sellToken(
           `  [JUPITER] SELL sent at ${slippage / 100}%: ${coinAddress.slice(0, 8)}... → ${signature}`
         );
 
-        // Confirm sell with retries — same as buy: 6 retries × 10s
+        // Blocking confirmation — must know result before returning
         console.log(`  [JUPITER] SELL waiting for confirmation (up to 60s)...`);
-        connection.confirmTransaction(signature, "confirmed").then((conf) => {
+        let confirmed = false;
+        let onChainError: any = null;
+
+        try {
+          const conf = await connection.confirmTransaction(signature, "confirmed");
           if (conf.value.err) {
-            console.error(`  [JUPITER] SELL tx FAILED on-chain: ${signature} — ${JSON.stringify(conf.value.err)}`);
+            onChainError = conf.value.err;
           } else {
-            console.log(`  [JUPITER] SELL confirmed on-chain: ${signature}`);
+            confirmed = true;
           }
-        }).catch(async () => {
+        } catch {
+          // Timeout — poll status with retries
           console.log(`  [JUPITER] SELL confirmation timeout — polling tx status (6 retries, 10s intervals)...`);
           for (let attempt = 1; attempt <= 6; attempt++) {
             await new Promise((r) => setTimeout(r, 10_000));
@@ -326,27 +332,44 @@ export async function sellToken(
               const cs = status.value?.confirmationStatus;
               if (cs === "confirmed" || cs === "finalized") {
                 if (status.value!.err) {
-                  console.error(`  [JUPITER] SELL verified FAILED (attempt ${attempt}): ${signature}`);
-                  return;
+                  onChainError = status.value!.err;
+                } else {
+                  confirmed = true;
                 }
-                console.log(`  [JUPITER] SELL verified SUCCESS (attempt ${attempt}, late confirm): ${signature}`);
-                return;
+                break;
               }
               console.log(`  [JUPITER] SELL status check ${attempt}/6: ${cs || "not found yet"}`);
             } catch {
               console.log(`  [JUPITER] SELL status check ${attempt}/6: RPC error, retrying...`);
             }
           }
-          console.error(`  [JUPITER] SELL status unknown after 60s — check manually: ${signature}`);
-        });
+        }
 
-        return signature;
+        if (confirmed) {
+          console.log(`  [JUPITER] SELL confirmed on-chain: ${signature}`);
+          return signature;
+        }
+
+        if (onChainError) {
+          const errStr = JSON.stringify(onChainError);
+          const is6001 = errStr.includes("6001");
+          if (is6001) {
+            console.log(`  [JUPITER] SELL failed (6001 slippage exceeded) at ${slippage / 100}% — retrying at higher slippage...`);
+            continue; // Try next slippage level
+          }
+          console.error(`  [JUPITER] SELL tx FAILED on-chain: ${signature} — ${errStr}`);
+          continue; // Try next slippage level for any on-chain error
+        }
+
+        // Unknown status after all retries
+        console.error(`  [JUPITER] SELL status unknown after 60s — check manually: ${signature}`);
+        return signature; // Return sig so caller knows a tx was attempted
       } catch (err: any) {
         console.error(`  [JUPITER] SELL attempt at ${slippage / 100}% failed: ${err.message}`);
       }
     }
 
-    console.error(`  [JUPITER] SELL failed after all slippage attempts for ${coinAddress.slice(0, 8)}...`);
+    console.error(`  [JUPITER] SELL failed all slippage levels (5%→10%→20%→30%) — manual intervention needed: ${coinAddress}`);
     return null;
   } catch (err: any) {
     console.error(`  [JUPITER] SELL failed: ${err.message}`);
