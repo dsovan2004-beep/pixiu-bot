@@ -154,9 +154,9 @@ const closingPositions = new Set<string>();
 // ─── Position Check Loop ────────────────────────────────
 
 async function checkPositions(): Promise<void> {
-  // Check if bot is stopped via dashboard — MUST be first check
-  const { data: botState } = await supabase.from("bot_state").select("is_running").limit(1).single();
-  if (!botState || !botState.is_running) return;
+  // Guard ALWAYS runs — even when bot is stopped
+  // STOP BOT only blocks new entries (executor), never exits
+  // Open positions must always be monitored for SL/CB/whale protection
 
   const { data: positions, error } = await supabase
     .from("paper_trades")
