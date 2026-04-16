@@ -45,6 +45,7 @@ export async function startTradeExecutor(): Promise<void> {
       // Check if bot is stopped via dashboard — MUST be first check
       const { data: botState } = await supabase.from("bot_state").select("is_running").limit(1).single();
       if (!botState || !botState.is_running) {
+        console.log(`  [EXECUTOR] Bot stopped via dashboard — skipping all trades`);
         return; // Bot stopped or DB error — do nothing
       }
 
@@ -84,6 +85,13 @@ export async function startTradeExecutor(): Promise<void> {
         if ((liveOpenCount || 0) > 0) {
           console.log(`  [EXECUTOR] Skipping duplicate — already have open LIVE position for ${coin}`);
           continue;
+        }
+
+        // Re-check is_running before each buy — user may have pressed STOP mid-loop
+        const { data: stopCheck } = await supabase.from("bot_state").select("is_running").limit(1).single();
+        if (!stopCheck || !stopCheck.is_running) {
+          console.log(`  [EXECUTOR] Bot stopped via dashboard — skipping all trades`);
+          break;
         }
 
         console.log(`  [EXECUTOR] New trade detected: ${coin} — attempting LIVE BUY...`);
