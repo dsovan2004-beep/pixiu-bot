@@ -134,6 +134,8 @@ export async function buyToken(
     );
 
     // Wait for confirmation — must know if buy landed before tagging [LIVE]
+    // Retry up to 6 times with 10s intervals (total ~60s) to handle slow RPC
+    console.log(`  [JUPITER] Waiting for confirmation (up to 60s)...`);
     try {
       const conf = await connection.confirmTransaction(signature, "confirmed");
       if (conf.value.err) {
@@ -143,21 +145,28 @@ export async function buyToken(
       console.log(`  [JUPITER] BUY confirmed on-chain: ${signature}`);
       return signature;
     } catch {
-      // Timeout — check tx status manually
-      console.log(`  [JUPITER] BUY confirmation timeout — verifying tx status...`);
-      try {
-        const status = await connection.getSignatureStatus(signature);
-        if (status.value?.confirmationStatus === "confirmed" || status.value?.confirmationStatus === "finalized") {
-          if (status.value.err) {
-            console.error(`  [JUPITER] BUY verified FAILED: ${signature}`);
-            return null;
+      // Timeout — poll tx status with retries
+      console.log(`  [JUPITER] BUY confirmation timeout — polling tx status (6 retries, 10s intervals)...`);
+      for (let attempt = 1; attempt <= 6; attempt++) {
+        await new Promise((r) => setTimeout(r, 10_000)); // 10s between retries
+        try {
+          const status = await connection.getSignatureStatus(signature);
+          const cs = status.value?.confirmationStatus;
+          if (cs === "confirmed" || cs === "finalized") {
+            if (status.value!.err) {
+              console.error(`  [JUPITER] BUY verified FAILED (attempt ${attempt}): ${signature}`);
+              return null;
+            }
+            console.log(`  [JUPITER] BUY verified SUCCESS (attempt ${attempt}, late confirm): ${signature}`);
+            return signature;
           }
-          console.log(`  [JUPITER] BUY verified SUCCESS (late confirm): ${signature}`);
-          return signature;
+          console.log(`  [JUPITER] BUY status check ${attempt}/6: ${cs || "not found yet"}`);
+        } catch {
+          console.log(`  [JUPITER] BUY status check ${attempt}/6: RPC error, retrying...`);
         }
-      } catch {}
-      console.error(`  [JUPITER] BUY status unknown — treating as FAILED: ${signature}`);
-      return null; // Unknown = don't tag [LIVE]
+      }
+      console.error(`  [JUPITER] BUY status unknown after 60s — treating as FAILED: ${signature}`);
+      return null; // Unknown after all retries = don't tag [LIVE]
     }
   } catch (err: any) {
     console.error(`  [JUPITER] BUY failed: ${err.message}`);
