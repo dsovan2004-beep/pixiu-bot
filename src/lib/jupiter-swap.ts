@@ -132,18 +132,32 @@ export async function buyToken(
       `  [JUPITER] BUY sent: ${coinAddress.slice(0, 8)}... ${amountSol} SOL → ${signature}`
     );
 
-    // Non-blocking confirmation — don't wait 30s, just log result async
-    connection.confirmTransaction(signature, "confirmed").then((conf) => {
+    // Wait for confirmation — must know if buy landed before tagging [LIVE]
+    try {
+      const conf = await connection.confirmTransaction(signature, "confirmed");
       if (conf.value.err) {
         console.error(`  [JUPITER] BUY tx FAILED on-chain: ${signature} — ${JSON.stringify(conf.value.err)}`);
-      } else {
-        console.log(`  [JUPITER] BUY confirmed on-chain: ${signature}`);
+        return null; // Buy failed — don't tag [LIVE]
       }
-    }).catch(() => {
-      console.error(`  [JUPITER] BUY confirmation timeout: ${signature} — check manually`);
-    });
-
-    return signature;
+      console.log(`  [JUPITER] BUY confirmed on-chain: ${signature}`);
+      return signature;
+    } catch {
+      // Timeout — check tx status manually
+      console.log(`  [JUPITER] BUY confirmation timeout — verifying tx status...`);
+      try {
+        const status = await connection.getSignatureStatus(signature);
+        if (status.value?.confirmationStatus === "confirmed" || status.value?.confirmationStatus === "finalized") {
+          if (status.value.err) {
+            console.error(`  [JUPITER] BUY verified FAILED: ${signature}`);
+            return null;
+          }
+          console.log(`  [JUPITER] BUY verified SUCCESS (late confirm): ${signature}`);
+          return signature;
+        }
+      } catch {}
+      console.error(`  [JUPITER] BUY status unknown — treating as FAILED: ${signature}`);
+      return null; // Unknown = don't tag [LIVE]
+    }
   } catch (err: any) {
     console.error(`  [JUPITER] BUY failed: ${err.message}`);
     return null;
