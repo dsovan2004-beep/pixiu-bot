@@ -67,7 +67,7 @@ export function isOffensiveName(coinName: string | null | undefined): boolean {
 // These are the worst losses — owkd -91%, World War 3 -80%, 1 SOL -76%.
 // Pump.fun tokens with <$5K liquidity dump within seconds.
 
-export const MIN_LIQUIDITY_USD = 5000;     // < $5K liquidity = rug risk
+export const MIN_LIQUIDITY_USD = 10000;    // < $10K liquidity = rug risk
 export const MIN_FDV_USD = 10000;          // < $10K market cap = micro-rug
 export const MAX_5M_DROP_PCT = -20;        // < -20% in 5min = already rugging
 

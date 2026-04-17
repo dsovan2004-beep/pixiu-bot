@@ -14,7 +14,7 @@ import {
   RECENT_NAME_COOLDOWN_MS,
   POSITION_SIZE_PCT,
 } from "@/config/smart-money";
-import { isPriceTooHigh, isOffensiveName } from "@/lib/price-guards";
+import { isPriceTooHigh, isOffensiveName, checkTokenSafety } from "@/lib/price-guards";
 
 export const runtime = "edge";
 
@@ -502,10 +502,15 @@ async function evaluateAndEnter(
     return { entered: false, reason: `price too high: $${price}` };
   }
 
-  // Liquidity check
-  const { liquidity, passed: liqPassed } = await checkLiquidity(mint);
-  if (!liqPassed) {
-    return { entered: false, reason: `liquidity too low ($${liquidity?.toLocaleString() ?? "?"})` };
+  // Full token safety check — replaces inline checkLiquidity().
+  // Covers 3 rug signals in one DexScreener call:
+  //   1. liquidity < $10k      — thin liquidity / sell-back risk
+  //   2. fdv < $10k            — micro-cap rug
+  //   3. priceChange.m5 < -20% — token already rugging in last 5min
+  const safety = await checkTokenSafety(mint);
+  if (!safety.safe) {
+    console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — ${safety.reason}`);
+    return { entered: false, reason: `token_unsafe: ${safety.reason}` };
   }
 
   // LP burn & holder check
