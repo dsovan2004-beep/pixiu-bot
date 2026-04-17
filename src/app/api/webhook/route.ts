@@ -11,6 +11,7 @@ import {
   MAX_GAP_MINUTES,
   MAX_ENTRY_MC,
   RECENTLY_TRADED_COOLDOWN_MS,
+  RECENT_NAME_COOLDOWN_MS,
   POSITION_SIZE_PCT,
 } from "@/config/smart-money";
 import { isPriceTooHigh, isOffensiveName } from "@/lib/price-guards";
@@ -238,17 +239,19 @@ async function evaluateAndEnter(
     return { entered: false, reason: "recently traded (120min cooldown, same address)" };
   }
 
-  // Name-based cooldown — block same-name scam tokens (different addresses, same name)
+  // Name-based cooldown — shorter (30min) than address cooldown. Same name on a
+  // different mint is often a fresh meme launch, not the same rug.
   if (coinName) {
+    const nameCooldownCutoff = new Date(Date.now() - RECENT_NAME_COOLDOWN_MS).toISOString();
     const { count: nameCount } = await supabase
       .from("paper_trades")
       .select("id", { count: "exact", head: true })
       .eq("coin_name", coinName)
       .eq("status", "closed")
-      .gte("exit_time", cooldownCutoff);
+      .gte("exit_time", nameCooldownCutoff);
 
     if ((nameCount || 0) > 0) {
-      return { entered: false, reason: `recently traded same name (120min cooldown): ${coinName}` };
+      return { entered: false, reason: `recently traded same name (30min cooldown): ${coinName}` };
     }
   }
 

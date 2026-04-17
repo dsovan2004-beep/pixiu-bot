@@ -14,6 +14,7 @@
 import supabase from "../lib/supabase-server";
 import {
   RECENTLY_TRADED_COOLDOWN_MS,
+  RECENT_NAME_COOLDOWN_MS,
 } from "../config/smart-money";
 import { isRugStorm } from "../lib/entry-guards";
 import { isOffensiveName, checkTokenSafety } from "../lib/price-guards";
@@ -136,17 +137,23 @@ export async function startSignalValidator(): Promise<void> {
         return;
       }
 
-      // 2b. Name-based cooldown — block same-name scam tokens (different addresses, same name)
+      // 2b. Name-based cooldown — block same-name scam tokens (different addresses, same name).
+      // Shorter (30min) than the address-based cooldown (120min): a different mint
+      // sharing a popular meme name is often a legitimate fresh launch, not the
+      // same rug, so we don't want to lock out the name for hours.
       if (signal.coin_name) {
+        const nameCooldownCutoff = new Date(
+          Date.now() - RECENT_NAME_COOLDOWN_MS
+        ).toISOString();
         const { count: nameCount } = await supabase
           .from("paper_trades")
           .select("id", { count: "exact", head: true })
           .eq("coin_name", signal.coin_name)
           .eq("status", "closed")
-          .gte("exit_time", cooldownCutoff);
+          .gte("exit_time", nameCooldownCutoff);
 
         if ((nameCount || 0) > 0) {
-          console.log(`  [VALIDATOR] ❌ ${coin} — 120min cooldown active (same name, different address)`);
+          console.log(`  [VALIDATOR] ❌ ${coin} — 30min cooldown active (same name, different address)`);
           return;
         }
       }

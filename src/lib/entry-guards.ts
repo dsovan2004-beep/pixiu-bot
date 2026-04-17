@@ -4,7 +4,9 @@
  * Shared guards for signal-validator and trade-executor.
  * These only block NEW entries, never exits.
  *
- * Rug storm: 3+ losses in last 5 trades → pause 30min
+ * Rug storm: 4+ losses in last 5 trades (2h window) → pause 30min.
+ * Raised from 3/5 to 4/5 after diagnostic showed the 3/5 threshold
+ * tripped too often and cost entry frequency with neutral WR impact.
  */
 
 import supabase from "./supabase-server";
@@ -19,7 +21,7 @@ let rugStormCache: { active: boolean; checkedAt: number; pauseUntil: number } = 
 
 const RUG_STORM_CACHE_MS = 5 * 60_000; // Cache for 5 minutes
 const RUG_STORM_PAUSE_MS = 30 * 60_000; // Pause entries for 30 minutes
-const RUG_STORM_THRESHOLD = 3; // 3 out of 5 losses = rug storm
+const RUG_STORM_THRESHOLD = 4; // 4 out of 5 losses = rug storm (was 3)
 const RUG_STORM_WINDOW = 5; // Look at last 5 trades
 
 export async function isRugStorm(): Promise<boolean> {

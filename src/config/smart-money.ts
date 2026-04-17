@@ -24,7 +24,11 @@ export const TOP_ELITE_ADDRESSES = new Set([
 // Entry filters
 export const MAX_GAP_MINUTES = 30;
 export const MAX_ENTRY_MC = 100_000;
-export const RECENTLY_TRADED_COOLDOWN_MS = 120 * 60_000; // 120 min
+export const RECENTLY_TRADED_COOLDOWN_MS = 120 * 60_000; // 120 min — same coin_address
+// Same-name cooldown is shorter because a different mint sharing a name is
+// often a fresh launch (not the same rug). 30min prevents immediate re-buy
+// of an obvious clone while still letting legitimate launches through.
+export const RECENT_NAME_COOLDOWN_MS = 30 * 60_000; // 30 min — same coin_name
 export const POSITION_SIZE_PCT = 0.01; // 1% of bankroll
 
 // ─── Live trading sizing & risk caps ───────────────────
