@@ -66,10 +66,28 @@ Helius push → Cloudflare webhook → inserts coin_signals + evaluateAndEnter()
                               Exit triggered → Jupiter sell → SOL returned
 ```
 
-## Next Steps
+## Day 2 Update (April 16, 2026)
 
-- [ ] Monitor 20-30 more trades at 0.05 SOL
-- [ ] If WR > 55% on live trades → increase to 0.10 SOL
-- [ ] Automate sell retry for failed Jupiter sells
+Bot ran autonomously through a full session. Highlights:
+- Wins: Broke Company +129.06% (whale exit), Airdrop +204.76% (whale exit)
+- Losses: coin.ai -52.2% (CB fired correctly)
+- Daily loss limit triggered mid-session, blocked further entries (working as designed)
+- Surfaced 4 latent bugs — see [SPRINT5-DAY2-RECAP.md](./SPRINT5-DAY2-RECAP.md)
+
+## Backlog (updated April 16)
+
+**P0 — blocks scaling**
+- [ ] Fix double-sell / double-bankroll-credit (Broke Company case)
+- [ ] Reconcile bankroll vs on-chain SOL after the double-count
+
+**P1 — reliability**
+- [ ] Late-confirm Jupiter buy timeouts (poll signature status another 30-60s before failing)
+- [ ] Consolidate position-size + daily-loss-limit constants (currently 3 different values across files)
+
+**P2 — robustness**
+- [ ] Backoff on Jupiter 429 retries (buy path)
+- [ ] Telegram alerts (whale exit, CB, daily limit hit, buy timeout)
 - [ ] Cloudflare Workers migration for 24/7 uptime
-- [ ] Telegram alerts for trade notifications
+
+**P3 — scaling**
+- [ ] Re-enable 0.10 SOL position size after P0/P1 fixed AND 20+ trades at 0.05 with WR > 55%

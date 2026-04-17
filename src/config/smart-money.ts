@@ -26,3 +26,14 @@ export const MAX_GAP_MINUTES = 30;
 export const MAX_ENTRY_MC = 100_000;
 export const RECENTLY_TRADED_COOLDOWN_MS = 120 * 60_000; // 120 min
 export const POSITION_SIZE_PCT = 0.01; // 1% of bankroll
+
+// ─── Live trading sizing & risk caps ───────────────────
+// SINGLE SOURCE OF TRUTH — do not redeclare in agents.
+// Real exposure per trade is LIVE_BUY_SOL. Daily limit is total loss in SOL.
+export const LIVE_BUY_SOL = 0.05;
+export const DAILY_LOSS_LIMIT_SOL = 2.0;
+
+// Late-confirm window for Jupiter buys (Bug P1).
+// After a buy is marked "failed", check on-chain again after this delay —
+// if the wallet now holds the token, the buy actually landed late.
+export const BUY_RESCUE_DELAY_MS = 3 * 60_000; // 3 min

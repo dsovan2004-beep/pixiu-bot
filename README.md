@@ -11,7 +11,8 @@ Autonomous Solana memecoin trading bot. Copies Smart Money wallet trades with a 
 | Sprint 1-2 | COMPLETE | Webhook + paper trader monolith |
 | Sprint 3 | COMPLETE | 6-agent swarm, 131 trades, 56.5% WR, $11,325 (+13.26%) |
 | Sprint 4 | COMPLETE | Jupiter live swaps, dashboard toggle, safety audit |
-| Sprint 5 | **LIVE** | Real SOL trading, 4/5 wins (80% WR), +0.0224 SOL profit |
+| Sprint 5 Day 1 | COMPLETE | 4/5 wins (80% WR), +0.0224 SOL gross — 16 transition bugs fixed |
+| Sprint 5 Day 2 | **LIVE** | Autonomous run, +129% / +205% whale exits; 4 latent bugs logged |
 | Recovery Goal | $3,325 — REACHED | $3,971 gross wins from $10K paper start |
 
 ## Architecture
@@ -88,7 +89,23 @@ Risk Guard checks open positions every 5 seconds:
     L3: +100% → sell 25% (fully closed)
 ```
 
-## Sprint 5 Live Trading Results (April 15, 2026)
+## Open Backlog (April 16, 2026)
+
+See [docs/SPRINT5-DAY2-RECAP.md](docs/SPRINT5-DAY2-RECAP.md) for full context.
+
+**Done today:**
+- ✅ Atomic-claim + sell-then-credit in `risk-guard.ts` (no more double-sell / double-credit)
+- ✅ Recovered 8 stuck token bags + bankroll reconciled (-$91.77)
+- ✅ Late-confirm rescue path for Jupiter buy timeouts (`trade-executor.ts`)
+- ✅ Single source of truth for sizing/limit constants (`config/smart-money.ts`)
+- ✅ Telegram alerts (`src/lib/telegram.ts`) — set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` to enable
+
+**Remaining:**
+- **P2** Jupiter 429 retry backoff (buy path)
+- **P2** Cloudflare Workers migration for 24/7 uptime
+- **P3** Scale to 0.10 SOL after 20 clean trades at 0.05 with WR > 55%
+
+## Sprint 5 Day 1 Live Trading Results (April 15, 2026)
 
 | Trade | Coin | PnL | Result |
 |-------|------|-----|--------|

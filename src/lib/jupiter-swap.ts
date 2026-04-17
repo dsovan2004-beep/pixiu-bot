@@ -235,6 +235,19 @@ async function getTokenBalance(
 }
 
 /**
+ * Check if wallet currently holds any of the given token.
+ * Used by trade-executor's late-confirm rescue path: if a buy was marked
+ * "failed" but tokens later appear on-chain, we know the buy actually landed.
+ */
+export async function hasTokenBalance(coinAddress: string): Promise<boolean> {
+  const keypair = getKeypair();
+  if (!keypair) return false;
+  const connection = getConnection();
+  const amount = await getTokenBalance(connection, keypair.publicKey, coinAddress);
+  return amount > 0;
+}
+
+/**
  * Sell a token for SOL via Jupiter.
  * Automatically fetches on-chain token balance.
  * @param coinAddress - Token mint address to sell

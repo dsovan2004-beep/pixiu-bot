@@ -8,11 +8,15 @@
  */
 
 import supabase from "../lib/supabase-server";
-import { buyToken } from "../lib/jupiter-swap";
+import { buyToken, hasTokenBalance } from "../lib/jupiter-swap";
+import {
+  LIVE_BUY_SOL,
+  DAILY_LOSS_LIMIT_SOL,
+  BUY_RESCUE_DELAY_MS,
+} from "../config/smart-money";
+import { sendAlert } from "../lib/telegram";
 
 const POLL_MS = 3_000;
-const LIVE_BUY_SOL = 0.05; // Reduced from 0.10 to limit losses while stabilizing
-const DAILY_LOSS_LIMIT_SOL = 5.0; // Max 50 losses × 0.10 SOL before blocking
 
 async function isLiveTrading(): Promise<boolean> {
   try {
@@ -34,6 +38,70 @@ async function isLiveTrading(): Promise<boolean> {
 const processedTrades = new Set<string>();
 // In-memory lock: coin addresses with a buy currently in-flight (confirming)
 const activeBuys = new Set<string>();
+// Rescue checks already scheduled (mint → true), prevents duplicate timers
+const rescueScheduled = new Set<string>();
+
+/**
+ * Schedule an on-chain check BUY_RESCUE_DELAY_MS from now. If the wallet now
+ * holds the token, the supposedly-failed Jupiter buy actually landed — revert
+ * the trade row from 'failed' back to 'open' and tag [LIVE] so the risk guard
+ * takes over. Estimates entry_price from current DexScreener price (best effort).
+ */
+function scheduleBuyRescue(
+  tradeId: string,
+  coinAddress: string,
+  walletTag: string,
+  coinLabel: string
+): void {
+  if (rescueScheduled.has(tradeId)) return;
+  rescueScheduled.add(tradeId);
+
+  setTimeout(async () => {
+    try {
+      const held = await hasTokenBalance(coinAddress);
+      if (!held) {
+        console.log(`  [EXECUTOR] [RESCUE] ${coinLabel} not held on-chain — buy truly failed, no action`);
+        return;
+      }
+
+      // Token IS in wallet — the buy landed. Re-open the trade so guard tracks it.
+      console.log(`  [EXECUTOR] 🛟 [RESCUE] ${coinLabel} found on-chain — buy landed late, re-opening trade`);
+
+      const { data: row } = await supabase
+        .from("paper_trades")
+        .select("id, status, wallet_tag")
+        .eq("id", tradeId)
+        .single();
+
+      // Only rescue if still 'failed' — if user/script already touched the row, leave alone
+      if (!row || row.status !== "failed") {
+        console.log(`  [EXECUTOR] [RESCUE] ${coinLabel} status is now '${row?.status}' — skipping rescue`);
+        return;
+      }
+
+      await supabase
+        .from("paper_trades")
+        .update({
+          status: "open",
+          exit_reason: null,
+          wallet_tag: row.wallet_tag.includes("[LIVE]")
+            ? row.wallet_tag
+            : `${walletTag} [LIVE]`,
+          entry_time: new Date().toISOString(), // restart guards from now (30s min hold, etc.)
+        })
+        .eq("id", tradeId);
+
+      void sendAlert(
+        "buy_rescued",
+        `BUY rescued: ${coinLabel} landed late — guard now tracking`
+      );
+    } catch (err: any) {
+      console.error(`  [EXECUTOR] [RESCUE] ${coinLabel} check error:`, err.message);
+    } finally {
+      rescueScheduled.delete(tradeId);
+    }
+  }, BUY_RESCUE_DELAY_MS);
+}
 
 export async function startTradeExecutor(): Promise<void> {
   const startLive = await isLiveTrading();
@@ -124,11 +192,22 @@ export async function startTradeExecutor(): Promise<void> {
               .update({ wallet_tag: `${trade.wallet_tag} [LIVE]` })
               .eq("id", trade.id);
           } else {
-            console.log(`  [EXECUTOR] ⚠️ Buy failed — marking trade as failed, skipping guard monitoring`);
+            console.log(`  [EXECUTOR] ⚠️ Buy failed — marking failed; will rescue-check in ${BUY_RESCUE_DELAY_MS / 60_000}min`);
             await supabase
               .from("paper_trades")
               .update({ status: "failed", exit_reason: "buy_failed" })
               .eq("id", trade.id);
+
+            void sendAlert(
+              "buy_failed",
+              `BUY failed: ${coin} — will verify on-chain in ${BUY_RESCUE_DELAY_MS / 60_000}min`
+            );
+
+            // ─── Rescue path: late-confirm the buy ───
+            // Solana sometimes lands txs after our 60s confirm window. If the
+            // wallet ends up holding the token, the buy actually succeeded —
+            // re-open the trade and tag [LIVE] so the guard takes over.
+            scheduleBuyRescue(trade.id, trade.coin_address, trade.wallet_tag, coin);
           }
         } finally {
           activeBuys.delete(trade.coin_address);

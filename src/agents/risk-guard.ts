@@ -11,8 +11,13 @@
  */
 
 import supabase from "../lib/supabase-server";
-import { TOP_ELITE_ADDRESSES } from "../config/smart-money";
-import { sellToken } from "../lib/jupiter-swap";
+import {
+  TOP_ELITE_ADDRESSES,
+  LIVE_BUY_SOL,
+  DAILY_LOSS_LIMIT_SOL,
+} from "../config/smart-money";
+import { sellToken, hasTokenBalance } from "../lib/jupiter-swap";
+import { sendAlert } from "../lib/telegram";
 
 const POSITION_CHECK_MS = 5_000;
 
@@ -35,10 +40,8 @@ async function isLiveTrading(): Promise<boolean> {
   }
 }
 
-// Daily loss limit: stop live trades if LIVE-ONLY losses exceed threshold
-// Note: pnl_usd is based on paper position size ($100), not actual SOL spent (0.05)
-// Real exposure per trade is 0.05 SOL, so 2 SOL limit = ~40 losing trades
-const DAILY_LOSS_LIMIT_SOL = 2.0;
+// Daily loss limit imported from config/smart-money.ts (single source of truth).
+// Real exposure per trade is LIVE_BUY_SOL; daily limit is total LIVE loss in SOL.
 let dailyLossLimitHit = false;
 let lastLossCheckDate = "";
 
@@ -68,13 +71,17 @@ async function checkDailyLossLimit(): Promise<void> {
 
   if (!lossCount || lossCount === 0) return;
 
-  // Each losing trade = 0.05 SOL real exposure
-  const totalLossSol = (lossCount || 0) * 0.05;
+  // Each losing trade = LIVE_BUY_SOL real exposure
+  const totalLossSol = (lossCount || 0) * LIVE_BUY_SOL;
 
   if (totalLossSol >= DAILY_LOSS_LIMIT_SOL) {
     dailyLossLimitHit = true;
     console.log(
-      `  [GUARD] 🛑 Daily loss limit hit — ${lossCount} losing trades × 0.05 = ${totalLossSol.toFixed(2)} SOL`
+      `  [GUARD] 🛑 Daily loss limit hit — ${lossCount} losing trades × ${LIVE_BUY_SOL} = ${totalLossSol.toFixed(2)} SOL`
+    );
+    void sendAlert(
+      "daily_limit",
+      `Daily loss limit hit: ${lossCount} losses = ${totalLossSol.toFixed(2)} SOL. Bot stopped.`
     );
     // Stop the bot via Supabase — executor checks is_running on every poll
     try {
@@ -170,6 +177,15 @@ async function checkPositions(): Promise<void> {
   // STOP BOT only blocks new entries (executor), never exits
   // Open positions must always be monitored for SL/CB/whale protection
 
+  // Reaper: revert any 'closing' rows older than 5 minutes back to 'open'.
+  // This recovers from bot crashes mid-sell (sell never landed AND status stuck).
+  const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+  await supabase
+    .from("paper_trades")
+    .update({ status: "open" })
+    .eq("status", "closing")
+    .lt("entry_time", fiveMinAgo);
+
   const { data: positions, error } = await supabase
     .from("paper_trades")
     .select("*")
@@ -214,17 +230,97 @@ async function checkPositions(): Promise<void> {
         : 0;
 
     // Helper: close trade
+    // ORDER: in-memory lock → atomic DB claim → sell on-chain → credit bankroll
+    // This prevents the "DB closed + bankroll credited but tokens never sold" bug.
     async function closeTrade(
       finalPnl: number,
       exitReason: string,
       gridLvl: number,
       exitPrice?: number
     ) {
-      // Prevent duplicate close
+      // 1. In-memory lock — block duplicate fires within same poll cycle
       if (closingPositions.has(pos.id)) return;
       closingPositions.add(pos.id);
       setTimeout(() => closingPositions.delete(pos.id), 60_000);
 
+      const isLiveTrade = pos.wallet_tag?.includes("[LIVE]");
+
+      // 2. Atomic DB claim — flip status='open' → 'closing' (only one writer wins).
+      //    If another guard instance already claimed it, abort.
+      const { data: claimed, error: claimErr } = await supabase
+        .from("paper_trades")
+        .update({ status: "closing" })
+        .eq("id", pos.id)
+        .eq("status", "open")
+        .select("id")
+        .single();
+
+      if (claimErr || !claimed) {
+        console.log(`  [GUARD] ${coinLabel} close skipped — already claimed by another fire`);
+        return;
+      }
+
+      // 3. Sell on-chain FIRST (live only). Only proceed to DB close + bankroll
+      //    credit if the sell actually lands.
+      //
+      //    If the wallet has ZERO tokens for this mint, the token is gone —
+      //    either already sold (grid partials filled earlier) or rugged to $0.
+      //    In both cases, do NOT revert status (that causes infinite retry).
+      //    Instead, close the position with locked PnL:
+      //      - grid_level > 0: use partial_pnl (locked from earlier L1/L2 sells)
+      //      - grid_level = 0: use current pnlPct (likely a rug loss)
+      let sellLanded = true;
+      if (isLiveTrade) {
+        const held = await hasTokenBalance(pos.coin_address);
+        if (!held) {
+          const closedPnl = gridLvl > 0 ? (pos.partial_pnl ?? finalPnl) : pnlPct;
+          console.log(`  [GUARD] Token balance 0 — marking ${coinLabel} as closed (locked PnL: ${closedPnl.toFixed(2)}%)`);
+          const ep = exitPrice ?? currentPrice;
+          const closedPnlUsd = (closedPnl / 100) * posSize;
+          await supabase
+            .from("paper_trades")
+            .update({
+              exit_price: ep,
+              pnl_pct: closedPnl,
+              pnl_usd: closedPnlUsd,
+              status: "closed",
+              exit_time: new Date().toISOString(),
+              exit_reason: gridLvl > 0 ? "take_profit" : "rug_or_missing",
+              grid_level: gridLvl,
+              remaining_pct: 0,
+              partial_pnl: closedPnl,
+            })
+            .eq("id", pos.id);
+          await updateBankroll(closedPnlUsd);
+          void sendAlert(
+            gridLvl > 0 ? "take_profit" : "stop_loss",
+            `${coinLabel} closed (token balance 0): ${closedPnl >= 0 ? "+" : ""}${closedPnl.toFixed(2)}%`
+          );
+          return;
+        }
+
+        console.log(`  [GUARD] [LIVE SELL] ${coinLabel} grid_level=${gridLvl} remaining=${remainingPct}% — selling via Jupiter`);
+        const sig = await sellToken(pos.coin_address);
+        if (sig) {
+          console.log(`  [GUARD] 🔴 LIVE SELL executed: ${sig} (${exitReason})`);
+        } else {
+          // Sell failed despite holding tokens — Jupiter / network / slippage issue.
+          // Revert to open so next poll can retry at higher slippage.
+          sellLanded = false;
+          console.log(`  [GUARD] ⚠️ LIVE SELL failed for ${coinLabel} (held tokens but Jupiter rejected) — reverting status to 'open' for retry`);
+          await supabase
+            .from("paper_trades")
+            .update({ status: "open" })
+            .eq("id", pos.id);
+          void sendAlert(
+            "sell_failed",
+            `SELL failed: ${coinLabel} (${exitReason}). Position re-opened, will retry next poll.`
+          );
+          return;
+        }
+      }
+
+      // 4. Sell landed (or paper trade) — finalize close + credit bankroll exactly once.
       const ep = exitPrice ?? currentPrice;
       const pnlUsd = (finalPnl / 100) * posSize;
       await supabase
@@ -243,16 +339,18 @@ async function checkPositions(): Promise<void> {
         .eq("id", pos.id);
       await updateBankroll(pnlUsd);
 
-      // Jupiter live sell — only for [LIVE] tagged trades, always attempt regardless of grid level
-      const isLiveTrade = pos.wallet_tag?.includes("[LIVE]");
+      // Telegram alert — only for meaningful exits on LIVE trades
       if (isLiveTrade) {
-        console.log(`  [GUARD] [LIVE SELL] ${coinLabel} grid_level=${gridLvl} remaining=${remainingPct}% — selling via Jupiter`);
-        const sig = await sellToken(pos.coin_address);
-        if (sig) {
-          console.log(`  [GUARD] 🔴 LIVE SELL executed: ${sig} (${exitReason})`);
-        } else {
-          console.log(`  [GUARD] ⚠️ LIVE SELL failed for ${coinLabel} — no tokens found (buy may have failed)`);
-        }
+        const sign = finalPnl >= 0 ? "+" : "";
+        const kind: "whale_exit" | "circuit_breaker" | "stop_loss" | "take_profit" =
+          exitReason === "whale_exit" ? "whale_exit"
+          : exitReason === "circuit_breaker" ? "circuit_breaker"
+          : exitReason === "stop_loss" ? "stop_loss"
+          : "take_profit";
+        void sendAlert(
+          kind,
+          `${coinLabel} exit (${exitReason}): ${sign}${finalPnl.toFixed(2)}% / ${sign}$${pnlUsd.toFixed(2)}`
+        );
       }
     }
 
