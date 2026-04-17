@@ -98,14 +98,23 @@ async function checkDailyLossLimit(): Promise<void> {
   }
 }
 
+// Grid levels ending at L2. L3 (+100%) is no longer a sell — instead it
+// activates trailing-stop mode on the remaining 25% so moonshot tokens
+// can ride past the old +42.5% cap. See trailing logic below.
 const GRID_LEVELS = [
   { level: 1, pct: 15, sellPct: 50 },
   { level: 2, pct: 40, sellPct: 25 },
-  { level: 3, pct: 100, sellPct: 25 },
 ];
+const L3_THRESHOLD_PCT = 100;       // pnl % where trailing mode activates
+const TRAILING_STOP_PCT = 20;       // exit when price drops this % from peak
 const STOP_LOSS_PCT = 10;
 const CIRCUIT_BREAKER_PCT = 25;
 const TIMEOUT_MINUTES = 20;
+
+// In-memory peak tracker for trailing mode: tradeId → peak USD price.
+// Resets on bot restart (trailing continues from "peak since restart"
+// instead of absolute peak — minor degradation, no DB migration needed).
+const trailingPeaks = new Map<string, number>();
 
 // ─── Price ──────────────────────────────────────────────
 
@@ -447,8 +456,10 @@ async function checkPositions(): Promise<void> {
       continue;
     }
 
-    // 4. Timeout
-    if (minutesOpen >= TIMEOUT_MINUTES) {
+    // 4. Timeout — skipped while in trailing-stop mode so moonshot runs
+    //    can ride past the 20-min window (airdropper-style +14000% plays).
+    const trailingActive = currentLevel === 3 && remainingPct > 0;
+    if (!trailingActive && minutesOpen >= TIMEOUT_MINUTES) {
       const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
       await closeTrade(finalPnl, "timeout", currentLevel);
       console.log(
@@ -457,7 +468,7 @@ async function checkPositions(): Promise<void> {
       continue;
     }
 
-    // 5. Grid Levels
+    // 5. Grid Levels (L1 & L2 sell as before; L3 activates trailing mode)
     let newLevel = currentLevel;
     let updated = false;
 
@@ -476,12 +487,47 @@ async function checkPositions(): Promise<void> {
       );
     }
 
+    // 5a. L3 activation: instead of selling the last 25% at +100%, flip to
+    //     trailing-stop mode so the position can ride indefinitely until
+    //     the peak drops by TRAILING_STOP_PCT.
+    if (!priceFetchFailed && newLevel < 3 && pnlPct >= L3_THRESHOLD_PCT) {
+      newLevel = 3;
+      updated = true;
+      trailingPeaks.set(pos.id, currentPrice);
+      console.log(
+        `  [GUARD] [TRAILING ACTIVATED] ${coinLabel} at +${pnlPct.toFixed(1)}% — trailing stop engaged (peak $${currentPrice.toFixed(10)}, trail -${TRAILING_STOP_PCT}%)`
+      );
+    }
+
     if (remainingPct <= 0) {
       await closeTrade(partialPnl, "take_profit", newLevel);
       console.log(
         `  [GUARD] ✅ ${coinLabel} fully exited at L${newLevel} | PnL: +${partialPnl.toFixed(2)}%`
       );
       continue;
+    }
+
+    // 5b. Trailing tick — runs every poll while in L3 trailing state.
+    //     Ratchets peak upward; exits if price falls TRAILING_STOP_PCT from peak.
+    if (newLevel === 3 && remainingPct > 0 && !priceFetchFailed) {
+      let peak = trailingPeaks.get(pos.id);
+      if (peak === undefined || currentPrice > peak) {
+        peak = currentPrice;
+        trailingPeaks.set(pos.id, peak);
+      }
+      const dropPct = ((currentPrice - peak) / peak) * 100;
+      console.log(
+        `  [GUARD] [TRAILING] ${coinLabel} at +${pnlPct.toFixed(1)}% — peak $${peak.toFixed(10)}, current $${currentPrice.toFixed(10)}, trail ${dropPct.toFixed(1)}%`
+      );
+      if (dropPct <= -TRAILING_STOP_PCT) {
+        const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
+        await closeTrade(finalPnl, "trailing_stop", newLevel);
+        trailingPeaks.delete(pos.id);
+        console.log(
+          `  [GUARD] [TRAILING EXIT] ${coinLabel} sold at +${pnlPct.toFixed(1)}% from ${dropPct.toFixed(1)}% peak drop | PnL: +${finalPnl.toFixed(2)}%`
+        );
+        continue;
+      }
     }
 
     if (updated) {
