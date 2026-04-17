@@ -1,8 +1,10 @@
 # PixiuBot
 
-Autonomous Solana memecoin trading bot. Copies Smart Money wallet trades with a 6-agent swarm architecture, 9-layer entry filter pipeline, Jupiter V1 live swaps, and automated risk management.
+Autonomous Solana memecoin trading bot. Copies Smart Money wallet trades with a 4-agent swarm, a single webhook-side entry path enforcing 15 guards, Jupiter V1 live swaps, and automated risk management.
 
 **Now trading LIVE with real SOL.**
+
+See `PLAYBOOK.md` for operational details, `ROADMAP.md` for what's next, `DATA_MODEL.md` for table ownership, `SPRINT.md` for history.
 
 ## Current Status
 
@@ -13,30 +15,34 @@ Autonomous Solana memecoin trading bot. Copies Smart Money wallet trades with a 
 | Sprint 4 | COMPLETE | Jupiter live swaps, dashboard toggle, safety audit |
 | Sprint 5 Day 1 | COMPLETE | 4/5 wins (80% WR), +0.0224 SOL gross — 16 transition bugs fixed |
 | Sprint 5 Day 2 | COMPLETE | Double-credit race fixed, 8 stuck bags recovered, rescue paths shipped |
-| Sprint 5 Day 3 | **LIVE** | Phantom-loop + 6024 bail + Token-2022 filter + pump.fun rescue script |
+| Sprint 5 Day 3 | COMPLETE | Phantom-loop + 6024 bail + Token-2022 filter + pump.fun rescue script |
+| Sprint 6 | COMPLETE (undocumented) | Trailing stop after L3, daily-loss counter fixed to real SOL, webhook `is_running` bypass fix — see `SPRINT.md` |
+| Sprint 7 Day 3 | **LIVE** | Shared-guard consolidation — 5 commits, dual entry path removed, validator + scout deleted, `[WEBHOOK] ❌` logging normalized |
 | Recovery Goal | $3,325 — REACHED | $3,971 gross wins from $10K paper start |
 
 ## Architecture
 
-Hybrid architecture: webhook handles entries (proven path), swarm handles live buys + exits.
+Single entry path (webhook on Cloudflare Edge) + 4-agent node swarm for execution, exits, watching, and tier management.
 
 ```
-Helius Webhook → coin_signals table → evaluateAndEnter() → paper_trades
-                                                                |
-                                              Agent 4: Trade Executor
-                                              Polls paper_trades every 3s
-                                              New trade found → Jupiter buy → [LIVE] tag
-                                                                |
-                                              Agent 5: Risk Guard
-                                              Polls positions every 5s
-                                              CB > Whale > SL > TO > Grid → Jupiter sell
-                                                                |
-                                              Agent 1: Wallet Watcher
-                                              Polls coin_signals every 3s (backup)
-                                                                |
-                                              Agent 6: Tier Manager
-                                              Auto-demote/promote T1/T2 wallets
+Helius push → Cloudflare webhook (evaluateAndEnter, 15 guards) → paper_trades
+                                                                      |
+                                                      Agent 2: Trade Executor
+                                                      Polls paper_trades every 3s
+                                                      New trade → Jupiter buy → [LIVE] tag
+                                                                      |
+                                                      Agent 3: Risk Guard
+                                                      Polls positions every 5s
+                                                      CB > Whale > SL > TO > Grid (L3 = trailing) → Jupiter sell
+                                                                      |
+                                                      Agent 1: Wallet Watcher
+                                                      Polls tracked wallets every 3s → coin_signals
+                                                                      |
+                                                      Agent 4: Tier Manager
+                                                      Auto-demote/promote T1↔T2 wallets
 ```
+
+**As of Sprint 7 Day 3**, `signal-validator.ts` and `price-scout.ts` have been removed (−577 lines). All entry guards live in `src/app/api/webhook/route.ts evaluateAndEnter()`. Full guard list and ordering: `PLAYBOOK.md`.
 
 ## T1 Smart Money Wallets (11)
 
@@ -56,21 +62,13 @@ Helius Webhook → coin_signals table → evaluateAndEnter() → paper_trades
 
 Demoted: Scharo (T1 to T2). Tier Manager auto-demotes at WR < 50% on 3+ trades in 24h, auto-promotes at WR > 65% on 5+ trades in 7d.
 
-## 9-Layer Entry Filter Pipeline
+## Entry Guards
 
-T1 solo buy = enter (no confirmer required since Sprint 5).
+15 guards inline in `src/app/api/webhook/route.ts evaluateAndEnter()`. Ordered cheap → expensive; cheap string checks before DB reads before network calls.
 
-| Layer | Filter | Location |
-|-------|--------|----------|
-| 1 | T1 Smart Money wallet required | Webhook + Validator |
-| 2 | Rug storm detection (3/5 losses in 2h = pause 30min) | Entry Guards |
-| 3 | Stablecoin name filter (usd, dai, stable, etc.) | Webhook + Validator |
-| 4 | Address-based cooldown 120min | Webhook + Validator |
-| 5 | Name-based cooldown 120min (blocks same-name scams) | Webhook + Validator |
-| 6 | Bundle detection (>80% from 1 wallet = skip) | Webhook + Validator |
-| 7 | 2-min rug hold filter (buy+sell within 2min = skip) | Webhook + Validator |
-| 8 | Price fetch > 0 (Jupiter then DexScreener) | Webhook |
-| 9 | Liquidity > $10,000 USD + LP burned + top10 holders < 80% | Webhook |
+Summary: `bot_running`, stablecoin filter, offensive name filter, rug storm, Token-2022 extensions, gap, position already open, 120min address cooldown, 30min name cooldown, T1 Smart Money required, whale hold time (2min sell-after-buy), bundle detection, price fetch, `isPriceTooHigh`, full `checkTokenSafety` (liquidity ≥ $10k + fdv ≥ $10k + m5 ≥ −20%), LP burned + top10 holders ≤ 80%.
+
+Every reject logs `[WEBHOOK] ❌ ${coin} — ${reason}`. Full table with reject reason strings and cost classes: `PLAYBOOK.md`.
 
 ## Exit Priority
 
@@ -90,28 +88,11 @@ Risk Guard checks open positions every 5 seconds:
     L3: +100% → sell 25% (fully closed)
 ```
 
-## Open Backlog (April 17, 2026)
+## Backlog
 
-Full session detail: [docs/SPRINT5-DAY3-RECAP.md](docs/SPRINT5-DAY3-RECAP.md).
-
-**Done Day 2–3:**
-- ✅ Atomic-claim + sell-then-credit race fix in `risk-guard.ts`
-- ✅ Phantom infinite-loop fix: zero-balance → close with locked PnL
-- ✅ Jupiter error **6024** immediate bail (no more 4-slippage futility)
-- ✅ Token-2022 extension filter at entry (TransferFee / NonTransferable / PermanentDelegate / TransferHook)
-- ✅ `src/scripts/sell-pumpfun.ts` — direct bonding-curve sell rescue when Jupiter can't route
-- ✅ Late-confirm rescue for Jupiter buy timeouts (`trade-executor.ts`)
-- ✅ Constants consolidation (`config/smart-money.ts`)
-- ✅ Recovered 8 stuck bags, burned 2 worthless orphans, bankroll reconciled twice (−$91.77 + −$125.96)
-- ✅ Telegram alerts code (`src/lib/telegram.ts`) — wire `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` to enable
-
-**Open:**
-- **P1** Cosmetic log bug — SL/CB/TO log fires after `closeTrade()` returned early (behavior correct, log misleading)
-- **P1** Jupiter 429 retry backoff (buy path)
-- **P2** **Trailing stop after L3** — biggest alpha ask; airdropper ran 140x but grid capped us at +42.5%
-- **P2** Telegram setup in `.env.local`
-- **P2** Cloudflare Workers migration for 24/7 uptime
-- **P3** Scale to 0.10 SOL after one clean session: zero phantoms, zero stuck sells, WR > 55% on ≥20 real LIVE trades
+Active Sprint 8 queue: [docs/BACKLOG.md](docs/BACKLOG.md).
+Forward roadmap incl. gated scale-up: [ROADMAP.md](ROADMAP.md).
+History per sprint: [SPRINT.md](SPRINT.md).
 
 ## Sprint 5 Day 1 Live Trading Results (April 15, 2026)
 
