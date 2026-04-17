@@ -164,20 +164,26 @@ export async function startTradeExecutor(): Promise<void> {
 
         console.log(`  [EXECUTOR] New trade detected: ${coin} — attempting LIVE BUY...`);
 
-        // Check daily loss limit — count losing LIVE trades since midnight UTC
+        // Check daily loss limit — sum REAL SOL lost across losing LIVE trades
+        // since midnight UTC. Each trade's real SOL loss = LIVE_BUY_SOL ×
+        // |pnl_pct| / 100, where pnl_pct already reflects the blended outcome
+        // across grid partials (L1/L2 locked profits reduce net loss).
         const todayStart = `${new Date().toISOString().slice(0, 10)}T00:00:00Z`;
-        const { count: lossCount } = await supabase
+        const { data: losses } = await supabase
           .from("paper_trades")
-          .select("id", { count: "exact", head: true })
+          .select("pnl_pct")
           .eq("status", "closed")
           .gte("exit_time", todayStart)
           .lt("pnl_pct", 0)
           .like("wallet_tag", "%[LIVE]%");
-        const todayLosses = lossCount || 0;
-        const totalLossSol = todayLosses * LIVE_BUY_SOL;
+        const todayLosses = losses?.length ?? 0;
+        const totalLossSol = (losses ?? []).reduce((sum, t) => {
+          const pct = Number(t.pnl_pct);
+          return sum + (LIVE_BUY_SOL * Math.abs(pct)) / 100;
+        }, 0);
 
         if (totalLossSol >= DAILY_LOSS_LIMIT_SOL) {
-          console.log(`  [EXECUTOR] 🛑 LIVE BUY skipped — daily loss limit: ${todayLosses} losses × ${LIVE_BUY_SOL} = ${totalLossSol.toFixed(2)} SOL (max ${DAILY_LOSS_LIMIT_SOL} SOL, resets midnight UTC)`);
+          console.log(`  [EXECUTOR] 🛑 LIVE BUY skipped — daily loss limit: ${todayLosses} losses, real SOL lost: ${totalLossSol.toFixed(3)} (max ${DAILY_LOSS_LIMIT_SOL} SOL, resets midnight UTC)`);
           continue;
         }
 

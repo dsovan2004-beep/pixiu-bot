@@ -59,29 +59,35 @@ async function checkDailyLossLimit(): Promise<void> {
 
   if (dailyLossLimitHit) return;
 
-  // Count losing LIVE trades today × 0.05 SOL per trade (actual exposure)
+  // Sum REAL SOL lost across losing LIVE trades since midnight UTC.
+  // Each trade's real SOL loss = LIVE_BUY_SOL × |pnl_pct| / 100.
+  // pnl_pct is already the blended outcome across grid partials, so this
+  // correctly accounts for L1/L2 locked profits reducing net loss.
   const todayStart = `${todayUTC}T00:00:00Z`;
-  const { count: lossCount } = await supabase
+  const { data: losses } = await supabase
     .from("paper_trades")
-    .select("id", { count: "exact", head: true })
+    .select("pnl_pct")
     .eq("status", "closed")
     .gte("exit_time", todayStart)
     .lt("pnl_pct", 0)
     .like("wallet_tag", "%[LIVE]%");
 
-  if (!lossCount || lossCount === 0) return;
+  if (!losses || losses.length === 0) return;
 
-  // Each losing trade = LIVE_BUY_SOL real exposure
-  const totalLossSol = (lossCount || 0) * LIVE_BUY_SOL;
+  const totalLossSol = losses.reduce((sum, t) => {
+    const pct = Number(t.pnl_pct);
+    return sum + (LIVE_BUY_SOL * Math.abs(pct)) / 100;
+  }, 0);
+  const lossCount = losses.length;
 
   if (totalLossSol >= DAILY_LOSS_LIMIT_SOL) {
     dailyLossLimitHit = true;
     console.log(
-      `  [GUARD] 🛑 Daily loss limit hit — ${lossCount} losing trades × ${LIVE_BUY_SOL} = ${totalLossSol.toFixed(2)} SOL`
+      `  [GUARD] 🛑 Daily loss limit hit — ${lossCount} losing trades, real SOL lost: ${totalLossSol.toFixed(3)}`
     );
     void sendAlert(
       "daily_limit",
-      `Daily loss limit hit: ${lossCount} losses = ${totalLossSol.toFixed(2)} SOL. Bot stopped.`
+      `Daily loss limit hit: ${lossCount} losses = ${totalLossSol.toFixed(3)} SOL real. Bot stopped.`
     );
     // Stop the bot via Supabase — executor checks is_running on every poll
     try {

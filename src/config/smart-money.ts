@@ -33,17 +33,15 @@ export const POSITION_SIZE_PCT = 0.01; // 1% of bankroll
 
 // ─── Live trading sizing & risk caps ───────────────────
 // SINGLE SOURCE OF TRUTH — do not redeclare in agents.
-// Real exposure per trade is LIVE_BUY_SOL. Daily limit is total loss in SOL.
+// Real exposure per trade is LIVE_BUY_SOL.
+// DAILY_LOSS_LIMIT_SOL is the cap on REAL SOL lost (not trade count × size).
+// The counter in risk-guard.ts / trade-executor.ts sums
+//   LIVE_BUY_SOL × |pnl_pct| / 100
+// across losing LIVE trades since midnight UTC. pnl_pct reflects the blended
+// outcome across grid partials, so locked L1/L2 profits correctly reduce
+// the contribution to the daily loss total.
 export const LIVE_BUY_SOL = 0.05;
-// TEMPORARY: raised 2.0 → 3.0 because the current counter OVERSTATES real SOL
-// lost. It treats every closed trade with pnl_pct < 0 as a full LIVE_BUY_SOL
-// loss, ignoring locked L1/L2 partial profits. Sampled this morning's 40
-// "losses": avg real SOL lost per trade ≈ 0.0125 (not 0.05), so actual loss
-// was ~0.5 SOL, not 2.0.
-// PROPER FIX (follow-up): replace count × size with SUM(0.05 × pnl_pct / 100)
-// over losing LIVE trades since midnight UTC. Revert this to 2.0 once the
-// accurate tracking is in place.
-export const DAILY_LOSS_LIMIT_SOL = 3.0;
+export const DAILY_LOSS_LIMIT_SOL = 2.0;
 
 // Late-confirm window for Jupiter buys (Bug P1).
 // After a buy is marked "failed", check on-chain again after this delay —
