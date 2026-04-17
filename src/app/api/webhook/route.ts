@@ -327,17 +327,19 @@ async function evaluateAndEnter(
   // no new entries via any path. Without this, webhook bypasses the
   // dashboard STOP button and opens positions the user didn't approve.
   if (!(await webhookIsBotRunning())) {
+    console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — bot_stopped`);
     return { entered: false, reason: "bot_stopped" };
   }
 
   // Stablecoin name filter — fastest rejection
   if (coinName && isStablecoinName(coinName)) {
+    console.log(`  [WEBHOOK] ❌ ${coinName} — stablecoin name filter`);
     return { entered: false, reason: `stablecoin name filter: ${coinName}` };
   }
 
   // Offensive name filter — block hate speech / slurs
   if (isOffensiveName(coinName)) {
-    console.log(`  [FILTER] Blocked offensive coin name: ${coinName}`);
+    console.log(`  [WEBHOOK] ❌ ${coinName} — offensive name filter`);
     return { entered: false, reason: `offensive name filter: ${coinName}` };
   }
 
@@ -347,6 +349,7 @@ async function evaluateAndEnter(
   // Uses inline webhookIsRugStorm() because entry-guards.ts pulls Node.js
   // deps that CF Edge runtime rejects.
   if (await webhookIsRugStorm()) {
+    console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — rug_storm_active`);
     return { entered: false, reason: "rug_storm_active" };
   }
 
@@ -361,6 +364,7 @@ async function evaluateAndEnter(
 
   // Gap filter
   if (gapMinutes > MAX_GAP_MINUTES) {
+    console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — gap ${gapMinutes}m > ${MAX_GAP_MINUTES}m`);
     return { entered: false, reason: `gap ${gapMinutes}m > ${MAX_GAP_MINUTES}m` };
   }
 
@@ -372,6 +376,7 @@ async function evaluateAndEnter(
     .eq("status", "open");
 
   if ((openCount || 0) > 0) {
+    console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — position already open`);
     return { entered: false, reason: "position already open" };
   }
 
@@ -385,6 +390,7 @@ async function evaluateAndEnter(
     .gte("exit_time", cooldownCutoff);
 
   if ((recentCount || 0) > 0) {
+    console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — 120min cooldown (address)`);
     return { entered: false, reason: "recently traded (120min cooldown, same address)" };
   }
 
@@ -400,6 +406,7 @@ async function evaluateAndEnter(
       .gte("exit_time", nameCooldownCutoff);
 
     if ((nameCount || 0) > 0) {
+      console.log(`  [WEBHOOK] ❌ ${coinName} — 30min cooldown (name)`);
       return { entered: false, reason: `recently traded same name (30min cooldown): ${coinName}` };
     }
   }
@@ -451,6 +458,7 @@ async function evaluateAndEnter(
     const reason = t2Names.length > 0
       ? `no T1 Smart Money — ${t2Names.length} T2 wallet(s) need T1 confirmation: ${t2Names.join(",")}`
       : `no T1 Smart Money (${allTags.size} wallets, 0 T1)`;
+    console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — ${reason}`);
     return { entered: false, reason };
   }
 
@@ -484,6 +492,7 @@ async function evaluateAndEnter(
   const totalSigs = (recentSignals?.length || 0) + 1;
   for (const [tag, count] of signalsByWallet) {
     if (count / totalSigs >= 0.8 && totalSigs >= 3) {
+      console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — bundle (${tag} = ${count}/${totalSigs})`);
       return { entered: false, reason: `bundle (${tag} = ${count}/${totalSigs})` };
     }
   }
@@ -492,13 +501,13 @@ async function evaluateAndEnter(
   const { price, source } = await getPrice(mint);
 
   if (!price || price <= 0) {
-    console.log(`  [SKIP] ${coinName} — could not fetch price, skipping entry`);
+    console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — price fetch failed (source: ${source})`);
     return { entered: false, reason: `price fetch failed (source: ${source})` };
   }
 
   // Max entry price filter — reject high-priced stable tokens
   if (isPriceTooHigh(price)) {
-    console.log(`  [VALIDATOR] Rejected — price too high: $${price.toFixed(10)} (max $0.001)`);
+    console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — price too high: $${price.toFixed(10)} (max $0.001)`);
     return { entered: false, reason: `price too high: $${price}` };
   }
 
@@ -516,9 +525,11 @@ async function evaluateAndEnter(
   // LP burn & holder check
   const { lpSafe, holdersSafe } = await checkLpAndHolders(mint);
   if (!lpSafe) {
+    console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — LP not burned`);
     return { entered: false, reason: "LP not burned (rug risk)" };
   }
   if (!holdersSafe) {
+    console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — top10 holders >80%`);
     return { entered: false, reason: "top10 holders >80% (developer cluster)" };
   }
 
@@ -547,6 +558,7 @@ async function evaluateAndEnter(
   });
 
   if (error) {
+    console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — db error: ${error.message}`);
     return { entered: false, reason: `db error: ${error.message}` };
   }
 
