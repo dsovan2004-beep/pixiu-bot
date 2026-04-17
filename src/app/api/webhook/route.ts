@@ -454,6 +454,27 @@ async function evaluateAndEnter(
     return { entered: false, reason };
   }
 
+  // Whale hold time — if any confirming wallet sold this coin within 2min
+  // of buying, it's a rug/test pattern. Migrated from signal-validator.ts.
+  // Catches the exact case where a whale buys then dumps to trigger followers
+  // into a rug.
+  const twoMinAgo = new Date(Date.now() - 2 * 60_000).toISOString();
+  const { data: quickSells } = await supabase
+    .from("coin_signals")
+    .select("wallet_tag")
+    .eq("coin_address", mint)
+    .eq("transaction_type", "SELL")
+    .gte("signal_time", twoMinAgo);
+
+  if (quickSells && quickSells.length > 0) {
+    const sellerTags = new Set(quickSells.map((s) => s.wallet_tag));
+    const overlap = Array.from(allTags).filter((t) => sellerTags.has(t));
+    if (overlap.length > 0) {
+      console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — ${overlap[0]} sold within 2min (likely rug)`);
+      return { entered: false, reason: `quick_sell_${overlap[0]}` };
+    }
+  }
+
   // Bundle check: any wallet = 80%+ of signals
   const signalsByWallet = new Map<string, number>();
   for (const s of recentSignals || []) {
