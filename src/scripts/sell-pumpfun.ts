@@ -94,7 +94,7 @@ async function main() {
   const userAta = getAta(owner, mint, tokenProgram);
   const balInfo = await conn.getTokenAccountBalance(userAta);
   const amount = BigInt(balInfo.value.amount);
-  if (amount === 0n) {
+  if (amount === BigInt(0)) {
     console.log("No tokens to sell. Exiting.");
     return;
   }
@@ -143,7 +143,7 @@ async function main() {
   const data = Buffer.alloc(8 + 8 + 8);
   SELL_DISC.copy(data, 0);
   data.writeBigUInt64LE(amount, 8);
-  data.writeBigUInt64LE(0n, 16); // min_sol_output = 0 (accept anything)
+  data.writeBigUInt64LE(BigInt(0), 16); // min_sol_output = 0 (accept anything)
 
   const sellIx = new TransactionInstruction({
     programId: PUMPFUN_PROGRAM,
