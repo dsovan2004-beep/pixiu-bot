@@ -76,6 +76,87 @@ async function webhookIsBotRunning(): Promise<boolean> {
   }
 }
 
+// ─── Token-2022 Extension Check (Edge-runtime safe, inline) ─────
+// Blocks pump.fun tokens with extensions that make them un-sellable via
+// Jupiter (error 6024) or let the mint authority drain holders.
+// Migrated from src/agents/price-scout.ts. Uses plain fetch to Helius
+// RPC — no @solana/web3.js import (that would break CF Edge build the
+// same way path/dotenv did in commit 0ac8725).
+//
+// Mint layout: 0-165 = base SPL Mint, byte 165 = account type,
+// 166+ = TLV extensions [u16 type][u16 length][data...].
+// Blocking types:
+//   1  TransferFeeConfig — built-in transfer tax
+//   9  NonTransferable   — transfers disabled
+//  12  PermanentDelegate — mint authority can drain holders' tokens
+//  14  TransferHook      — pump.fun anti-bot (causes sell error 6024)
+//
+// SAFETY: on any RPC error, returns null (fail-open). Never false-reject
+// a token on network failure — downstream guards will still catch issues.
+
+const TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+const BLOCKING_T22_EXTENSIONS: Record<number, string> = {
+  1: "TransferFeeConfig",
+  9: "NonTransferable",
+  12: "PermanentDelegate",
+  14: "TransferHook",
+};
+
+async function checkTokenExtensions(mint: string): Promise<string | null> {
+  const heliusKey = process.env.HELIUS_API_KEY;
+  if (!heliusKey) return null; // fail-open if not configured
+
+  try {
+    const res = await fetch(
+      `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getAccountInfo",
+          params: [mint, { encoding: "base64" }],
+        }),
+        signal: AbortSignal.timeout(5000),
+      }
+    );
+    if (!res.ok) return null;
+    const j = await res.json();
+    const value = j.result?.value;
+    if (!value) return null;
+
+    // Standard SPL Token → no extensions possible
+    if (value.owner !== TOKEN_2022_PROGRAM_ID) return null;
+
+    // Decode base64 → Uint8Array (edge-compatible, no Buffer needed)
+    const b64: string = value.data?.[0];
+    if (!b64) return null;
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
+    // Base Mint is 165 bytes + 1 byte account type; TLV starts at 166.
+    if (bytes.length < 166 + 4) return null;
+
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let offset = 166;
+    while (offset + 4 <= bytes.length) {
+      const extType = dv.getUint16(offset, true);
+      const extLen = dv.getUint16(offset + 2, true);
+      const name = BLOCKING_T22_EXTENSIONS[extType];
+      if (name) return name;
+      offset += 4 + extLen;
+      // Stop on Uninitialized extension (type=0, len=0)
+      if (extLen === 0 && extType === 0) break;
+    }
+    return null;
+  } catch {
+    // Network timeout, parse error, or any other failure → fail-open.
+    return null;
+  }
+}
+
 const MIN_LIQUIDITY_USD = 10_000;
 
 async function checkLiquidity(mint: string): Promise<{ liquidity: number | null; passed: boolean }> {
@@ -267,6 +348,15 @@ async function evaluateAndEnter(
   // deps that CF Edge runtime rejects.
   if (await webhookIsRugStorm()) {
     return { entered: false, reason: "rug_storm_active" };
+  }
+
+  // Token-2022 extension check — fail fast on un-sellable mints BEFORE
+  // any expensive network calls (price fetch, RugCheck, etc.). Migrated
+  // from price-scout.ts. RPC errors fail-open (return null).
+  const badExt = await checkTokenExtensions(mint);
+  if (badExt) {
+    console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — Token-2022 ${badExt} (un-sellable)`);
+    return { entered: false, reason: `token_2022_${badExt.toLowerCase()}` };
   }
 
   // Gap filter
