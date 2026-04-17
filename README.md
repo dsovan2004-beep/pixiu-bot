@@ -12,7 +12,8 @@ Autonomous Solana memecoin trading bot. Copies Smart Money wallet trades with a 
 | Sprint 3 | COMPLETE | 6-agent swarm, 131 trades, 56.5% WR, $11,325 (+13.26%) |
 | Sprint 4 | COMPLETE | Jupiter live swaps, dashboard toggle, safety audit |
 | Sprint 5 Day 1 | COMPLETE | 4/5 wins (80% WR), +0.0224 SOL gross — 16 transition bugs fixed |
-| Sprint 5 Day 2 | **LIVE** | Autonomous run, +129% / +205% whale exits; 4 latent bugs logged |
+| Sprint 5 Day 2 | COMPLETE | Double-credit race fixed, 8 stuck bags recovered, rescue paths shipped |
+| Sprint 5 Day 3 | **LIVE** | Phantom-loop + 6024 bail + Token-2022 filter + pump.fun rescue script |
 | Recovery Goal | $3,325 — REACHED | $3,971 gross wins from $10K paper start |
 
 ## Architecture
@@ -89,21 +90,28 @@ Risk Guard checks open positions every 5 seconds:
     L3: +100% → sell 25% (fully closed)
 ```
 
-## Open Backlog (April 16, 2026)
+## Open Backlog (April 17, 2026)
 
-See [docs/SPRINT5-DAY2-RECAP.md](docs/SPRINT5-DAY2-RECAP.md) for full context.
+Full session detail: [docs/SPRINT5-DAY3-RECAP.md](docs/SPRINT5-DAY3-RECAP.md).
 
-**Done today:**
-- ✅ Atomic-claim + sell-then-credit in `risk-guard.ts` (no more double-sell / double-credit)
-- ✅ Recovered 8 stuck token bags + bankroll reconciled (-$91.77)
-- ✅ Late-confirm rescue path for Jupiter buy timeouts (`trade-executor.ts`)
-- ✅ Single source of truth for sizing/limit constants (`config/smart-money.ts`)
-- ✅ Telegram alerts (`src/lib/telegram.ts`) — set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` to enable
+**Done Day 2–3:**
+- ✅ Atomic-claim + sell-then-credit race fix in `risk-guard.ts`
+- ✅ Phantom infinite-loop fix: zero-balance → close with locked PnL
+- ✅ Jupiter error **6024** immediate bail (no more 4-slippage futility)
+- ✅ Token-2022 extension filter at entry (TransferFee / NonTransferable / PermanentDelegate / TransferHook)
+- ✅ `src/scripts/sell-pumpfun.ts` — direct bonding-curve sell rescue when Jupiter can't route
+- ✅ Late-confirm rescue for Jupiter buy timeouts (`trade-executor.ts`)
+- ✅ Constants consolidation (`config/smart-money.ts`)
+- ✅ Recovered 8 stuck bags, burned 2 worthless orphans, bankroll reconciled twice (−$91.77 + −$125.96)
+- ✅ Telegram alerts code (`src/lib/telegram.ts`) — wire `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` to enable
 
-**Remaining:**
-- **P2** Jupiter 429 retry backoff (buy path)
+**Open:**
+- **P1** Cosmetic log bug — SL/CB/TO log fires after `closeTrade()` returned early (behavior correct, log misleading)
+- **P1** Jupiter 429 retry backoff (buy path)
+- **P2** **Trailing stop after L3** — biggest alpha ask; airdropper ran 140x but grid capped us at +42.5%
+- **P2** Telegram setup in `.env.local`
 - **P2** Cloudflare Workers migration for 24/7 uptime
-- **P3** Scale to 0.10 SOL after 20 clean trades at 0.05 with WR > 55%
+- **P3** Scale to 0.10 SOL after one clean session: zero phantoms, zero stuck sells, WR > 55% on ≥20 real LIVE trades
 
 ## Sprint 5 Day 1 Live Trading Results (April 15, 2026)
 

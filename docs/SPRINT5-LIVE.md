@@ -74,20 +74,53 @@ Bot ran autonomously through a full session. Highlights:
 - Daily loss limit triggered mid-session, blocked further entries (working as designed)
 - Surfaced 4 latent bugs — see [SPRINT5-DAY2-RECAP.md](./SPRINT5-DAY2-RECAP.md)
 
-## Backlog (updated April 16)
+## Day 3 Update (April 17, 2026)
 
-**P0 — blocks scaling**
-- [ ] Fix double-sell / double-bankroll-credit (Broke Company case)
-- [ ] Reconcile bankroll vs on-chain SOL after the double-count
+Overnight autonomous session surfaced two more P0-class bugs + shipped
+infra. Real wallet down −1.63 SOL on the day (paper showed 64.2% WR but
+many [LIVE]-tagged buys never actually landed). All fixed.
+
+Headlines:
+- 🐛 Phantom infinite-loop: 15 positions stuck `open`, guard polling
+  "sell → 0 balance → revert to open" forever. Fixed in `risk-guard.ts` —
+  zero balance now closes with locked PnL.
+- 🐛 Jupiter 6024: sell retried 4 slippage levels uselessly (~4 min waste).
+  Now bails immediately.
+- 🛡️ Token-2022 extension filter at entry: blocks TransferFee/Hook/
+  NonTransferable/PermanentDelegate mints before buying.
+- 🛟 `sell-pumpfun.ts` — direct bonding-curve sell rescue script when
+  Jupiter can't route.
+- 📈 Missed a 140x on `airdropper` due to grid cap at +42.5% + buy
+  never landing. Trailing-stop mode is the fix (not yet shipped).
+
+See [SPRINT5-DAY3-RECAP.md](./SPRINT5-DAY3-RECAP.md) for full detail.
+
+## Backlog (updated April 17)
+
+**Done Day 2–3:**
+- ✅ Atomic-claim + sell-then-credit in `risk-guard.ts`
+- ✅ Recovered 8 stuck token bags, burned 2 orphans
+- ✅ Bankroll reconciled (Day 2 −$91.77, Day 3 −$125.96)
+- ✅ Late-confirm Jupiter buy rescue path
+- ✅ Constants consolidation (`config/smart-money.ts`)
+- ✅ Telegram alerts (code ready, setup pending)
+- ✅ Phantom infinite-loop fix (zero-balance → close with locked PnL)
+- ✅ Jupiter 6024 immediate bail
+- ✅ Token-2022 extension filter at entry
+- ✅ `sell-pumpfun.ts` direct bonding-curve rescue
+
+**Still open:**
 
 **P1 — reliability**
-- [ ] Late-confirm Jupiter buy timeouts (poll signature status another 30-60s before failing)
-- [ ] Consolidate position-size + daily-loss-limit constants (currently 3 different values across files)
+- [ ] Cosmetic log bug: SL/CB/TO log fires after `closeTrade()` returns
+  early. Behavior correct, log is misleading.
+- [ ] Jupiter 429 retry backoff (buy path)
 
-**P2 — robustness**
-- [ ] Backoff on Jupiter 429 retries (buy path)
-- [ ] Telegram alerts (whale exit, CB, daily limit hit, buy timeout)
-- [ ] Cloudflare Workers migration for 24/7 uptime
+**P2 — capture upside**
+- [ ] Trailing stop after L3 (biggest alpha ask — airdropper 140x miss)
+- [ ] Telegram setup in `.env.local` (TELEGRAM_BOT_TOKEN + CHAT_ID)
+- [ ] Cloudflare Workers 24/7 uptime
 
 **P3 — scaling**
-- [ ] Re-enable 0.10 SOL position size after P0/P1 fixed AND 20+ trades at 0.05 with WR > 55%
+- [ ] 0.10 SOL position size — only after one clean session:
+  zero phantoms, zero stuck sells, WR > 55% on ≥20 real LIVE trades.
