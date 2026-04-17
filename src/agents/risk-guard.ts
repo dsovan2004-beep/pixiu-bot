@@ -347,9 +347,13 @@ async function checkPositions(): Promise<void> {
       }
 
       // 4. Sell landed (or paper trade) — finalize close + credit bankroll exactly once.
+      // IDEMPOTENT close: only transition 'closing' → 'closed'. If another path
+      // already closed the row, the update matches 0 rows and we skip the
+      // bankroll credit + the Telegram alert. Same pattern as the !held branch
+      // above — prevents the double-credit bug observed on Deep Fucking Value.
       const ep = exitPrice ?? currentPrice;
       const pnlUsd = (finalPnl / 100) * posSize;
-      await supabase
+      const { data: flipped } = await supabase
         .from("paper_trades")
         .update({
           exit_price: ep,
@@ -362,7 +366,14 @@ async function checkPositions(): Promise<void> {
           remaining_pct: 0,
           partial_pnl: finalPnl,
         })
-        .eq("id", pos.id);
+        .eq("id", pos.id)
+        .eq("status", "closing")
+        .select("id")
+        .maybeSingle();
+      if (!flipped) {
+        console.log(`  [GUARD] ⚠️ ${coinLabel} already closed by another path — skipping bankroll credit`);
+        return;
+      }
       await updateBankroll(pnlUsd);
 
       // Telegram alert — only for meaningful exits on LIVE trades
