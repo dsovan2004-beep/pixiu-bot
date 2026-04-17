@@ -292,7 +292,11 @@ async function checkPositions(): Promise<void> {
           console.log(`  [GUARD] Token balance 0 — marking ${coinLabel} as closed (locked PnL: ${closedPnl.toFixed(2)}%)`);
           const ep = exitPrice ?? currentPrice;
           const closedPnlUsd = (closedPnl / 100) * posSize;
-          await supabase
+          // IDEMPOTENT close: only transition 'closing' → 'closed'. If the row
+          // is already closed (by any prior path), the update matches 0 rows
+          // and we skip the bankroll credit — prevents the double-credit bug
+          // observed on Deep Fucking Value.
+          const { data: flipped } = await supabase
             .from("paper_trades")
             .update({
               exit_price: ep,
@@ -305,7 +309,14 @@ async function checkPositions(): Promise<void> {
               remaining_pct: 0,
               partial_pnl: closedPnl,
             })
-            .eq("id", pos.id);
+            .eq("id", pos.id)
+            .eq("status", "closing")
+            .select("id")
+            .maybeSingle();
+          if (!flipped) {
+            console.log(`  [GUARD] ⚠️ ${coinLabel} already closed by another path — skipping bankroll credit`);
+            return;
+          }
           await updateBankroll(closedPnlUsd);
           void sendAlert(
             gridLvl > 0 ? "take_profit" : "stop_loss",

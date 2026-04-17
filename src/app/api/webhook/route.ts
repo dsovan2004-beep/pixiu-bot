@@ -15,6 +15,7 @@ import {
   POSITION_SIZE_PCT,
 } from "@/config/smart-money";
 import { isPriceTooHigh, isOffensiveName } from "@/lib/price-guards";
+import { isRugStorm } from "@/lib/entry-guards";
 
 export const runtime = "edge";
 
@@ -208,6 +209,13 @@ async function evaluateAndEnter(
   if (isOffensiveName(coinName)) {
     console.log(`  [FILTER] Blocked offensive coin name: ${coinName}`);
     return { entered: false, reason: `offensive name filter: ${coinName}` };
+  }
+
+  // Rug storm protection — must match signal-validator.ts behavior.
+  // Without this, webhook entries bypass the market-wide rug-storm pause
+  // (observed: Asteroid bypass caused -45.96% loss during an active storm).
+  if (await isRugStorm()) {
+    return { entered: false, reason: "rug_storm_active" };
   }
 
   // Gap filter
