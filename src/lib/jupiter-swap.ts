@@ -365,6 +365,13 @@ export async function sellToken(
 
         if (onChainError) {
           const errStr = JSON.stringify(onChainError);
+          // 6024 = Token-2022 transfer fee / minimum-out violation.
+          // Higher slippage does not help — the token has a built-in
+          // transfer tax. Bail immediately so the guard can handle it.
+          if (errStr.includes("6024")) {
+            console.error(`  [JUPITER] Token has transfer fee (6024) — sell impossible, skipping retries: ${coinAddress}`);
+            return null;
+          }
           const is6001 = errStr.includes("6001");
           if (is6001) {
             console.log(`  [JUPITER] SELL failed (6001 slippage exceeded) at ${slippage / 100}% — retrying at higher slippage...`);

@@ -9,6 +9,74 @@
 
 import supabase from "../lib/supabase-server";
 import { isPriceTooHigh } from "../lib/price-guards";
+import { Connection, PublicKey } from "@solana/web3.js";
+
+// ─── Token-2022 Transfer-Fee / Hook Check ───────────────
+// Token-2022 mints can declare extensions that make them un-sellable via
+// Jupiter (sell tx fails with on-chain error 6024). Block these at entry.
+//
+// Mint layout:
+//   bytes 0..165   — standard SPL Mint
+//   byte  165      — account-type discriminator (1 byte)
+//   bytes 166..    — TLV extensions [u16 type][u16 length][data...]
+// Ref: https://spl.solana.com/token-2022/extensions
+//
+// Blocking extensions (all cause sell failures or drain risk):
+//   1  TransferFeeConfig   — built-in transfer tax
+//   9  NonTransferable     — can't transfer at all
+//  12  PermanentDelegate   — mint authority can drain holders' tokens
+//  14  TransferHook        — pump.fun anti-bot / custom gating (6024)
+
+const TOKEN_2022_PROGRAM_ID = new PublicKey(
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+);
+const BLOCKING_EXTENSIONS: Record<number, string> = {
+  1: "TransferFeeConfig",
+  9: "NonTransferable",
+  12: "PermanentDelegate",
+  14: "TransferHook",
+};
+
+function getConnection(): Connection {
+  const heliusKey = process.env.HELIUS_API_KEY || "";
+  return new Connection(
+    `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`,
+    "confirmed"
+  );
+}
+
+/**
+ * Returns the name of the first blocking extension found, or null if safe.
+ */
+async function detectBlockingExtension(mint: string): Promise<string | null> {
+  try {
+    const conn = getConnection();
+    const info = await conn.getAccountInfo(new PublicKey(mint));
+    if (!info) return null;
+
+    // Standard SPL Token → no extensions possible
+    if (!info.owner.equals(TOKEN_2022_PROGRAM_ID)) return null;
+
+    const data = info.data;
+    // Base Mint is 165 bytes; account-type byte at 165; TLV starts at 166.
+    if (data.length < 166 + 4) return null;
+
+    let offset = 166;
+    while (offset + 4 <= data.length) {
+      const extType = data.readUInt16LE(offset);
+      const extLen = data.readUInt16LE(offset + 2);
+      const name = BLOCKING_EXTENSIONS[extType];
+      if (name) return name;
+      offset += 4 + extLen;
+      // Safety: if extLen is 0 and extType is 0 (Uninitialized), stop walking.
+      if (extLen === 0 && extType === 0) break;
+    }
+    return null;
+  } catch {
+    // Network/parse failure → do not block (downstream filters still run)
+    return null;
+  }
+}
 
 interface EntryEvent {
   coin_address: string;
@@ -121,6 +189,15 @@ export async function startPriceScout(): Promise<void> {
       const entry = payload as EntryEvent;
       const coin =
         entry.coin_name || entry.coin_address.slice(0, 8) + "...";
+
+      // Filter 0a: Token-2022 extension check — transfer-fee / hook / non-transferable
+      // / permanent-delegate mints are un-sellable via Jupiter (error 6024) or
+      // drainable. Runs BEFORE price fetch to save API calls on dead mints.
+      const badExt = await detectBlockingExtension(entry.coin_address);
+      if (badExt) {
+        console.log(`  [SCOUT] Blocked Token-2022 transfer fee token: ${coin} (${badExt})`);
+        return;
+      }
 
       const { price, source } = await fetchDexScreenerPrice(
         entry.coin_address
