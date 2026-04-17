@@ -8,14 +8,50 @@ Top-level index of sprints. Per-sprint detail lives in
 
 ## Current sprint
 
-**Sprint 8 — starts Apr 18 2026.** Cleanup + cloud migration.
+**Sprint 8 — opened Apr 17 2026, in progress.** Reliability +
+cleanup + cloud migration. **Trading is paused until the P0 cluster
+ships.**
 
-- **Status:** not yet started. Backlog defined, no code yet.
-- **Active backlog:** `docs/BACKLOG.md`
-- **Primary goal:** land the commit 6 cleanup pass, then start the
-  Mac → DigitalOcean migration for the swarm runner.
-- **Gates unlocked next:** position size 0.05 → 0.10 SOL (P3)
-  pending 48h clean + WR > 55% on 20+ trades + buy-land > 90%.
+### Pre-trading gate (all must be done before the next live session)
+
+1. **P0a — Jupiter 429 retry backoff** shipped + CF green.
+2. **P0b — Idempotent-close race fix** (partial→final credit path)
+   shipped + CF green.
+3. **P0c — Bankroll reconcile** run against real SOL. Must come
+   AFTER P0a + P0b deploy, otherwise it re-drifts on the next trade.
+4. **P2a — Dashboard "Total Trades" relabel** shipped. (Carried
+   over from Apr 17 — UX bug that caused the false "dashboard
+   broken" alert.)
+
+Only when all four are green does `is_running` flip back on.
+
+### Status
+
+Scoped, no code shipped yet. Backlog priorities set after the
+Apr 17 22:00 UTC session surfaced two P0 issues:
+- Jupiter 429 cascade (71 `status=failed` buys today)
+- Paper bankroll double-credit on Retail Coin close (+$21.72
+  phantom + ≈$145 unbooked mark-to-zero = ≈$165 drift)
+
+### Active backlog
+
+`docs/BACKLOG.md`. Full priority order:
+- **P0a/P0b/P0c** — pre-trading gate (above)
+- **P1** — commit 6 dead-code cleanup pass (includes `DATA_MODEL.md`
+  schema correction)
+- **P2a** — dashboard "Total Trades" relabel *(gate item above;
+  listed here for completeness)*
+- **P2b** — Mac → DigitalOcean swarm migration
+- **P3** — position size 0.05 → 0.10 SOL bump (hard-gated)
+- **P3 cluster** — startup `bot_state` retry + log cleanup
+- **P4** — $1K capital injection (gated after P3)
+
+### Gates unlocked next
+
+Position size 0.05 → 0.10 SOL (P3) pending 48h clean + WR > 55%
+on 20+ trades + buy-land > 90%. The P0a Jupiter 429 fix directly
+enables the buy-land metric; P0b prevents accounting drift that
+would otherwise corrupt the WR measurement.
 
 ---
 
