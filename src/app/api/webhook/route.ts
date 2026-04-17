@@ -15,7 +15,6 @@ import {
   POSITION_SIZE_PCT,
 } from "@/config/smart-money";
 import { isPriceTooHigh, isOffensiveName } from "@/lib/price-guards";
-import { isRugStorm } from "@/lib/entry-guards";
 
 export const runtime = "edge";
 
@@ -33,6 +32,28 @@ function isStablecoinName(name: string): boolean {
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const supabase = createClient(supabaseUrl, supabaseKey);
+
+// ─── Rug Storm Check (Edge-runtime safe, inline) ─────────
+// Duplicated from src/lib/entry-guards.ts because that file imports
+// supabase-server.ts which pulls Node.js 'path' — not supported in CF
+// Edge runtime. Logic must stay in sync with entry-guards.ts.
+// Stateless (no module cache) — each webhook invocation queries fresh.
+const RUG_STORM_THRESHOLD = 3; // 3/5 losses → rug storm
+const RUG_STORM_WINDOW = 5;
+
+async function webhookIsRugStorm(): Promise<boolean> {
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+  const { data: recentTrades } = await supabase
+    .from("paper_trades")
+    .select("pnl_pct")
+    .eq("status", "closed")
+    .gte("exit_time", twoHoursAgo)
+    .order("exit_time", { ascending: false })
+    .limit(RUG_STORM_WINDOW);
+  if (!recentTrades || recentTrades.length < RUG_STORM_WINDOW) return false;
+  const losses = recentTrades.filter((t) => Number(t.pnl_pct) < 0).length;
+  return losses >= RUG_STORM_THRESHOLD;
+}
 
 const MIN_LIQUIDITY_USD = 10_000;
 
@@ -214,7 +235,9 @@ async function evaluateAndEnter(
   // Rug storm protection — must match signal-validator.ts behavior.
   // Without this, webhook entries bypass the market-wide rug-storm pause
   // (observed: Asteroid bypass caused -45.96% loss during an active storm).
-  if (await isRugStorm()) {
+  // Uses inline webhookIsRugStorm() because entry-guards.ts pulls Node.js
+  // deps that CF Edge runtime rejects.
+  if (await webhookIsRugStorm()) {
     return { entered: false, reason: "rug_storm_active" };
   }
 
