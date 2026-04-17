@@ -55,6 +55,27 @@ async function webhookIsRugStorm(): Promise<boolean> {
   return losses >= RUG_STORM_THRESHOLD;
 }
 
+// ─── Bot Running Check (Edge-runtime safe, inline) ─────────
+// Reads `is_running` from bot_state. If false (dashboard STOP), the
+// webhook must NOT insert paper_trades or executor will fire a Jupiter
+// buy during STOP state. Observed: The Bull -60.61%, 千鳥 -44.66%,
+// dogwifbeanie -37.71% all opened while bot was STOPPED.
+// SAFETY: on any error, default to FALSE (not running) — never trade
+// if we can't confirm running state.
+async function webhookIsBotRunning(): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from("bot_state")
+      .select("is_running")
+      .limit(1)
+      .single();
+    if (error || !data) return false;
+    return data.is_running === true;
+  } catch {
+    return false;
+  }
+}
+
 const MIN_LIQUIDITY_USD = 10_000;
 
 async function checkLiquidity(mint: string): Promise<{ liquidity: number | null; passed: boolean }> {
@@ -220,6 +241,13 @@ async function evaluateAndEnter(
   gapMinutes: number
 ): Promise<{ entered: boolean; reason: string }> {
   const startMs = Date.now();
+
+  // Bot-running check — HIGHEST PRIORITY. If dashboard shows STOPPED,
+  // no new entries via any path. Without this, webhook bypasses the
+  // dashboard STOP button and opens positions the user didn't approve.
+  if (!(await webhookIsBotRunning())) {
+    return { entered: false, reason: "bot_stopped" };
+  }
 
   // Stablecoin name filter — fastest rejection
   if (coinName && isStablecoinName(coinName)) {
