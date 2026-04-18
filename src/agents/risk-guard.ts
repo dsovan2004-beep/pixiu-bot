@@ -128,12 +128,13 @@ const STOP_LOSS_PCT = 10;
 // partials we've already locked ≥ +7.5%, so keep the looser -25% for
 // those — more tolerance for volatility when downside is capped.
 const CIRCUIT_BREAKER_L0_PCT = 15;  // no partials locked yet — exit earlier
-// Sprint 10 P0 (Apr 18 PM) — tightened L1+ CB from -25% to -10%.
+// Sprint 10 P0 (Apr 18 PM) — tightened L1+ CB from -25% to -15%.
 // Evidence: 2 L1+ CB trades this session (Moo Noom L1 -38%, AHHHH L2 -48%),
 // 0W/2L. Both locked partial profit, then rode all the way back past entry.
-// Current threshold lets banked profit fully bleed before emergency exit.
-// -10% exits earlier so L1+ CB = "protect the lock", not "wait for crash".
-const CIRCUIT_BREAKER_PCT = 10;     // L1+ with partials locked — tight (protect the bank)
+// At -15%, L1 still exits at >=0% final, L2 at >=+13.75% — banked profit
+// protected. Matches L0 threshold for consistency. Wider than -10% to
+// tolerate normal volatility before trailing kicks in.
+const CIRCUIT_BREAKER_PCT = 15;     // L1+ with partials locked — protect the bank
 const TIMEOUT_MINUTES = 20;
 
 // In-memory peak tracker for trailing mode: tradeId → peak USD price.
