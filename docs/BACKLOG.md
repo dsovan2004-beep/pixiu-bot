@@ -5,13 +5,144 @@ when shipped, then delete from here.
 
 ---
 
-## Sprint 9 P0 — Real PnL accounting
+## Sprint 9 — COMPLETE (Apr 18)
 
-**Status:** go-forward portion SHIPPED Apr 18 late-night (commit
-`e264000` + migration 012). New LIVE trades now record real on-chain
-SOL delta via `tx.meta.postBalances - preBalances`. Historical
-backfill + divergence flagger + top-line dashboard swap still
-pending.
+All P0 sub-items shipped + two bonus hot-path exit-strategy fixes
+from the real-data findings. See `docs/JOURNAL.md` for the full
+afternoon recap.
+
+### Sprint 9 commits (chronological)
+
+| Commit | What |
+|---|---|
+| `e264000` | Go-forward real_pnl_sol accounting (migration 012 + parseSwapSolDelta + executor/guard writes) |
+| `d690937` | Historical backfill — 310/310 LIVE trades populated |
+| `8372d64` | Dashboard LIVE stats + "Real SOL" column from `real_pnl_sol` |
+| `6b3c2eb` | whale_exit gated to L0 only (was #1 drain: 94 trades, 23% WR, −1.24 SOL) |
+| `ee2514e` | CB threshold split: L0 −15% / L1+ −25% (was #2 drain: 53 trades, −0.96 SOL) |
+| `375b18b` | `divergence-flagger.ts` observability script |
+| `bc2a581` | Banner line updated |
+
+### Key findings
+
+Real performance by exit_reason (across 301 matched trades):
+
+| exit | trades | real WR | real avg | SOL |
+|---|---|---|---|---|
+| take_profit | 57 | 66.7% | +67.1% | +2.13 |
+| trailing_stop | 17 | 70.6% | +84.6% | +0.72 |
+| stop_loss | 53 | 50.9% | +12.2% | +0.20 |
+| timeout | 20 | 40.0% | +7.2% | +0.07 |
+| rug_or_missing | 7 | 28.6% | −35.4% | −0.13 |
+| circuit_breaker | 53 | 26.4% | −29.2% | −0.96 |
+| whale_exit | 94 | 23.4% | −17.6% | −1.24 |
+
+Real expectancy per trade: +8.9% (not paper's +17.5%). Still positive.
+The bot IS profitable in real SOL — just half what paper claimed.
+
+---
+
+## Sprint 10 — candidates
+
+Ordered by expected impact.
+
+### P0 — Measure whale_exit + CB fix effect (48h observation)
+
+Both fixes from `6b3c2eb` and `ee2514e` are behavioral. Before
+declaring them good or rolling back, need 48h of live data with:
+- ≥ 20 new LIVE trades
+- At least 5 trades where whale_exit would have fired pre-fix
+  (now skipped) and was instead handled by SL/trailing/TO
+- At least 5 L0 crashes where the −15% CB fires (instead of −25%)
+
+Re-run `divergence-flagger.ts` and `live-stats.ts` at 48h. Compare
+whale_exit + circuit_breaker rows to pre-fix baseline. Expected:
+- whale_exit count drops sharply (only L0 now)
+- whale_exit real WR should IMPROVE (gating out the bleed)
+- CB count may rise on L0 (earlier trigger), but avg SOL lost per
+  CB should decrease (exiting at −15% instead of −40% avg)
+
+If real WR on whale_exit L0-only stays below 40%, consider disabling
+it entirely and relying on SL/trailing.
+
+### P1 — Dedupe ghost rows (pre-P0b double-credit leftovers)
+
+`divergence-flagger.ts` confirmed 3 duplicate pairs:
+- Broke Company (2 rows, same 129.1% / +0.112 SOL)
+- Justice for Raccoon (2 rows, same 42.5% / +0.183 SOL)
+- Mooncoin (2 rows, same 48.5% / +0.059 SOL, 1sec apart)
+
+These inflate WR stats by 3 phantom wins. Cleanup:
+1. Identify the duplicate row ID (keep oldest, delete newest)
+2. Decrement `paper_bankroll.current_balance` by the phantom pnl_usd
+3. Log in JOURNAL
+
+### P1 — Top-line dashboard Total PnL swap
+
+Dashboard header "Real P&L" card currently shows
+`phantomBalance.pnlSol` (wallet delta, includes fees + orphans).
+Now that all 310 trades have `real_pnl_sol`, the "Total PnL" card
+below should swap from `bankroll.total_pnl_usd` (paper bankroll
+fiction) to `SUM(real_pnl_sol) × solPrice`. Fold into a single
+"Trade PnL" card that's authoritative for strategy decisions.
+
+Distinction: "Wallet Δ" and "Trade PnL" should be visibly separate.
+
+### P2 — Poll interval reduction (L0 only)
+
+Current 5s poll missed the `hold if your not gay.` +37% → −88%
+single-poll crash. Lowering poll to 2s on L0 positions (leave 5s
+for L1+) would catch mid-crash at ~−15% instead of −88%. Requires
+splitting the poll loop.
+
+Not urgent after CB L0 tighten, but worth measuring. If CB L0
+−15% is still catching crashes in the wild, poll reduction is
+the next marginal gain.
+
+### P2 — Sprint 6 retro + DATA_MODEL.md schema update
+
+- Sprint 6 has no recap file — reconstruct from git log (P3 in old
+  backlog)
+- `DATA_MODEL.md` needs entry_sol_cost / real_pnl_sol / buy_tx_sig /
+  sell_tx_sig columns documented; originally part of commit 6
+  cleanup which was never shipped
+
+### P3 — Position size bump 0.05 → 0.10 SOL
+
+**Gate now requires REAL data, not paper:**
+- Real WR > 55% on 20+ LIVE trades (measured via `real_pnl_sol`)
+- Real expectancy > +10% / trade
+- 48h no accounting regressions (divergence-flagger clean)
+
+Current real WR on the 310-trade window is 41.3% (well below 55%).
+Gate is locked until behavior changes deliver sustained improvement.
+
+### P3 cluster — leftover Sprint 8 items (not done)
+
+From the original Sprint 8 backlog, still open:
+- Commit 6 cleanup (dead code + DATA_MODEL.md schema)
+- Cloud migration Mac → DO (P2b)
+- `bot_state` startup retry hardening
+- Empty `catch {}` block cleanup
+
+### P4 — $1K capital injection
+
+Original gate ("1 week clean at 0.10 SOL") was written against
+paper numbers. Re-spec against real expectancy once P0 observation
+window produces baseline.
+
+---
+
+## Parking lot (no timeline)
+
+- Edge-safe shared guards (webhook inlined duplication)
+- On-chain pool reader replacing DexScreener for liquidity signal
+- Tier-4 frontrunner detector
+- Regression harness (would have caught P0b pnl_usd default = 0)
+
+---
+
+## HISTORICAL CONTEXT (Sprint 9 definition) — kept for reference
 
 ### Shipped (go-forward)
 

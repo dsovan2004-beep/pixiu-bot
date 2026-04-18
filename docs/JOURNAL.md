@@ -5,6 +5,82 @@ Newest first.
 
 ---
 
+## 2026-04-18 (afternoon) — Sprint 9 P0 COMPLETE + strategy changes from real data
+
+Backfill finished all 310 LIVE trades, dashboard flipped to real math,
+and two hot-path exit-strategy fixes shipped based on the real-data
+findings. This was the first day the bot's dashboard told the truth.
+
+### Commits
+
+| Commit | What |
+|---|---|
+| `d690937` | Historical backfill — 310/310 LIVE trades now have `real_pnl_sol` (301 fully matched, 9 NEVER_LANDED) |
+| `8372d64` | Dashboard swap — Live Trade Performance stats compute from `real_pnl_sol`, new "Sum real PnL" header line, "Real SOL" column in closed trades |
+| `6b3c2eb` | **whale_exit gated to L0 positions only** — 94 trades at 23% real WR / −1.24 SOL was our #1 drain |
+| `ee2514e` | **CB threshold split: L0 −15% / L1+ −25%** — 53 trades at 26% real WR / −0.96 SOL (P2a from backlog) |
+| `375b18b` | `divergence-flagger.ts` observability script |
+| `bc2a581` | Banner line updated to reflect new CB + whale_exit logic |
+
+### The 5.4 → 1.83 SOL gap resolution
+
+Previous-session finding of "5.4 SOL phantom gap" was across all 310
+trades via sum(pnl_pct) × 0.05 vs wallet delta. Refined numbers after
+backfill:
+
+```
+Paper math (Σ pnl_pct × 0.05):  +2.67 SOL
+Real math (Σ real_pnl_sol):     +0.79 SOL
+Paper inflation:                +1.83 SOL
+Wallet delta:                   −2.70 SOL
+Remaining gap (wallet − real):  −3.49 SOL
+```
+
+The 3.49 SOL gap between real PnL and wallet delta = fees on 71 failed
+Jupiter buys + orphan tokens + rescue sells outside paper_trades.
+Trade-level accounting is now accurate; wallet-level reconciliation is
+separate and not needed for strategy decisions.
+
+### Real performance by exit_reason (across 301 matched trades)
+
+| exit | trades | real WR | real avg | total SOL | verdict |
+|---|---|---|---|---|---|
+| take_profit | 57 | 66.7% | +67.1% | +2.13 | 🏆 real alpha |
+| trailing_stop | 17 | 70.6% | +84.6% | +0.72 | 🏆 real alpha |
+| stop_loss | 53 | 50.9% | +12.2% | +0.20 | marginal |
+| timeout | 20 | 40.0% | +7.2% | +0.07 | marginal |
+| rug_or_missing | 7 | 28.6% | −35.4% | −0.13 | expected loss |
+| circuit_breaker | 53 | 26.4% | −29.2% | −0.96 | 🩸 #2 drain |
+| whale_exit | 94 | 23.4% | −17.6% | −1.24 | 🩸 #1 drain |
+
+### The whale_exit realisation
+
+Paper said whale_exit had 74.7% WR / +47% avg. Real says 23.4% WR /
+−17.6% avg. Classic DexScreener-mid-at-close lie: by the time our
+Jupiter sell lands, the whale has already dumped; we fill at the
+bottom while paper records the "close-time mid price" as a profit.
+
+Fix: whale_exit only fires on L0 positions (where there's no grid
+cushion). Once L1+ has locked ≥ +7.5%, let SL/trailing/timeout handle
+exits — don't panic-sell into the whale's dump.
+
+### Accounting anomalies surfaced by divergence-flagger
+
+- 73–88% of rows flagged with >20pp divergence across all exit_reasons
+- 3 duplicate row pairs confirmed (Broke Company, Justice for Raccoon,
+  Mooncoin) — pre-P0b ghost credits still in the data
+- Many trailing_stop / take_profit rows are paper UNDER-claimed
+  (Jupiter filled higher than DS mid) — we've been making more than
+  the old dashboard showed on winners
+
+### State at sign-off
+
+- Bot: STOPPED (standing order until user decides to resume)
+- Sprint 9 P0: all sub-items COMPLETE (backfill + dashboard + flagger)
+- Remaining: observation window to measure whale_exit + CB fixes
+
+---
+
 ## 2026-04-18 (late night) — Sprint 9 P0 go-forward accounting shipped
 
 Turning point. After live-stats.ts surfaced a 5.4 SOL gap between
