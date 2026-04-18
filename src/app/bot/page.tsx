@@ -52,7 +52,7 @@ export default function BotPage() {
   const [openTrades, setOpenTrades] = useState<PaperTrade[]>([]);
   const [closedTrades, setClosedTrades] = useState<PaperTrade[]>([]);
   const [walletCount, setWalletCount] = useState(0);
-  const [allClosedStats, setAllClosedStats] = useState<Array<{ pnl_pct: number | null; pnl_usd: number | null; exit_reason: string | null }>>([]);
+  const [allClosedStats, setAllClosedStats] = useState<Array<{ pnl_pct: number | null; pnl_usd: number | null; real_pnl_sol: number | null; entry_sol_cost: number | null; exit_reason: string | null; wallet_tag?: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
@@ -64,7 +64,7 @@ export default function BotPage() {
   const [liveTrading, setLiveTrading] = useState(false);
   const [togglingLive, setTogglingLive] = useState(false);
   const [phantomBalance, setPhantomBalance] = useState<{
-    sol: number; usd: number; pnlSol: number; pnlUsd: number; startingSol: number;
+    sol: number; usd: number; pnlSol: number; pnlUsd: number; startingSol: number; solPrice?: number;
   } | null>(null);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [whaleSells, setWhaleSells] = useState<
@@ -102,7 +102,7 @@ export default function BotPage() {
         // Fetch ALL closed trades for stats (include wallet_tag for [LIVE] filter)
         supabase
           .from("paper_trades")
-          .select("pnl_pct, pnl_usd, exit_reason, wallet_tag")
+          .select("pnl_pct, pnl_usd, real_pnl_sol, entry_sol_cost, exit_reason, wallet_tag")
           .eq("status", "closed"),
         supabase
           .from("paper_bankroll")
@@ -233,17 +233,40 @@ export default function BotPage() {
     ? allClosedStats.filter((t: any) => t.wallet_tag?.includes("[LIVE]"))
     : allClosedStats;
   const totalClosed = statsData.length;
-  const wins = statsData.filter((t) => Number(t.pnl_pct) > 0);
-  const losses = statsData.filter((t) => Number(t.pnl_pct) <= 0);
+
+  // Sprint 9 P0 — when in LIVE mode, compute WR/avg from real_pnl_sol
+  // where available (post-backfill, should be 100% populated). Paper
+  // pnl_pct is preserved as a fallback for any null rows.
+  // For the "realPct" we use real_pnl_sol / entry_sol_cost × 100.
+  const statsWithPct = statsData.map((t: any) => {
+    const realPnl = t.real_pnl_sol;
+    const entryCost = t.entry_sol_cost;
+    const useReal = liveTrading && realPnl !== null && realPnl !== undefined && entryCost && Number(entryCost) > 0;
+    const pct = useReal
+      ? (Number(realPnl) / Number(entryCost)) * 100
+      : Number(t.pnl_pct);
+    return { ...t, _pct: pct, _isReal: useReal };
+  });
+  const wins = statsWithPct.filter((t) => t._pct > 0);
+  const losses = statsWithPct.filter((t) => t._pct <= 0);
   const winRate = totalClosed > 0 ? ((wins.length / totalClosed) * 100).toFixed(1) : "0";
   const avgGain =
     wins.length > 0
-      ? (wins.reduce((s, t) => s + Number(t.pnl_pct), 0) / wins.length).toFixed(2)
+      ? (wins.reduce((s, t) => s + t._pct, 0) / wins.length).toFixed(2)
       : "0";
   const avgLoss =
     losses.length > 0
-      ? (losses.reduce((s, t) => s + Number(t.pnl_pct), 0) / losses.length).toFixed(2)
+      ? (losses.reduce((s, t) => s + t._pct, 0) / losses.length).toFixed(2)
       : "0";
+
+  // Sprint 9 P0 — sum of real SOL PnL across LIVE trades (ground truth).
+  // For display next to paper bankroll numbers.
+  const realPnlSol = liveTrading
+    ? statsData.reduce((s: number, t: any) => s + (t.real_pnl_sol !== null ? Number(t.real_pnl_sol) : 0), 0)
+    : 0;
+  const realDataCount = liveTrading
+    ? statsData.filter((t: any) => t.real_pnl_sol !== null).length
+    : 0;
 
   // ─── Recovery Tracker ──────────────────────────────────
   const RECOVERY_GOAL = 3325;
@@ -287,10 +310,22 @@ export default function BotPage() {
                 Start: {phantomBalance.startingSol.toFixed(4)} SOL
               </span>
               <span className={phantomBalance.pnlSol >= 0 ? "text-green-400" : "text-red-400"}>
-                Real P&L: {phantomBalance.pnlSol >= 0 ? "+" : ""}{phantomBalance.pnlSol.toFixed(4)} SOL
+                Wallet Δ: {phantomBalance.pnlSol >= 0 ? "+" : ""}{phantomBalance.pnlSol.toFixed(4)} SOL
                 ({phantomBalance.pnlUsd >= 0 ? "+" : ""}${phantomBalance.pnlUsd.toFixed(2)})
               </span>
             </div>
+            {/* Sprint 9 P0 — trade-level ground truth from backfilled real_pnl_sol */}
+            {realDataCount > 0 && (
+              <div className="flex items-center justify-between text-xs font-mono mt-1 pt-1 border-t border-zinc-800">
+                <span className="text-zinc-500">
+                  Sum real PnL across {realDataCount} LIVE trades
+                </span>
+                <span className={realPnlSol >= 0 ? "text-green-400" : "text-red-400"}>
+                  {realPnlSol >= 0 ? "+" : ""}{realPnlSol.toFixed(4)} SOL
+                  {phantomBalance.solPrice ? ` (${realPnlSol >= 0 ? "+" : ""}$${(realPnlSol * phantomBalance.solPrice).toFixed(2)})` : ""}
+                </span>
+              </div>
+            )}
           </div>
         )}
 
