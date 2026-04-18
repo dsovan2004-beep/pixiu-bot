@@ -5,6 +5,44 @@ Newest first.
 
 ---
 
+## 2026-04-18 — Sprint 8 P0a/P0b/P0c shipped; bankroll reconciled
+
+Sprint 8 pre-trading gate — 3 of 4 items complete. P2a still pending.
+
+| Commit | What |
+|---|---|
+| `1e1a6e2` | **P0a** — Jupiter 429 retry backoff (1s/3s/10s, buy + sell paths) |
+| `1b808a7` | **P0b** — Idempotent bankroll credit (`.is("pnl_usd", null)` latch on close UPDATEs) + gated sell-failed revert + mark-to-zero on Jupiter 6024 un-sellable tokens |
+| *(post-deploy run)* | **P0c** — `src/scripts/reconcile-bankroll-p0c.ts` executed |
+
+### P0c reconcile result
+
+```
+Starting balance:    $10,000.00
+Current balance:     $29,004.40   ← before reconcile
+Σ pnl_usd (ledger):  $18,094.93
+Expected balance:    $28,094.93
+Drift:               +$909.47     ← phantom credits from P0b bug
+Closed trades:       646
+Real on-chain SOL:   1.0043
+```
+
+Bankroll adjusted $29,004.40 → $28,094.93. Drift of $909.47 was
+larger than the $165 estimated from Retail Coin alone, indicating a
+longer tail of historical double-credits from the same code path.
+P0b fix in `1b808a7` prevents recurrence.
+
+Authoritative source going forward: `SUM(paper_trades.pnl_usd)` for
+`status='closed'`. Any future drift > $0.01 indicates a regression.
+
+### Bot state
+
+- Status: STOPPED (per pre-trading gate rule).
+- P2a dashboard relabel still pending — ships next, then trading
+  can resume.
+
+---
+
 ## 2026-04-17 — Sprint 7 Day 3: Shared-Guard Consolidation COMPLETE
 
 **5 commits shipped.** Webhook is now the single entry path. Swarm down
