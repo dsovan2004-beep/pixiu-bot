@@ -41,7 +41,9 @@ export const POSITION_SIZE_PCT = 0.01; // 1% of bankroll
 // outcome across grid partials, so locked L1/L2 profits correctly reduce
 // the contribution to the daily loss total.
 export const LIVE_BUY_SOL = 0.05;
-export const DAILY_LOSS_LIMIT_SOL = 2.0;
+// Tightened Apr 18 PM — wallet down to ~0.82 SOL, 2.0 cap was wider than
+// the bag. 0.25 SOL caps overnight bleed at ~5 losing trades worth.
+export const DAILY_LOSS_LIMIT_SOL = 0.25;
 
 // Late-confirm window for Jupiter buys (Bug P1).
 // After a buy is marked "failed", check on-chain again after this delay —
