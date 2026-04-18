@@ -5,6 +5,83 @@ Newest first.
 
 ---
 
+## 2026-04-18 (late night) — Sprint 9 P0 go-forward accounting shipped
+
+Turning point. After live-stats.ts surfaced a 5.4 SOL gap between
+paper math and wallet reality, shipped the first half of Sprint 9 P0
+despite earlier "doc-only tonight" plan — bot was STOPPED with 0
+open positions, which is the safest possible window for hot-path
+changes.
+
+### The gap confirmed
+
+```
+310 LIVE closed trades
+Sum(pnl_pct × 0.05 / 100) = +2.6989 SOL  (paper math)
+Wallet delta (3.6705 → 0.9669) = -2.7036 SOL  (reality)
+Gap: 5.4025 SOL ($~476) of phantom paper gains
+```
+
+Root cause: `paper_trades.pnl_pct` is derived from DexScreener
+mid-price at close time. Jupiter sells slip, fail, or confirm at
+different prices. Losses are accurate (bot holds through crashes);
+gains are inflated (big-pump trades claim wins that never
+materialized in the wallet).
+
+### Commits tonight (late)
+
+| Commit | What |
+|---|---|
+| `c06e7c0` | BACKLOG — Sprint 9 P0 defined in detail (7-step fix scope, evidence, success criteria) |
+| `e264000` | **Sprint 9 P0 go-forward fix** — migration 012 + on-chain SOL delta parsing + real PnL writes + dashboard "Real SOL" column |
+
+### What `e264000` does
+
+1. **Migration 012** — adds `entry_sol_cost`, `real_pnl_sol`,
+   `buy_tx_sig`, `sell_tx_sig` to paper_trades. All nullable.
+   Applied via Supabase dashboard SQL editor — verified 4 columns
+   present post-apply.
+2. **`jupiter-swap.ts parseSwapSolDelta(sig)`** — fetches tx,
+   reads wallet's pre/post SOL balance from `tx.meta.postBalances -
+   preBalances`, returns net SOL delta (includes fees).
+3. **`trade-executor.ts`** — on buy success, non-blocking UPDATE
+   writes `buy_tx_sig` + `entry_sol_cost`. Wrapped in try/catch.
+4. **`risk-guard.ts closeTrade()`** — on sell success, non-blocking
+   UPDATE writes `sell_tx_sig` + `real_pnl_sol` (= solReceived −
+   entry_sol_cost). Logs real + paper side-by-side:
+   ```
+   [GUARD] 📊 real PnL: +0.012345 SOL (entry 0.050123 → received
+   0.062468) | paper says +24.82%
+   ```
+5. **Dashboard `/bot`** — new "Real SOL" column in Closed Trades
+   table. Shows `—` for legacy trades. PnL% header relabeled
+   "PnL (paper)" for clarity.
+
+### What's still pending from Sprint 9 P0
+
+- **Historical backfill** — 310 pre-Sprint-9 trades have NULL
+  real_pnl_sol. Backfilling requires `getSignaturesForAddress`
+  per trade to find the Jupiter tx, then parse tx.meta. ~30+ min
+  runtime with rate limits. Deferred.
+- **Divergence flagger** — post-backfill analysis. Flag trades
+  where `|pnl_pct − derived real PnL| > 20%`. Deferred.
+- **Top-line dashboard stats swap** — dashboard header still shows
+  paper totals. Wait 48h for go-forward data to accumulate, then
+  swap to real.
+
+### State at sign-off
+
+- Bot: STOPPED (user will flip START when ready)
+- Open positions: 0
+- Migration 012 applied ✅
+- All tonight's prior fixes still live (SIGINT no-write, exit_time
+  latch, whale-exit DB tier, bundle detect, Jupiter 429 retry, P0b
+  idempotent close)
+- Next LIVE buy+sell will show side-by-side real/paper PnL in
+  terminal logs — first ground truth in the bot's history
+
+---
+
 ## 2026-04-18 (evening) — Sprint 8 gate closed; 2 new bug fixes + P0b regression caught
 
 Bot resumed live trading after the P0 gate shipped this morning.

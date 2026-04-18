@@ -7,11 +7,65 @@ when shipped, then delete from here.
 
 ## Sprint 9 P0 — Real PnL accounting
 
-**Highest priority for next sprint. Do not ship tonight — this is a
-documentation-first item so we get the design right before touching
-critical close-path code.**
+**Status:** go-forward portion SHIPPED Apr 18 late-night (commit
+`e264000` + migration 012). New LIVE trades now record real on-chain
+SOL delta via `tx.meta.postBalances - preBalances`. Historical
+backfill + divergence flagger + top-line dashboard swap still
+pending.
 
-### The problem
+### Shipped (go-forward)
+
+- Migration 012: `entry_sol_cost`, `real_pnl_sol`, `buy_tx_sig`,
+  `sell_tx_sig` columns added to paper_trades (applied via dashboard)
+- `jupiter-swap.ts parseSwapSolDelta(sig)` — parses tx.meta for
+  wallet SOL delta
+- `trade-executor.ts` — writes `buy_tx_sig` + `entry_sol_cost` on
+  buy confirmation (non-blocking, try/catch)
+- `risk-guard.ts closeTrade()` — writes `sell_tx_sig` + `real_pnl_sol`
+  on sell confirmation. Logs real vs paper side-by-side
+- Dashboard `/bot` — new "Real SOL" column in Closed Trades table
+
+### Still pending (deferred sub-items)
+
+**P0 remaining item a — Historical backfill.**
+310 pre-Sprint-9 closed LIVE trades have NULL `real_pnl_sol`. No tx
+signatures stored before Sprint 9, so backfill requires signature
+discovery:
+1. For each trade, query Helius `getSignaturesForAddress(wallet,
+   { before: exit_time + 10min, until: entry_time - 1min })`.
+2. For each sig in window, `getTransaction` and check if it
+   involved the trade's `coin_address`.
+3. Match buy tx (SOL→token) and sell tx(s) (token→SOL).
+4. Sum SOL deltas across matched sell txs; subtract buy cost.
+5. Write to row.
+
+Estimated runtime: 30-60 min with Helius rate limits. Expected
+match rate: ~70-85% (some trades won't match due to: tx never
+landed on-chain, token moved via sell-pumpfun.ts bypass script,
+intermediate transfers, etc.). Unmatched rows get a
+`backfill_status = 'unmatchable'` note.
+
+Script target: `src/scripts/backfill-real-pnl.ts`.
+
+**P0 remaining item b — Divergence flagger.**
+Post-backfill (or even without, for go-forward trades), scan
+paper_trades where both `pnl_pct` and `real_pnl_sol` are populated.
+Compute `real_pct = real_pnl_sol / entry_sol_cost × 100`. Flag any
+row where `|pnl_pct - real_pct| > 20%` as an accounting anomaly.
+
+Surface top-N largest divergences as a dashboard panel or one-shot
+report. Use for trading strategy tuning (e.g. "whale_exit trades
+have 40% average divergence — closing sells lag whale dumps by X
+seconds" → tightens fix).
+
+**P0 remaining item c — Top-line dashboard stats swap.**
+Header "Real P&L" card currently derives from paper_bankroll
+(which tracks pnl_usd). Once 48h of go-forward real data
+accumulates, swap the card to derive from `SUM(real_pnl_sol)`
+for LIVE trades + legacy paper for pre-Sprint-9. Make it obvious
+which is which.
+
+### The problem (historical context)
 
 `paper_trades.pnl_pct` and `pnl_usd` are derived from DexScreener
 mid-price at the moment `closeTrade()` fires. This is a FICTION
