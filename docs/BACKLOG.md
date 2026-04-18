@@ -44,6 +44,46 @@ The bot IS profitable in real SOL — just half what paper claimed.
 
 ## Sprint 10 — candidates
 
+### P0 (NEW, found live Apr 18) — Webhook race creates duplicate rows
+
+**Evidence:** WHERE IS THE AIRDROP today created 5 paper_trades rows
+within 230ms (16:13:00.148 to 16:13:00.378) for the same mint.
+Cupsey's BUNDLE pattern fires many signals at once; webhook's
+"position already open" check is not race-safe:
+
+```ts
+const { count: openCount } = await supabase
+  .from("paper_trades")
+  .select("id", { count: "exact", head: true })
+  .eq("coin_address", mint)
+  .eq("status", "open");
+if ((openCount || 0) > 0) return { entered: false, reason: "position already open" };
+```
+
+When N webhook requests hit simultaneously, all N see count=0 at
+check time (before any have INSERTed), then all N INSERT. Result:
+N duplicate rows. Guard picks up all of them. When a trailing/CB
+fires, each row's closeTrade credits bankroll independently.
+
+**Symptom:** phantom bankroll credits. Today's incident: 4 × $90.74
+= $362.96 phantom credit on one trailing_stop exit. Cleaned up
+manually (see JOURNAL).
+
+**Fix:** partial unique index on Postgres side — INSERT with
+duplicate would fail at DB level, webhook gets error, skips entry.
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS one_open_per_mint_idx
+  ON paper_trades(coin_address)
+  WHERE status = 'open';
+```
+
+Requires thinking: what about paper-mode trades? What about the
+executor's similar duplicate check (also non-atomic)? Full fix
+scope TBD. Ship as schema migration.
+
+### Other
+
 Ordered by expected impact.
 
 ### P0 — Measure whale_exit + CB fix effect (48h observation)
