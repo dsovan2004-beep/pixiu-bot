@@ -5,6 +5,129 @@ when shipped, then delete from here.
 
 ---
 
+## Sprint 9 P0 — Real PnL accounting
+
+**Highest priority for next sprint. Do not ship tonight — this is a
+documentation-first item so we get the design right before touching
+critical close-path code.**
+
+### The problem
+
+`paper_trades.pnl_pct` and `pnl_usd` are derived from DexScreener
+mid-price at the moment `closeTrade()` fires. This is a FICTION
+relative to real wallet outcomes because:
+
+- Jupiter sells often fail (tx expired, 6024 un-sellable)
+- Slippage at 5-30% eats into the actual SOL returned
+- Tokens can go to 0 on-chain while DexScreener still has a stale
+  price — zero-balance close path uses `pos.partial_pnl` for the
+  final PnL, which reflects locked paper partials, not reality
+- Multi-retry sells at escalating slippage (5%→10%→20%→30%) book
+  different real outcomes than the close-time mid-price snapshot
+
+### The gap (evidence from Apr 18 live-stats.ts run)
+
+```
+310 LIVE closed trades
+Sum of LIVE_BUY_SOL × pnl_pct / 100:   +2.70 SOL  (+$238)
+Actual wallet delta (start 3.67, now 0.98): -2.69 SOL  (-$237)
+
+Missing:  ~5.4 SOL ($476) of phantom paper gains
+```
+
+**Asymmetry: losses are accurate, gains are inflated.** When a token
+rugs, the bot holds through it and real SOL is lost as calculated.
+When a token pumps, the claimed gain at close time often doesn't
+materialize because the Jupiter sell lands at a lower price than
+the DexScreener mid used for pnl_pct.
+
+### Top phantom wins (likely fictional paper gains)
+
+These rows claim huge pnl_pct that almost certainly did NOT
+translate to real SOL:
+
+```
+BONER             +1217.5%   claims +0.6087 SOL
+SUKI               +553.8%   claims +0.2769 SOL
+Edward Warchocki   +397.5%   claims +0.1987 SOL
+```
+
+Top 3 alone claim +1.08 SOL real that the wallet doesn't reflect.
+
+### Other accounting anomalies found
+
+- **Broke Company appears twice** with identical +129.1% / +0.0645 SOL
+  on 2026-04-16 14:01. Pre-P0b double-credit ghost row. One is a
+  phantom. Needs cleanup during reconcile.
+- **whale_exit WR 74.7%** but visual inspection shows many of those
+  "wins" are closes on tokens that whales already dumped before our
+  sell landed. Real fills likely much lower than reported pnl_pct.
+- **`rug_or_missing` exit_reason** (zero-balance close path, 7
+  trades) uses `pos.partial_pnl` as final PnL, which is just the
+  locked L1/L2 paper partials — no real SOL recovery happened.
+
+### Fix scope
+
+1. **Schema migration:** add `real_pnl_sol NUMERIC NULL` to
+   `paper_trades`. Keep existing `pnl_pct` / `pnl_usd` columns for
+   backward compat but treat them as "paper-only view".
+2. **jupiter-swap.ts — `sellToken()` return shape.** Currently
+   returns `string | null` (tx signature or null). Change to:
+   ```ts
+   { signature: string | null; solReceived: number; tokensSpent: number }
+   ```
+   On confirmation, parse `tx.meta.postBalances - preBalances` for
+   the wallet's SOL delta (minus fees). Needs `getTransaction(sig,
+   { maxSupportedTransactionVersion: 0 })` call after confirmation.
+3. **buyToken() symmetric change:** return `solSpent` as well so
+   we can compute true cost basis including actual swap price and
+   fees, not just the `LIVE_BUY_SOL` constant.
+4. **risk-guard.ts — `closeTrade()`:** when a real sell lands, compute
+   `real_pnl_sol = solReceived - solSpent` using the entry side's
+   actual cost basis. Write this to the row. Fall back to
+   pnl_pct-derived estimate only if on-chain parse fails.
+5. **Dashboard swap:** `/bot/page.tsx` top-line stats and per-trade
+   PnL displays pull `real_pnl_sol` when available; show `pnl_pct`
+   in a secondary "paper PnL" column. Make it obvious which number
+   is authoritative.
+6. **One-shot reconcile script:** `src/scripts/backfill-real-pnl.ts`
+   — walks all closed LIVE trades without `real_pnl_sol`, fetches
+   the tx on-chain via Helius `getTransaction`, parses in/out
+   balance delta, writes the true value. Slow (rate-limited) but
+   one-time.
+7. **Divergence flagger:** after backfill, flag any trade where
+   `|pnl_pct - (real_pnl_sol / LIVE_BUY_SOL × 100)| > 20%` as an
+   accounting anomaly for manual review. Tag with
+   `exit_reason='anomaly_NNN'` or a boolean column.
+
+### Non-goals
+
+- Don't migrate historic paper-only trades (pre-live-trading era).
+  Only backfill rows with `wallet_tag LIKE '%[LIVE]%'`.
+- Don't break existing dashboards — add a second column, don't
+  replace the first.
+- Don't auto-block trades based on this — it's accounting hygiene,
+  not a trading rule change.
+
+### Why this blocks other work
+
+Speed optimizations (P2a tighter CB, P2b cloud migration) are
+useless if we don't know whether the bot is profitable in real SOL.
+Position size bump (P3) absolutely requires real accounting because
+the gate metric "WR > 55% on 20+ trades" is calculated on a lying
+field today.
+
+### Success criteria
+
+- `real_pnl_sol` populated on every LIVE close from date-of-deploy
+- Backfill completed for all historic LIVE trades
+- Dashboard top-line "Real P&L" matches wallet delta within 2%
+- List of divergence-flagged trades surfaced for manual review
+- Paper/real divergence measured over 48h after deploy to
+  quantify the persistent gap vs pre-fix gap
+
+---
+
 ## Sprint 8 — status
 
 **Pre-trading gate ✅ CLOSED.** Bot is LIVE. All 4 gate items shipped
