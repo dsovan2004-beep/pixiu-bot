@@ -681,7 +681,7 @@ export async function startRiskGuard(): Promise<void> {
   const startLive = await isLiveTrading();
   console.log(`  [GUARD] Starting risk guard... (LIVE: ${startLive ? "🔴 ON" : "⚪ OFF"} — dashboard controlled)`);
   console.log(
-    `  [GUARD] Exit priority: CB(-${CIRCUIT_BREAKER_PCT}%) > Whale > SL(-${STOP_LOSS_PCT}%) > TO(${TIMEOUT_MINUTES}min) > Grid | Poll: ${POSITION_CHECK_MS / 1000}s`
+    `  [GUARD] Exit priority: CB(L0 -${CIRCUIT_BREAKER_L0_PCT}% / L1+ -${CIRCUIT_BREAKER_PCT}%) > Whale(L0 only) > SL(-${STOP_LOSS_PCT}%) > TO(${TIMEOUT_MINUTES}min) > Grid | Poll: ${POSITION_CHECK_MS / 1000}s`
   );
 
   // Run immediately
