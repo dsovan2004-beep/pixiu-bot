@@ -113,7 +113,15 @@ const GRID_LEVELS = [
 const L3_THRESHOLD_PCT = 100;       // pnl % where trailing mode activates
 const TRAILING_STOP_PCT = 20;       // exit when price drops this % from peak
 const STOP_LOSS_PCT = 10;
-const CIRCUIT_BREAKER_PCT = 25;
+// Circuit breaker thresholds split by grid level (Sprint 9 P2a, Apr 18).
+// Real-PnL analysis showed circuit_breaker had 26% real WR / -0.96 SOL on
+// 53 trades. Main leak: fast rugs during the 30s min-hold window where
+// SL (-10%) is disabled and only CB can fire. Previous -25% threshold
+// let positions crash too far before emergency exit. Post L1/L2 grid
+// partials we've already locked ≥ +7.5%, so keep the looser -25% for
+// those — more tolerance for volatility when downside is capped.
+const CIRCUIT_BREAKER_L0_PCT = 15;  // no partials locked yet — exit earlier
+const CIRCUIT_BREAKER_PCT = 25;     // L1+ with partials locked — original
 const TIMEOUT_MINUTES = 20;
 
 // In-memory peak tracker for trailing mode: tradeId → peak USD price.
@@ -470,13 +478,16 @@ async function checkPositions(): Promise<void> {
     // Prevents immediate exits from stale signals or price echo
     const MIN_HOLD_SECONDS = 30;
     const secondsOpen = minutesOpen * 60;
+    // Use tightened L0 threshold (-15%) when no grid has locked yet;
+    // revert to normal -25% once L1+ partials are booked.
+    const cbThreshold = currentLevel === 0 ? CIRCUIT_BREAKER_L0_PCT : CIRCUIT_BREAKER_PCT;
     if (secondsOpen < MIN_HOLD_SECONDS) {
       // Only allow circuit breaker through during hold period
-      if (!priceFetchFailed && pnlPct <= -CIRCUIT_BREAKER_PCT) {
+      if (!priceFetchFailed && pnlPct <= -cbThreshold) {
         const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
         await closeTrade(finalPnl, "circuit_breaker", currentLevel);
         console.log(
-          `  [GUARD] 🚨 ${coinLabel} crashed ${pnlPct.toFixed(1)}% during hold period — emergency exit`
+          `  [GUARD] 🚨 ${coinLabel} crashed ${pnlPct.toFixed(1)}% during hold period (L${currentLevel} threshold -${cbThreshold}%) — emergency exit`
         );
       }
       continue;
@@ -495,15 +506,16 @@ async function checkPositions(): Promise<void> {
     }
 
     // 1. Circuit Breaker — ABSOLUTE FIRST CHECK
+    // Threshold split by grid level: L0 = -15%, L1+ = -25% (see constants above).
     console.log(
       `  [GUARD CB CHECK] ${coinLabel} pnlPct=${pnlPct.toFixed(1)}% L${currentLevel} ${remainingPct}% remaining (entry:$${entryPrice} now:$${currentPrice} src:${source})`
     );
 
-    if (!priceFetchFailed && pnlPct <= -CIRCUIT_BREAKER_PCT) {
+    if (!priceFetchFailed && pnlPct <= -cbThreshold) {
       const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
       await closeTrade(finalPnl, "circuit_breaker", currentLevel);
       console.log(
-        `  [GUARD] 🚨 ${coinLabel} crashed ${pnlPct.toFixed(1)}% — emergency exit | PnL: ${finalPnl.toFixed(2)}%`
+        `  [GUARD] 🚨 ${coinLabel} crashed ${pnlPct.toFixed(1)}% (L${currentLevel} threshold -${cbThreshold}%) — emergency exit | PnL: ${finalPnl.toFixed(2)}%`
       );
       continue;
     }
