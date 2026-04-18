@@ -310,7 +310,7 @@ async function checkPositions(): Promise<void> {
             })
             .eq("id", pos.id)
             .eq("status", "closing")
-            .is("pnl_usd", null)               // P0b: bankroll-credit latch
+            .is("exit_time", null)             // P0b-fix: use exit_time (guaranteed null on unclosed) as idempotent latch; pnl_usd defaults to 0 so .is(null) never matched
             .select("id")
             .maybeSingle();
           if (!flipped) {
@@ -361,7 +361,7 @@ async function checkPositions(): Promise<void> {
               })
               .eq("id", pos.id)
               .eq("status", "closing")
-              .is("pnl_usd", null)              // P0b: bankroll-credit latch
+              .is("exit_time", null)            // P0b-fix: use exit_time, not pnl_usd (pnl_usd defaults to 0)
               .select("id")
               .maybeSingle();
             if (!flipped) {
@@ -410,7 +410,7 @@ async function checkPositions(): Promise<void> {
         })
         .eq("id", pos.id)
         .eq("status", "closing")
-        .is("pnl_usd", null)                     // P0b: bankroll-credit latch
+        .is("exit_time", null)                   // P0b-fix: use exit_time, not pnl_usd (pnl_usd defaults to 0)
         .select("id")
         .maybeSingle();
       if (!flipped) {
