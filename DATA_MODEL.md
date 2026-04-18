@@ -27,20 +27,52 @@ commit.
 The only table that represents a live or paper position. Every row
 is a single trade from entry to close.
 
-**Key columns**
+**Key columns** (verified against live schema Apr 18 2026)
 - `id` (uuid pk)
 - `coin_address` (mint)
 - `coin_name`
-- `wallet_tag` — source wallet label (may include `[LIVE]` suffix
-  once executor confirms a real swap)
-- `status` — `open` | `closing` | `closed`
+- `wallet_tag` — source wallet label. `[LIVE]` appended as suffix
+  once executor confirms a real swap (NOT a separate column).
+- `status` — `open` | `closing` | `closed` | `failed`
+  - `failed` = buy never landed on-chain (Jupiter 429, tx expired,
+    etc.). `exit_reason='buy_failed'`. Executor sets this.
 - `entry_price`, `entry_mc`, `entry_time`
 - `exit_price`, `exit_time`, `exit_reason`, `pnl_pct`
+- `pnl_usd` — paper-bankroll PnL derived from `pnl_pct`.
+  **Defaults to 0 on INSERT**, not NULL (caught as regression in
+  Sprint 8 P0b-followup — never latch idempotency on `.is(null)`
+  against this column).
 - `position_size_usd`
 - `priority` — `HIGH` (≥2 T1 confirmers) | `normal`
-- `current_grid_level` — 0 | 1 | 2 | 3 (L3 = trailing mode)
-- `peak_pnl_pct` — for trailing stop
-- `live_tx_signature` — Jupiter buy tx sig (null if paper)
+- `grid_level` — 0 | 1 | 2 | 3 (L3 = trailing mode active on 25%
+  remaining)
+- `remaining_pct` — 100 → 50 → 25 → 0 as grid levels fire
+- `partial_pnl` — locked % from L1/L2 grid partials (paper math)
+
+**Sprint 9 real-PnL accounting columns** (added by migration 012,
+populated by code from commit `e264000` onward + backfill from
+commit `d690937`):
+- `entry_sol_cost` — real SOL spent on buy (parsed from
+  `tx.meta.postBalances − preBalances`). Null if pre-Sprint-9 trade
+  that couldn't be backfilled, or a sentinel "NEVER_LANDED" case
+  with value 0.
+- `real_pnl_sol` — `solReceivedFromSell − entry_sol_cost`. The
+  **authoritative P&L number**. Null for pre-Sprint-9 unmatchable
+  trades; 0 for NEVER_LANDED.
+- `buy_tx_sig` — Jupiter buy tx signature. Special values:
+  `'NEVER_LANDED'` (backfill couldn't find a buy tx in ±30min
+  window — bot marked `[LIVE]` but swap never confirmed).
+- `sell_tx_sig` — final confirmed Jupiter sell tx signature.
+  Special values: `'SELL_NEVER_LANDED'` (buy landed but all sells
+  expired, position marked as full loss).
+
+**What the schema does NOT have** (common confusion):
+- No `current_grid_level` column — it's just `grid_level`.
+- No `peak_pnl_pct` column — trailing-stop peak is in-memory only
+  (`trailingPeaks: Map<tradeId, number>` in risk-guard.ts).
+- No `live_tx_signature` column — `[LIVE]` is a suffix on
+  `wallet_tag`, and tx sigs live in `buy_tx_sig` / `sell_tx_sig`
+  (Sprint 9+) or were ephemeral log lines (pre-Sprint 9).
 
 **Write paths — INSERT**
 - `src/app/api/webhook/route.ts:421` inside `evaluateAndEnter()`.
@@ -49,24 +81,34 @@ is a single trade from entry to close.
 
 **Write paths — UPDATE**
 - `src/agents/trade-executor.ts` — on successful Jupiter buy
-  confirmation, sets `wallet_tag` to include `[LIVE]` and stores
-  `live_tx_signature`, adjusts `entry_price` if the real fill price
-  differs from the quoted price.
+  confirmation, sets `wallet_tag` to include `[LIVE]` and (Sprint 9+)
+  writes `buy_tx_sig` + `entry_sol_cost` in a separate non-blocking
+  UPDATE.
 - `src/agents/risk-guard.ts` — atomic claim (`status=open` →
   `status=closing`), then final close (`status=closing` →
   `status=closed` with `exit_price`, `exit_time`, `exit_reason`,
-  `pnl_pct`). Grid level advances also happen here.
-- `src/scripts/*` one-shot recovery scripts — manual close paths for
-  stuck positions (`sell-pumpfun.ts`, `sell-all-orphans.ts`, etc.).
+  `pnl_pct`). Grid level advances also happen here. Idempotent-close
+  latch gates on `exit_time IS NULL` (NOT on `pnl_usd` — see default
+  note above). Sprint 9+ also writes `sell_tx_sig` + `real_pnl_sol`
+  in a separate non-blocking UPDATE.
+- `src/scripts/*` one-shot scripts:
+  - `reconcile-bankroll-p0c.ts` — syncs paper_bankroll to
+    `SUM(pnl_usd)` after any double-credit drift
+  - `backfill-real-pnl.ts` — populates `real_pnl_sol` on historic
+    rows via Helius `getTransaction`
+  - `dedupe-ghosts.ts` — deletes pre-P0b duplicate rows + decrements
+    bankroll
+  - Recovery paths (`sell-pumpfun.ts`, `sell-all-orphans.ts`).
   Recovery writes must log to `docs/JOURNAL.md`.
 
 **Read paths** (non-exhaustive)
 - Dashboard `/bot` page
-- Risk guard poll (every 5s, `status=open`)
-- Trade executor poll (every 3s, `status=open` without
-  `live_tx_signature`)
+- Risk guard poll (L0 every 2s, L1+ every 5s — Sprint 10 P2a)
+- Trade executor poll (every 3s, `status=open` without `[LIVE]`
+  suffix in wallet_tag)
 - Webhook rug-storm check (last 5 closed in 2h)
 - Webhook position-open check
+- `live-stats.ts` + `divergence-flagger.ts` diagnostic scripts
 
 ---
 
