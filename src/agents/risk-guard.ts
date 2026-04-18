@@ -12,7 +12,6 @@
 
 import supabase from "../lib/supabase-server";
 import {
-  TOP_ELITE_ADDRESSES,
   LIVE_BUY_SOL,
   DAILY_LOSS_LIMIT_SOL,
 } from "../config/smart-money";
@@ -485,11 +484,16 @@ async function checkPositions(): Promise<void> {
       continue;
     }
 
-    // 2. Whale Exit — T1 wallet SELL detected
+    // 2. Whale Exit — T1 wallet SELL detected.
+    // Uses DB tier=1 active=true (not the hardcoded config set). The webhook
+    // already uses DB tier (commit 027fa83); risk-guard was missed during
+    // that migration — only 14/63 T1 wallets were covered until this fix.
+    // Sprint 8 Bug-1 fix.
     const { data: smartWalletRows } = await supabase
       .from("tracked_wallets")
       .select("tag")
-      .in("wallet_address", Array.from(TOP_ELITE_ADDRESSES));
+      .eq("tier", 1)
+      .eq("active", true);
 
     const smartMoneyTags = new Set(
       smartWalletRows?.map((w) => w.tag) || []

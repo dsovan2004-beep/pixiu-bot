@@ -483,17 +483,23 @@ async function evaluateAndEnter(
     }
   }
 
-  // Bundle check: any wallet = 80%+ of signals
+  // Bundle check: any wallet = 80%+ of signals.
+  // The current signal is already INSERTed into coin_signals (line 632 in the
+  // POST handler) before evaluateAndEnter runs, so it's already in the
+  // recentSignals query result. Do NOT manually +1 — that was the pre-fix
+  // behavior and caused the current walletTag to be double-counted,
+  // falsely rejecting legitimate re-buys as bundle.  Sprint 8 Bug-2 fix.
   const signalsByWallet = new Map<string, number>();
   for (const s of recentSignals || []) {
     signalsByWallet.set(s.wallet_tag, (signalsByWallet.get(s.wallet_tag) || 0) + 1);
   }
-  signalsByWallet.set(walletTag, (signalsByWallet.get(walletTag) || 0) + 1);
-  const totalSigs = (recentSignals?.length || 0) + 1;
-  for (const [tag, count] of signalsByWallet) {
-    if (count / totalSigs >= 0.8 && totalSigs >= 3) {
-      console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — bundle (${tag} = ${count}/${totalSigs})`);
-      return { entered: false, reason: `bundle (${tag} = ${count}/${totalSigs})` };
+  const totalSigs = recentSignals?.length || 0;
+  if (totalSigs >= 3) {
+    for (const [tag, count] of signalsByWallet) {
+      if (count / totalSigs >= 0.8) {
+        console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — bundle (${tag} = ${count}/${totalSigs})`);
+        return { entered: false, reason: `bundle (${tag} = ${count}/${totalSigs})` };
+      }
     }
   }
 
