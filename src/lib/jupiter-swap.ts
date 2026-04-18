@@ -28,6 +28,41 @@ function isDevnet(): boolean {
   return process.env.SOLANA_NETWORK === "devnet";
 }
 
+/**
+ * Fetch wrapper with exponential backoff on HTTP 429 (rate limit).
+ * Other errors (4xx non-429, 5xx, network) are returned immediately —
+ * retry does not help those.
+ *
+ * Backoff schedule: 1s → 3s → 10s (max 3 retries).
+ * Total worst-case added latency on pure 429s: ~14s before giving up.
+ *
+ * Applied to both buyToken() and sellToken() quote+swap fetches (P0a).
+ * Stuck sells are worse than missed buys: a buy-side 429 costs $0 of
+ * alpha; a sell-side 429 rides a dying position down with no exit.
+ */
+async function jupiterFetchWithBackoff(
+  url: string,
+  init?: RequestInit,
+  label = "jupiter"
+): Promise<Response> {
+  const delays = [1_000, 3_000, 10_000]; // ms between retries
+  let res = await fetch(url, init);
+
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    if (res.status !== 429) return res;
+    const wait = delays[attempt];
+    console.log(
+      `  [JUPITER] 429 ${label} — retry ${attempt + 1}/${delays.length} in ${wait}ms`
+    );
+    await new Promise((r) => setTimeout(r, wait));
+    res = await fetch(url, init);
+  }
+
+  // Exhausted retries — return the last response (still 429 here).
+  // Caller handles the non-ok path unchanged.
+  return res;
+}
+
 function getConnection(): Connection {
   if (isDevnet()) {
     return new Connection("https://api.devnet.solana.com", "confirmed");
@@ -94,7 +129,7 @@ export async function buyToken(
 
     // 1. Get quote
     const quoteUrl = `${JUPITER_QUOTE_URL}?inputMint=${SOL_MINT}&outputMint=${coinAddress}&amount=${amountLamports}&slippageBps=${BUY_SLIPPAGE_BPS}`;
-    const quoteRes = await fetch(quoteUrl);
+    const quoteRes = await jupiterFetchWithBackoff(quoteUrl, undefined, "buy-quote");
     if (!quoteRes.ok) {
       console.error(`  [JUPITER] Quote failed: ${quoteRes.status}`);
       return null;
@@ -102,16 +137,20 @@ export async function buyToken(
     const quoteResponse = await quoteRes.json();
 
     // 2. Get swap transaction with priority fee
-    const swapRes = await fetch(JUPITER_SWAP_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        quoteResponse,
-        userPublicKey: walletPubkey,
-        wrapAndUnwrapSol: true,
-        prioritizationFeeLamports: "auto",
-      }),
-    });
+    const swapRes = await jupiterFetchWithBackoff(
+      JUPITER_SWAP_URL,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          quoteResponse,
+          userPublicKey: walletPubkey,
+          wrapAndUnwrapSol: true,
+          prioritizationFeeLamports: "auto",
+        }),
+      },
+      "buy-swap"
+    );
     if (!swapRes.ok) {
       console.error(`  [JUPITER] Swap tx failed: ${swapRes.status}`);
       return null;
@@ -285,7 +324,7 @@ export async function sellToken(
 
         // 1. Get quote
         const quoteUrl = `${JUPITER_QUOTE_URL}?inputMint=${coinAddress}&outputMint=${SOL_MINT}&amount=${tokenAmount}&slippageBps=${slippage}`;
-        const quoteRes = await fetch(quoteUrl);
+        const quoteRes = await jupiterFetchWithBackoff(quoteUrl, undefined, "sell-quote");
         if (!quoteRes.ok) {
           console.error(`  [JUPITER] Sell quote failed: ${quoteRes.status}`);
           continue;
@@ -293,16 +332,20 @@ export async function sellToken(
         const quoteResponse = await quoteRes.json();
 
         // 2. Get swap transaction
-        const swapRes = await fetch(JUPITER_SWAP_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            quoteResponse,
-            userPublicKey: walletPubkey,
-            wrapAndUnwrapSol: true,
-            prioritizationFeeLamports: "auto",
-          }),
-        });
+        const swapRes = await jupiterFetchWithBackoff(
+          JUPITER_SWAP_URL,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              quoteResponse,
+              userPublicKey: walletPubkey,
+              wrapAndUnwrapSol: true,
+              prioritizationFeeLamports: "auto",
+            }),
+          },
+          "sell-swap"
+        );
         if (!swapRes.ok) {
           console.error(`  [JUPITER] Sell swap tx failed: ${swapRes.status}`);
           continue;
