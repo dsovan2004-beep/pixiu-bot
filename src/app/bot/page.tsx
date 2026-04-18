@@ -23,7 +23,7 @@ interface CoinSignal {
   transaction_type: string;
 }
 
-interface PaperTrade {
+interface Trade {
   id: string;
   coin_address: string;
   coin_name: string | null;
@@ -31,10 +31,8 @@ interface PaperTrade {
   entry_price: number;
   entry_mc: number | null;
   exit_price: number | null;
-  pnl_pct: number | null;
-  pnl_usd: number | null;
-  real_pnl_sol: number | null;       // Sprint 9 P0 — authoritative real-SOL outcome
-  entry_sol_cost: number | null;     // Sprint 9 P0 — real SOL spent on entry
+  real_pnl_sol: number | null;       // authoritative real-SOL outcome
+  entry_sol_cost: number | null;     // real SOL spent on entry
   position_size_usd: number | null;
   status: string;
   priority: string;
@@ -49,20 +47,15 @@ interface PaperTrade {
 export default function BotPage() {
   const [botState, setBotState] = useState<BotState | null>(null);
   const [signals, setSignals] = useState<CoinSignal[]>([]);
-  const [openTrades, setOpenTrades] = useState<PaperTrade[]>([]);
-  const [closedTrades, setClosedTrades] = useState<PaperTrade[]>([]);
+  const [openTrades, setOpenTrades] = useState<Trade[]>([]);
+  const [closedTrades, setClosedTrades] = useState<Trade[]>([]);
   const [walletCount, setWalletCount] = useState(0);
-  const [allClosedStats, setAllClosedStats] = useState<Array<{ pnl_pct: number | null; pnl_usd: number | null; real_pnl_sol: number | null; entry_sol_cost: number | null; exit_reason: string | null; wallet_tag?: string }>>([]);
+  const [allClosedStats, setAllClosedStats] = useState<
+    Array<{ real_pnl_sol: number | null; entry_sol_cost: number | null; exit_reason: string | null; wallet_tag?: string }>
+  >([]);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
-  const [bankroll, setBankroll] = useState<{
-    starting_balance: number;
-    current_balance: number;
-    total_pnl_usd: number;
-  } | null>(null);
-  const [liveTrading, setLiveTrading] = useState(false);
-  const [togglingLive, setTogglingLive] = useState(false);
   const [phantomBalance, setPhantomBalance] = useState<{
     sol: number; usd: number; pnlSol: number; pnlUsd: number; startingSol: number; solPrice?: number;
   } | null>(null);
@@ -72,7 +65,7 @@ export default function BotPage() {
   >({});
 
   const fetchData = useCallback(async () => {
-    const [stateRes, signalsRes, walletsRes, openRes, closedRes, allClosedRes, bankrollRes] =
+    const [stateRes, signalsRes, walletsRes, openRes, closedRes, allClosedRes] =
       await Promise.all([
         supabase
           .from("bot_state")
@@ -92,40 +85,34 @@ export default function BotPage() {
           .from("paper_trades")
           .select("*")
           .eq("status", "open")
+          .like("wallet_tag", "%[LIVE]%")
           .order("entry_time", { ascending: false }),
         supabase
           .from("paper_trades")
           .select("*")
           .eq("status", "closed")
+          .like("wallet_tag", "%[LIVE]%")
           .order("exit_time", { ascending: false })
           .limit(50),
-        // Fetch ALL closed trades for stats (include wallet_tag for [LIVE] filter)
         supabase
           .from("paper_trades")
-          .select("pnl_pct, pnl_usd, real_pnl_sol, entry_sol_cost, exit_reason, wallet_tag")
-          .eq("status", "closed"),
-        supabase
-          .from("paper_bankroll")
-          .select("*")
-          .limit(1)
-          .single(),
+          .select("real_pnl_sol, entry_sol_cost, exit_reason, wallet_tag")
+          .eq("status", "closed")
+          .like("wallet_tag", "%[LIVE]%"),
       ]);
 
     if (stateRes.data && stateRes.data.length > 0) {
       setBotState(stateRes.data[0]);
-      setLiveTrading(stateRes.data[0].mode === "live");
     }
     setSignals(signalsRes.data || []);
     setWalletCount(walletsRes.count || 0);
     setOpenTrades(openRes.data || []);
     setClosedTrades(closedRes.data || []);
     setAllClosedStats(allClosedRes.data || []);
-    if (bankrollRes.data) setBankroll(bankrollRes.data);
 
     // Fetch live prices and whale sells for open positions
     const opens = openRes.data || [];
     if (opens.length > 0) {
-      // Fetch prices from DexScreener
       const uniqueMints = [...new Set(opens.map((t) => t.coin_address))];
       const priceMap: Record<string, number> = {};
       await Promise.all(
@@ -147,7 +134,6 @@ export default function BotPage() {
       );
       setLivePrices(priceMap);
 
-      // Fetch whale SELL signals for each open position
       const sellMap: Record<
         string,
         Array<{ wallet_tag: string; signal_time: string }>
@@ -170,18 +156,14 @@ export default function BotPage() {
       setWhaleSells(sellMap);
     }
 
-    // Fetch Phantom wallet balance when live trading (no cache)
-    if (stateRes.data?.[0]?.mode === "live") {
-      try {
-        const balRes = await fetch("/api/phantom-balance", { cache: "no-store" });
-        if (balRes.ok) {
-          const bal = await balRes.json();
-          setPhantomBalance(bal);
-        }
-      } catch {}
-    } else {
-      setPhantomBalance(null);
-    }
+    // Always live — fetch wallet balance
+    try {
+      const balRes = await fetch("/api/phantom-balance", { cache: "no-store" });
+      if (balRes.ok) {
+        const bal = await balRes.json();
+        setPhantomBalance(bal);
+      }
+    } catch {}
 
     setLastFetch(new Date());
     setLoading(false);
@@ -205,75 +187,34 @@ export default function BotPage() {
     setToggling(false);
   }
 
-  async function toggleLiveTrading() {
-    if (!botState) return;
-    setTogglingLive(true);
-    const newLive = !liveTrading;
-    const newMode = newLive ? "live" : "paper";
-    await supabase
-      .from("bot_state")
-      .update({ mode: newMode, last_updated: new Date().toISOString() })
-      .eq("id", botState.id);
-    setLiveTrading(newLive);
-    setBotState({ ...botState, mode: newMode });
-    setTogglingLive(false);
-  }
+  // ─── Stats — 100% real (real_pnl_sol / entry_sol_cost) ──
+  const statsWithPct = allClosedStats
+    .map((t: any) => {
+      const realPnl = t.real_pnl_sol !== null && t.real_pnl_sol !== undefined ? Number(t.real_pnl_sol) : null;
+      const entryCost = t.entry_sol_cost !== null && t.entry_sol_cost !== undefined ? Number(t.entry_sol_cost) : null;
+      if (realPnl === null) return null;
+      const pct = entryCost && entryCost > 0 ? (realPnl / entryCost) * 100 : null;
+      return { ...t, _pnlSol: realPnl, _pct: pct };
+    })
+    .filter((t): t is NonNullable<typeof t> => t !== null);
 
-  // ─── Trade display — filter by [LIVE] when live mode ──
-
-  const displayOpenTrades = liveTrading
-    ? openTrades.filter((t) => t.wallet_tag?.includes("[LIVE]"))
-    : openTrades;
-  const displayClosedTrades = liveTrading
-    ? closedTrades.filter((t) => t.wallet_tag?.includes("[LIVE]"))
-    : closedTrades;
-
-  // Stats: filter to [LIVE] only when live mode
-  const statsData = liveTrading
-    ? allClosedStats.filter((t: any) => t.wallet_tag?.includes("[LIVE]"))
-    : allClosedStats;
-  const totalClosed = statsData.length;
-
-  // Sprint 9 P0 — when in LIVE mode, compute WR/avg from real_pnl_sol
-  // where available (post-backfill, should be 100% populated). Paper
-  // pnl_pct is preserved as a fallback for any null rows.
-  // For the "realPct" we use real_pnl_sol / entry_sol_cost × 100.
-  const statsWithPct = statsData.map((t: any) => {
-    const realPnl = t.real_pnl_sol;
-    const entryCost = t.entry_sol_cost;
-    const useReal = liveTrading && realPnl !== null && realPnl !== undefined && entryCost && Number(entryCost) > 0;
-    const pct = useReal
-      ? (Number(realPnl) / Number(entryCost)) * 100
-      : Number(t.pnl_pct);
-    return { ...t, _pct: pct, _isReal: useReal };
-  });
-  const wins = statsWithPct.filter((t) => t._pct > 0);
-  const losses = statsWithPct.filter((t) => t._pct <= 0);
+  const totalClosed = statsWithPct.length;
+  const wins = statsWithPct.filter((t) => t._pnlSol > 0);
+  const losses = statsWithPct.filter((t) => t._pnlSol <= 0);
   const winRate = totalClosed > 0 ? ((wins.length / totalClosed) * 100).toFixed(1) : "0";
+
+  const winsWithPct = wins.filter((t) => t._pct !== null);
+  const lossesWithPct = losses.filter((t) => t._pct !== null);
   const avgGain =
-    wins.length > 0
-      ? (wins.reduce((s, t) => s + t._pct, 0) / wins.length).toFixed(2)
+    winsWithPct.length > 0
+      ? (winsWithPct.reduce((s, t) => s + (t._pct as number), 0) / winsWithPct.length).toFixed(2)
       : "0";
   const avgLoss =
-    losses.length > 0
-      ? (losses.reduce((s, t) => s + t._pct, 0) / losses.length).toFixed(2)
+    lossesWithPct.length > 0
+      ? (lossesWithPct.reduce((s, t) => s + (t._pct as number), 0) / lossesWithPct.length).toFixed(2)
       : "0";
 
-  // Sprint 9 P0 — sum of real SOL PnL across LIVE trades (ground truth).
-  // For display next to paper bankroll numbers.
-  const realPnlSol = liveTrading
-    ? statsData.reduce((s: number, t: any) => s + (t.real_pnl_sol !== null ? Number(t.real_pnl_sol) : 0), 0)
-    : 0;
-  const realDataCount = liveTrading
-    ? statsData.filter((t: any) => t.real_pnl_sol !== null).length
-    : 0;
-
-  // ─── Recovery Tracker ──────────────────────────────────
-  const RECOVERY_GOAL = 3325;
-  const totalWinUsd = wins.reduce((s, t) => s + Math.max(0, Number(t.pnl_usd || 0)), 0);
-  const recoveryPct = Math.min((totalWinUsd / RECOVERY_GOAL) * 100, 100);
-  const avgWinUsd = wins.length > 0 ? totalWinUsd / wins.length : 0;
-  const tradesNeeded = avgWinUsd > 0 ? Math.ceil((RECOVERY_GOAL - totalWinUsd) / avgWinUsd) : 999;
+  const realPnlSol = statsWithPct.reduce((s, t) => s + t._pnlSol, 0);
 
   if (loading) {
     return <div className="text-zinc-500 text-center mt-20">Loading...</div>;
@@ -285,11 +226,11 @@ export default function BotPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-amber-500">PixiuBot</h1>
-          <span className="text-xs text-zinc-600">{liveTrading ? "Sprint 5 — Live Trading" : "Sprint 3 — Paper Trading"}</span>
+          <span className="text-xs text-zinc-600">Live Trading</span>
         </div>
 
-        {/* Phantom Wallet Balance (live mode only) */}
-        {liveTrading && phantomBalance && (
+        {/* Wallet Balance */}
+        {phantomBalance && (
           <div className="bg-red-900/30 border border-red-600 rounded-lg p-4">
             <div className="flex items-center justify-between mb-2">
               <div>
@@ -314,11 +255,10 @@ export default function BotPage() {
                 ({phantomBalance.pnlUsd >= 0 ? "+" : ""}${phantomBalance.pnlUsd.toFixed(2)})
               </span>
             </div>
-            {/* Sprint 9 P0 — trade-level ground truth from backfilled real_pnl_sol */}
-            {realDataCount > 0 && (
+            {totalClosed > 0 && (
               <div className="flex items-center justify-between text-xs font-mono mt-1 pt-1 border-t border-zinc-800">
                 <span className="text-zinc-500">
-                  Sum real PnL across {realDataCount} LIVE trades
+                  Sum real PnL across {totalClosed} trades
                 </span>
                 <span className={realPnlSol >= 0 ? "text-green-400" : "text-red-400"}>
                   {realPnlSol >= 0 ? "+" : ""}{realPnlSol.toFixed(4)} SOL
@@ -329,8 +269,8 @@ export default function BotPage() {
           </div>
         )}
 
-        {/* Bankroll — SOL when live, USD when paper */}
-        {liveTrading && phantomBalance ? (
+        {/* Bankroll (all SOL, real wallet) */}
+        {phantomBalance && (
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <Card label="Starting" value={`${phantomBalance.startingSol.toFixed(4)} SOL`} />
             <Card
@@ -343,16 +283,12 @@ export default function BotPage() {
               value={`${phantomBalance.pnlSol >= 0 ? "+" : ""}${phantomBalance.pnlSol.toFixed(4)} SOL`}
               color={phantomBalance.pnlSol >= 0 ? "text-green-500" : "text-red-500"}
             />
-            {/* Sprint 10 P1b — Trade PnL card: sum of real_pnl_sol across
-                tracked LIVE trades. This is the authoritative "what did the
-                bot actually earn" number — excludes fees on failed buys and
-                orphan tokens that show up in wallet Δ. */}
             <Card
-              label={`Trade PnL${realDataCount > 0 ? ` (${realDataCount})` : ""}`}
-              value={realDataCount > 0
+              label={`Trade PnL${totalClosed > 0 ? ` (${totalClosed})` : ""}`}
+              value={totalClosed > 0
                 ? `${realPnlSol >= 0 ? "+" : ""}${realPnlSol.toFixed(4)} SOL`
                 : "—"}
-              color={realDataCount > 0 ? (realPnlSol >= 0 ? "text-green-500" : "text-red-500") : undefined}
+              color={totalClosed > 0 ? (realPnlSol >= 0 ? "text-green-500" : "text-red-500") : undefined}
             />
             <Card
               label="Return"
@@ -360,77 +296,20 @@ export default function BotPage() {
               color={phantomBalance.pnlSol >= 0 ? "text-green-500" : "text-red-500"}
             />
           </div>
-        ) : bankroll ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Card label="Starting" value={`$${Number(bankroll.starting_balance).toLocaleString()}`} />
-            <Card
-              label="Current"
-              value={`$${Number(bankroll.current_balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-              color={Number(bankroll.current_balance) >= Number(bankroll.starting_balance) ? "text-green-500" : "text-red-500"}
-            />
-            <Card
-              label="Total PnL"
-              value={`${Number(bankroll.total_pnl_usd) >= 0 ? "+" : ""}$${Number(bankroll.total_pnl_usd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-              color={Number(bankroll.total_pnl_usd) >= 0 ? "text-green-500" : "text-red-500"}
-            />
-            <Card
-              label="Return"
-              value={`${Number(bankroll.total_pnl_usd) >= 0 ? "+" : ""}${((Number(bankroll.total_pnl_usd) / Number(bankroll.starting_balance)) * 100).toFixed(2)}%`}
-              color={Number(bankroll.total_pnl_usd) >= 0 ? "text-green-500" : "text-red-500"}
-            />
-          </div>
-        ) : null}
-
-        {/* Recovery Tracker */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-bold text-amber-500">
-              Recovery Goal: ${RECOVERY_GOAL.toLocaleString()}
-            </span>
-            <span className="text-sm font-mono text-zinc-400">
-              ${totalWinUsd.toFixed(2)} / ${RECOVERY_GOAL.toLocaleString()}
-            </span>
-          </div>
-          <div className="w-full bg-zinc-800 rounded-full h-4 overflow-hidden">
-            <div
-              className="h-full rounded-full transition-all duration-500"
-              style={{
-                width: `${Math.max(recoveryPct, 1)}%`,
-                background: recoveryPct >= 100
-                  ? "linear-gradient(90deg, #22c55e, #16a34a)"
-                  : "linear-gradient(90deg, #f59e0b, #ef4444)",
-              }}
-            />
-          </div>
-          <div className="flex items-center justify-between mt-2">
-            <span className="text-xs text-zinc-500">
-              {recoveryPct >= 100
-                ? "GOAL REACHED"
-                : `${recoveryPct.toFixed(1)}% there`}
-            </span>
-            <span className="text-xs text-zinc-500">
-              {wins.length > 0 && recoveryPct < 100
-                ? `~${tradesNeeded} winning trades to go (avg $${avgWinUsd.toFixed(2)}/win)`
-                : recoveryPct >= 100
-                  ? "Dustin's back"
-                  : "Waiting for first win..."}
-            </span>
-          </div>
-        </div>
+        )}
 
         {/* Status Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           <Card
             label="Status"
             value={botState?.is_running ? "RUNNING" : "STOPPED"}
             color={botState?.is_running ? "text-green-500" : "text-red-500"}
           />
-          <Card label="Mode" value={liveTrading ? "LIVE" : "PAPER"} color={liveTrading ? "text-red-500" : "text-white"} />
           <Card label="Tracked Wallets" value={String(walletCount)} />
           <Card label="Signals" value={String(signals.length)} />
         </div>
 
-        {/* Start/Stop + Live Trading Toggle */}
+        {/* Start/Stop */}
         <div className="flex items-center gap-4">
           <button
             onClick={toggleBot}
@@ -443,21 +322,6 @@ export default function BotPage() {
           >
             {toggling ? "..." : botState?.is_running ? "STOP BOT" : "START BOT"}
           </button>
-          <button
-            onClick={toggleLiveTrading}
-            disabled={togglingLive}
-            className={`px-6 py-2 rounded-lg font-mono font-bold text-sm transition-colors ${
-              liveTrading
-                ? "bg-red-600 hover:bg-red-700 text-white border-2 border-red-400"
-                : "bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border-2 border-zinc-700"
-            } disabled:opacity-50 disabled:cursor-not-allowed`}
-          >
-            {togglingLive
-              ? "..."
-              : liveTrading
-                ? "LIVE TRADING"
-                : "PAPER ONLY"}
-          </button>
           {lastFetch && (
             <span className="text-zinc-600 text-xs">
               Last fetched: {lastFetch.toLocaleTimeString()}
@@ -465,13 +329,13 @@ export default function BotPage() {
           )}
         </div>
 
-        {/* ─── Paper Trading Stats ────────────────────────── */}
+        {/* ─── Performance ─────────────────────────────────── */}
         <section>
           <h2 className="text-lg font-semibold text-zinc-300 mb-3">
-            {liveTrading ? "Live Trade Performance" : "Paper Trading"}
+            Performance
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Card label={liveTrading ? "Closed LIVE Trades" : "Closed Paper Trades"} value={String(totalClosed)} />
+            <Card label="Closed Trades" value={String(totalClosed)} />
             <Card
               label="Win Rate"
               value={`${winRate}%`}
@@ -482,7 +346,7 @@ export default function BotPage() {
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-4">
             <Card
-              label="Avg Gain"
+              label="Avg Win"
               value={`+${avgGain}%`}
               color="text-green-500"
             />
@@ -491,12 +355,12 @@ export default function BotPage() {
               value={`${avgLoss}%`}
               color="text-red-500"
             />
-            <Card label="Open Positions" value={String(displayOpenTrades.length)} />
+            <Card label="Open Positions" value={String(openTrades.length)} />
           </div>
         </section>
 
         {/* ─── Open Positions (Live Tracker) ──────────────── */}
-        {displayOpenTrades.length > 0 && (
+        {openTrades.length > 0 && (
           <section>
             <h2 className="text-lg font-semibold text-zinc-300 mb-3">
               Open Positions
@@ -505,10 +369,10 @@ export default function BotPage() {
               </span>
             </h2>
             <div className="space-y-3">
-              {displayOpenTrades.map((t) => {
+              {openTrades.map((t) => {
                 const entryPrice = Number(t.entry_price);
                 const currentPrice = livePrices[t.coin_address] || 0;
-                const pnlPct =
+                const markPct =
                   entryPrice > 0 && currentPrice > 0
                     ? ((currentPrice - entryPrice) / entryPrice) * 100
                     : null;
@@ -516,9 +380,6 @@ export default function BotPage() {
                 const minutesOpen = (Date.now() - entryTime) / 60_000;
                 const timeoutMin = 20;
                 const timeRemaining = Math.max(0, timeoutMin - minutesOpen);
-                // L3 + remaining > 0 = trailing-stop mode; backend suppresses
-                // timeout in this state (risk-guard.ts), so the UI shouldn't
-                // flag TIMEOUT either. Show TRAILING instead.
                 const isTrailing = (t.grid_level ?? 0) === 3 && (t.remaining_pct ?? 100) > 0;
                 const sells = whaleSells[t.coin_address] || [];
                 const coinLabel =
@@ -529,7 +390,7 @@ export default function BotPage() {
                     key={t.id}
                     className="bg-zinc-900 border border-zinc-800 rounded-lg p-4"
                   >
-                    {/* Row 1: Coin name, PnL, timeout */}
+                    {/* Row 1: Coin name, mark, timeout */}
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-3">
                         <span className="text-amber-500 font-bold font-mono text-base">
@@ -545,22 +406,21 @@ export default function BotPage() {
                         )}
                       </div>
                       <div className="flex items-center gap-4">
-                        {/* Live PnL */}
-                        {pnlPct !== null ? (
+                        {/* Mark-to-market % (not an outcome — just live quote vs entry) */}
+                        {markPct !== null ? (
                           <span
                             className={`text-lg font-bold font-mono ${
-                              pnlPct >= 0 ? "text-green-500" : "text-red-500"
+                              markPct >= 0 ? "text-green-500" : "text-red-500"
                             }`}
                           >
-                            {pnlPct >= 0 ? "+" : ""}
-                            {pnlPct.toFixed(2)}%
+                            {markPct >= 0 ? "+" : ""}
+                            {markPct.toFixed(2)}%
                           </span>
                         ) : (
                           <span className="text-lg font-mono text-zinc-600">
                             —
                           </span>
                         )}
-                        {/* Timeout countdown (or TRAILING when in L3 trailing mode) */}
                         <span
                           className={`text-xs font-mono px-2 py-1 rounded ${
                             isTrailing
@@ -591,9 +451,9 @@ export default function BotPage() {
                           Now: ${currentPrice.toFixed(10)}
                         </span>
                       )}
-                      {t.partial_pnl > 0 && (
-                        <span className="text-green-600">
-                          Locked: +{t.partial_pnl.toFixed(2)}%
+                      {t.entry_sol_cost && Number(t.entry_sol_cost) > 0 && (
+                        <span className="text-zinc-500">
+                          Cost: {Number(t.entry_sol_cost).toFixed(4)} SOL
                         </span>
                       )}
                       <span className="text-zinc-600">
@@ -634,7 +494,7 @@ export default function BotPage() {
                         ))}
                         <span className="ml-2 text-xs text-zinc-500">
                           {t.grid_level >= 3
-                            ? "TP 100%"
+                            ? "Trailing"
                             : t.grid_level === 2
                               ? "+40% (25% left)"
                               : t.grid_level === 1
@@ -669,7 +529,7 @@ export default function BotPage() {
         )}
 
         {/* ─── Closed Trades ──────────────────────────────── */}
-        {displayClosedTrades.length > 0 && (
+        {closedTrades.length > 0 && (
           <section>
             <h2 className="text-lg font-semibold text-zinc-300 mb-3">
               Closed Trades
@@ -681,16 +541,18 @@ export default function BotPage() {
                     <th className="text-left py-2 px-3">Coin</th>
                     <th className="text-right py-2 px-3">Entry</th>
                     <th className="text-right py-2 px-3">Exit</th>
-                    <th className="text-right py-2 px-3">PnL (paper)</th>
-                    <th className="text-right py-2 px-3" title="Real on-chain SOL delta — authoritative when available">Real SOL</th>
+                    <th className="text-right py-2 px-3">Real SOL</th>
+                    <th className="text-right py-2 px-3">Real %</th>
                     <th className="text-center py-2 px-3">Grid</th>
                     <th className="text-left py-2 px-3">Reason</th>
                     <th className="text-left py-2 px-3">Closed</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {displayClosedTrades.map((t) => {
-                    const pnl = Number(t.pnl_pct);
+                  {closedTrades.map((t) => {
+                    const realPnl = t.real_pnl_sol !== null && t.real_pnl_sol !== undefined ? Number(t.real_pnl_sol) : null;
+                    const entryCost = t.entry_sol_cost !== null && t.entry_sol_cost !== undefined ? Number(t.entry_sol_cost) : null;
+                    const realPct = realPnl !== null && entryCost && entryCost > 0 ? (realPnl / entryCost) * 100 : null;
                     return (
                       <tr
                         key={t.id}
@@ -707,22 +569,24 @@ export default function BotPage() {
                             ? `$${Number(t.exit_price).toFixed(10)}`
                             : "-"}
                         </td>
-                        <td
-                          className={`py-2 px-3 text-right font-bold ${
-                            pnl >= 0 ? "text-green-500" : "text-red-500"
-                          }`}
-                        >
-                          {pnl >= 0 ? "+" : ""}
-                          {pnl.toFixed(2)}%
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono text-xs">
-                          {t.real_pnl_sol !== null && t.real_pnl_sol !== undefined ? (
-                            <span className={Number(t.real_pnl_sol) >= 0 ? "text-green-400" : "text-red-400"}>
-                              {Number(t.real_pnl_sol) >= 0 ? "+" : ""}
-                              {Number(t.real_pnl_sol).toFixed(4)}
+                        <td className="py-2 px-3 text-right font-mono">
+                          {realPnl !== null ? (
+                            <span className={realPnl >= 0 ? "text-green-400" : "text-red-400"}>
+                              {realPnl >= 0 ? "+" : ""}
+                              {realPnl.toFixed(4)}
                             </span>
                           ) : (
-                            <span className="text-zinc-700" title="Pre-Sprint-9 trade — real SOL delta not recorded">—</span>
+                            <span className="text-zinc-700">—</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3 text-right font-mono text-xs">
+                          {realPct !== null ? (
+                            <span className={realPct >= 0 ? "text-green-400" : "text-red-400"}>
+                              {realPct >= 0 ? "+" : ""}
+                              {realPct.toFixed(2)}%
+                            </span>
+                          ) : (
+                            <span className="text-zinc-700">—</span>
                           )}
                         </td>
                         <td className="py-2 px-3 text-center">
@@ -746,7 +610,13 @@ export default function BotPage() {
                                 ? "SL"
                                 : t.exit_reason === "timeout"
                                   ? "TO"
-                                  : "-"}
+                                  : t.exit_reason === "trailing_stop"
+                                    ? "TR"
+                                    : t.exit_reason === "whale_exit"
+                                      ? "WE"
+                                      : t.exit_reason === "circuit_breaker"
+                                        ? "CB"
+                                        : "-"}
                           </span>
                         </td>
                         <td className="py-2 px-3 text-zinc-600">

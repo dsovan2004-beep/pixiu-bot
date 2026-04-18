@@ -166,34 +166,15 @@ async function getPrice(
   return { price: 0, source: "none" };
 }
 
-// ─── Bankroll ───────────────────────────────────────────
-
-async function updateBankroll(pnlUsd: number): Promise<void> {
-  const { data: bankroll } = await supabase
-    .from("paper_bankroll")
-    .select("id, current_balance, starting_balance")
-    .limit(1)
-    .single();
-
-  if (!bankroll) return;
-
-  const newBalance = Number(bankroll.current_balance) + pnlUsd;
-  const startBal = Number(bankroll.starting_balance || 10000);
-  const totalPnl = newBalance - startBal;
-
-  await supabase
-    .from("paper_bankroll")
-    .update({
-      current_balance: newBalance,
-      total_pnl_usd: totalPnl,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", bankroll.id);
-
-  const sign = pnlUsd >= 0 ? "+" : "";
-  console.log(
-    `  [GUARD] Bankroll: $${Number(bankroll.current_balance).toFixed(2)} → $${newBalance.toFixed(2)} (${sign}$${pnlUsd.toFixed(2)})`
-  );
+// ─── Bankroll (no-op) ───────────────────────────────────
+//
+// Sprint 10 — paper framework killed. The only truth is real_pnl_sol
+// (computed from on-chain tx deltas and written per-close). This function
+// is kept as a no-op so existing call-sites don't need surgery; it no
+// longer writes to paper_bankroll.
+async function updateBankroll(_pnlUsd: number): Promise<void> {
+  // intentionally empty — paper_bankroll table no longer mirrored
+  return;
 }
 
 // Track positions already being closed to prevent duplicate exits
