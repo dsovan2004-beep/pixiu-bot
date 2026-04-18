@@ -21,6 +21,19 @@ import bs58 from "bs58";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUPITER_QUOTE_URL = "https://api.jup.ag/swap/v1/quote";
 const JUPITER_SWAP_URL = "https://api.jup.ag/swap/v1/swap";
+
+// P0b: when sellToken() bails on Jupiter 6024 (token has transfer fee /
+// un-sellable), record the mint here so callers can distinguish a
+// "Jupiter truly cannot route this" failure from a transient
+// rate-limit / network / slippage failure. Risk-guard reads this to
+// decide between mark-to-zero (unsellable) vs revert-and-retry (other).
+const unsellableMints = new Set<string>();
+
+export function wasLastSellUnsellable(mint: string): boolean {
+  const was = unsellableMints.has(mint);
+  unsellableMints.delete(mint); // read-once
+  return was;
+}
 const BUY_SLIPPAGE_BPS = 1000; // 10% for buys — pump.fun tokens need higher
 const SELL_SLIPPAGE_BPS = [500, 1000, 2000, 3000]; // Auto-escalate: 5% → 10% → 20% → 30% on retry
 
@@ -413,6 +426,7 @@ export async function sellToken(
           // transfer tax. Bail immediately so the guard can handle it.
           if (errStr.includes("6024")) {
             console.error(`  [JUPITER] Token has transfer fee (6024) — sell impossible, skipping retries: ${coinAddress}`);
+            unsellableMints.add(coinAddress); // P0b: signal caller to mark-to-zero instead of retry
             return null;
           }
           const is6001 = errStr.includes("6001");

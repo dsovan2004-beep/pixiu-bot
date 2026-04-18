@@ -16,7 +16,7 @@ import {
   LIVE_BUY_SOL,
   DAILY_LOSS_LIMIT_SOL,
 } from "../config/smart-money";
-import { sellToken, hasTokenBalance } from "../lib/jupiter-swap";
+import { sellToken, hasTokenBalance, wasLastSellUnsellable } from "../lib/jupiter-swap";
 import { sendAlert } from "../lib/telegram";
 
 const POSITION_CHECK_MS = 5_000;
@@ -311,10 +311,11 @@ async function checkPositions(): Promise<void> {
             })
             .eq("id", pos.id)
             .eq("status", "closing")
+            .is("pnl_usd", null)               // P0b: bankroll-credit latch
             .select("id")
             .maybeSingle();
           if (!flipped) {
-            console.log(`  [GUARD] ⚠️ ${coinLabel} already closed by another path — skipping bankroll credit`);
+            console.log(`  [GUARD] ⚠️ ${coinLabel} already closed/credited by another path — skipping bankroll credit`);
             return;
           }
           await updateBankroll(closedPnlUsd);
@@ -330,14 +331,56 @@ async function checkPositions(): Promise<void> {
         if (sig) {
           console.log(`  [GUARD] 🔴 LIVE SELL executed: ${sig} (${exitReason})`);
         } else {
-          // Sell failed despite holding tokens — Jupiter / network / slippage issue.
-          // Revert to open so next poll can retry at higher slippage.
+          // Sell failed. Two failure classes:
+          //   (a) Jupiter 6024 — un-sellable forever (transfer fee / TLV
+          //       blocker). Mark-to-zero the remaining bag instead of
+          //       retrying; otherwise the position loops forever. [P0b]
+          //   (b) Any other transient failure (429 / network / slippage).
+          //       Revert status → open and let next poll retry. The
+          //       revert is GATED on status='closing' so we do not
+          //       clobber a row that's already been closed by another
+          //       path (was the root cause of the double-credit bug).
+          if (wasLastSellUnsellable(pos.coin_address)) {
+            // (a) mark-to-zero close
+            const zeroPnlPct = (pos.partial_pnl ?? 0) + (-100 * remainingPct) / 100;
+            const zeroPnlUsd = (zeroPnlPct / 100) * posSize;
+            console.log(
+              `  [GUARD] 🪦 ${coinLabel} un-sellable (Jupiter 6024) — marking remaining ${remainingPct}% to zero. Final PnL ${zeroPnlPct.toFixed(2)}%`
+            );
+            const { data: flipped } = await supabase
+              .from("paper_trades")
+              .update({
+                exit_price: 0,
+                pnl_pct: zeroPnlPct,
+                pnl_usd: zeroPnlUsd,
+                status: "closed",
+                exit_time: new Date().toISOString(),
+                exit_reason: "unsellable_6024",
+                grid_level: gridLvl,
+                remaining_pct: 0,
+                partial_pnl: zeroPnlPct,
+              })
+              .eq("id", pos.id)
+              .eq("status", "closing")
+              .is("pnl_usd", null)              // P0b: bankroll-credit latch
+              .select("id")
+              .maybeSingle();
+            if (!flipped) {
+              console.log(`  [GUARD] ⚠️ ${coinLabel} already closed/credited — skipping bankroll credit`);
+              return;
+            }
+            await updateBankroll(zeroPnlUsd);
+            void sendAlert("sell_failed", `${coinLabel} un-sellable (6024) — marked to zero. PnL ${zeroPnlPct.toFixed(2)}%`);
+            return;
+          }
+          // (b) transient — revert closing → open for retry
           sellLanded = false;
           console.log(`  [GUARD] ⚠️ LIVE SELL failed for ${coinLabel} (held tokens but Jupiter rejected) — reverting status to 'open' for retry`);
           await supabase
             .from("paper_trades")
             .update({ status: "open" })
-            .eq("id", pos.id);
+            .eq("id", pos.id)
+            .eq("status", "closing");          // P0b: only revert rows still in closing state
           void sendAlert(
             "sell_failed",
             `SELL failed: ${coinLabel} (${exitReason}). Position re-opened, will retry next poll.`
@@ -368,10 +411,11 @@ async function checkPositions(): Promise<void> {
         })
         .eq("id", pos.id)
         .eq("status", "closing")
+        .is("pnl_usd", null)                     // P0b: bankroll-credit latch
         .select("id")
         .maybeSingle();
       if (!flipped) {
-        console.log(`  [GUARD] ⚠️ ${coinLabel} already closed by another path — skipping bankroll credit`);
+        console.log(`  [GUARD] ⚠️ ${coinLabel} already closed/credited by another path — skipping bankroll credit`);
         return;
       }
       await updateBankroll(pnlUsd);
