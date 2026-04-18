@@ -1,7 +1,7 @@
 /**
  * PixiuBot Agent 5 — Risk Guard
  *
- * Polls open positions every 5s from paper_trades table.
+ * Polls open positions every 5s from trades table.
  * Manages all exits with priority order:
  *   1. Circuit breaker: -25% emergency exit
  *   2. Whale exit: T1 wallet SELL detected
@@ -28,7 +28,8 @@ const POSITION_CHECK_MS_L1_PLUS = 5_000;
 const POSITION_CHECK_MS = POSITION_CHECK_MS_L0;
 
 async function isLiveTrading(): Promise<boolean> {
-  // SAFETY: default to false (paper) on ANY failure — never accidentally go live
+  // SAFETY: default to false (no trading) on ANY failure — never fire buys
+  // when the DB can't tell us our mode. Live mode is the only non-safe state.
   try {
     const { data, error } = await supabase
       .from("bot_state")
@@ -36,12 +37,12 @@ async function isLiveTrading(): Promise<boolean> {
       .limit(1)
       .single();
     if (error || !data) {
-      console.error("  [GUARD] ⚠️ Failed to read bot_state — defaulting to PAPER");
+      console.error("  [GUARD] ⚠️ Failed to read bot_state — holding trades (no new entries)");
       return false;
     }
     return data.mode === "live";
   } catch {
-    console.error("  [GUARD] ⚠️ bot_state query crashed — defaulting to PAPER");
+    console.error("  [GUARD] ⚠️ bot_state query crashed — holding trades (no new entries)");
     return false;
   }
 }
@@ -66,23 +67,22 @@ async function checkDailyLossLimit(): Promise<void> {
   if (dailyLossLimitHit) return;
 
   // Sum REAL SOL lost across losing LIVE trades since midnight UTC.
-  // Each trade's real SOL loss = LIVE_BUY_SOL × |pnl_pct| / 100.
-  // pnl_pct is already the blended outcome across grid partials, so this
-  // correctly accounts for L1/L2 locked profits reducing net loss.
+  // Real ground truth = real_pnl_sol column (on-chain tx delta). Sum only
+  // the negative values; abs of that sum is total SOL bled today.
   const todayStart = `${todayUTC}T00:00:00Z`;
   const { data: losses } = await supabase
-    .from("paper_trades")
-    .select("pnl_pct")
+    .from("trades")
+    .select("real_pnl_sol")
     .eq("status", "closed")
     .gte("exit_time", todayStart)
-    .lt("pnl_pct", 0)
+    .lt("real_pnl_sol", 0)
     .like("wallet_tag", "%[LIVE]%");
 
   if (!losses || losses.length === 0) return;
 
   const totalLossSol = losses.reduce((sum, t) => {
-    const pct = Number(t.pnl_pct);
-    return sum + (LIVE_BUY_SOL * Math.abs(pct)) / 100;
+    const r = t.real_pnl_sol !== null && t.real_pnl_sol !== undefined ? Number(t.real_pnl_sol) : 0;
+    return sum + Math.abs(r);
   }, 0);
   const lossCount = losses.length;
 
@@ -166,17 +166,6 @@ async function getPrice(
   return { price: 0, source: "none" };
 }
 
-// ─── Bankroll (no-op) ───────────────────────────────────
-//
-// Sprint 10 — paper framework killed. The only truth is real_pnl_sol
-// (computed from on-chain tx deltas and written per-close). This function
-// is kept as a no-op so existing call-sites don't need surgery; it no
-// longer writes to paper_bankroll.
-async function updateBankroll(_pnlUsd: number): Promise<void> {
-  // intentionally empty — paper_bankroll table no longer mirrored
-  return;
-}
-
 // Track positions already being closed to prevent duplicate exits
 const closingPositions = new Set<string>();
 
@@ -198,13 +187,13 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
   // (Apr 18 2026 bug).
   const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString();
   await supabase
-    .from("paper_trades")
+    .from("trades")
     .update({ status: "open", closing_started_at: null })
     .eq("status", "closing")
     .lt("closing_started_at", fiveMinAgo);
 
   const { data: allPositions, error } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("*")
     .eq("status", "open");
 
@@ -275,7 +264,7 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
       // 2. Atomic DB claim — flip status='open' → 'closing' (only one writer wins).
       //    If another guard instance already claimed it, abort.
       const { data: claimed, error: claimErr } = await supabase
-        .from("paper_trades")
+        .from("trades")
         .update({ status: "closing", closing_started_at: new Date().toISOString() })
         .eq("id", pos.id)
         .eq("status", "open")
@@ -301,19 +290,15 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
         const held = await hasTokenBalance(pos.coin_address);
         if (!held) {
           const closedPnl = gridLvl > 0 ? (pos.partial_pnl ?? finalPnl) : pnlPct;
-          console.log(`  [GUARD] Token balance 0 — marking ${coinLabel} as closed (locked PnL: ${closedPnl.toFixed(2)}%)`);
+          console.log(`  [GUARD] Token balance 0 — marking ${coinLabel} as closed (mark ${closedPnl.toFixed(2)}%)`);
           const ep = exitPrice ?? currentPrice;
-          const closedPnlUsd = (closedPnl / 100) * posSize;
-          // IDEMPOTENT close: only transition 'closing' → 'closed'. If the row
-          // is already closed (by any prior path), the update matches 0 rows
-          // and we skip the bankroll credit — prevents the double-credit bug
-          // observed on Deep Fucking Value.
+          // IDEMPOTENT close: only transition 'closing' → 'closed'. If the
+          // row is already closed (by any prior path), update matches 0 rows
+          // and we return without error.
           const { data: flipped } = await supabase
-            .from("paper_trades")
+            .from("trades")
             .update({
               exit_price: ep,
-              pnl_pct: closedPnl,
-              pnl_usd: closedPnlUsd,
               status: "closed",
               exit_time: new Date().toISOString(),
               exit_reason: gridLvl > 0 ? "take_profit" : "rug_or_missing",
@@ -323,14 +308,13 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
             })
             .eq("id", pos.id)
             .eq("status", "closing")
-            .is("exit_time", null)             // P0b-fix: use exit_time (guaranteed null on unclosed) as idempotent latch; pnl_usd defaults to 0 so .is(null) never matched
+            .is("exit_time", null)
             .select("id")
             .maybeSingle();
           if (!flipped) {
-            console.log(`  [GUARD] ⚠️ ${coinLabel} already closed/credited by another path — skipping bankroll credit`);
+            console.log(`  [GUARD] ⚠️ ${coinLabel} already closed by another path — skipping`);
             return;
           }
-          await updateBankroll(closedPnlUsd);
           void sendAlert(
             gridLvl > 0 ? "take_profit" : "stop_loss",
             `${coinLabel} closed (token balance 0): ${closedPnl >= 0 ? "+" : ""}${closedPnl.toFixed(2)}%`
@@ -343,15 +327,13 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
         if (sig) {
           console.log(`  [GUARD] 🔴 LIVE SELL executed: ${sig} (${exitReason})`);
 
-          // Sprint 9 P0 — compute + store REAL PnL from on-chain tx.
-          // Non-fatal if schema not migrated (pre-012): caller's close
-          // path still runs on the legacy pnl_pct / pnl_usd values.
+          // Compute + store REAL PnL from on-chain tx delta. This is the
+          // single source of truth for trade outcomes.
           (async () => {
             const solReceived = await parseSwapSolDelta(sig);
             if (solReceived === null) return;
-            // Fetch the entry cost we recorded at buy time.
             const { data: row } = await supabase
-              .from("paper_trades")
+              .from("trades")
               .select("entry_sol_cost")
               .eq("id", pos.id)
               .maybeSingle();
@@ -359,19 +341,19 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
             const realPnlSol = entryCost !== null ? solReceived - entryCost : null;
             try {
               await supabase
-                .from("paper_trades")
+                .from("trades")
                 .update({
                   sell_tx_sig: sig,
                   ...(realPnlSol !== null ? { real_pnl_sol: realPnlSol } : {}),
                 })
                 .eq("id", pos.id);
               if (realPnlSol !== null) {
-                console.log(`  [GUARD] 📊 real PnL: ${realPnlSol >= 0 ? "+" : ""}${realPnlSol.toFixed(6)} SOL (entry ${entryCost!.toFixed(6)} → received ${solReceived.toFixed(6)}) | paper says ${finalPnl.toFixed(2)}%`);
+                console.log(`  [GUARD] 📊 real PnL: ${realPnlSol >= 0 ? "+" : ""}${realPnlSol.toFixed(6)} SOL (entry ${entryCost!.toFixed(6)} → received ${solReceived.toFixed(6)})`);
               } else {
-                console.log(`  [GUARD] 📊 sell_tx_sig recorded, real_pnl_sol skipped (no entry_sol_cost — legacy trade)`);
+                console.log(`  [GUARD] 📊 sell_tx_sig recorded, real_pnl_sol skipped (no entry_sol_cost)`);
               }
             } catch (err: any) {
-              console.error(`  [GUARD] real_pnl_sol write failed (run migration 012?): ${err.message}`);
+              console.error(`  [GUARD] real_pnl_sol write failed: ${err.message}`);
             }
           })().catch(() => {});
         } else {
@@ -387,16 +369,13 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
           if (wasLastSellUnsellable(pos.coin_address)) {
             // (a) mark-to-zero close
             const zeroPnlPct = (pos.partial_pnl ?? 0) + (-100 * remainingPct) / 100;
-            const zeroPnlUsd = (zeroPnlPct / 100) * posSize;
             console.log(
-              `  [GUARD] 🪦 ${coinLabel} un-sellable (Jupiter 6024) — marking remaining ${remainingPct}% to zero. Final PnL ${zeroPnlPct.toFixed(2)}%`
+              `  [GUARD] 🪦 ${coinLabel} un-sellable (Jupiter 6024) — marking remaining ${remainingPct}% to zero. Final mark ${zeroPnlPct.toFixed(2)}%`
             );
             const { data: flipped } = await supabase
-              .from("paper_trades")
+              .from("trades")
               .update({
                 exit_price: 0,
-                pnl_pct: zeroPnlPct,
-                pnl_usd: zeroPnlUsd,
                 status: "closed",
                 exit_time: new Date().toISOString(),
                 exit_reason: "unsellable_6024",
@@ -406,22 +385,21 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
               })
               .eq("id", pos.id)
               .eq("status", "closing")
-              .is("exit_time", null)            // P0b-fix: use exit_time, not pnl_usd (pnl_usd defaults to 0)
+              .is("exit_time", null)
               .select("id")
               .maybeSingle();
             if (!flipped) {
-              console.log(`  [GUARD] ⚠️ ${coinLabel} already closed/credited — skipping bankroll credit`);
+              console.log(`  [GUARD] ⚠️ ${coinLabel} already closed — skipping`);
               return;
             }
-            await updateBankroll(zeroPnlUsd);
-            void sendAlert("sell_failed", `${coinLabel} un-sellable (6024) — marked to zero. PnL ${zeroPnlPct.toFixed(2)}%`);
+            void sendAlert("sell_failed", `${coinLabel} un-sellable (6024) — marked to zero. Mark ${zeroPnlPct.toFixed(2)}%`);
             return;
           }
           // (b) transient — revert closing → open for retry
           sellLanded = false;
           console.log(`  [GUARD] ⚠️ LIVE SELL failed for ${coinLabel} (held tokens but Jupiter rejected) — reverting status to 'open' for retry`);
           await supabase
-            .from("paper_trades")
+            .from("trades")
             .update({ status: "open", closing_started_at: null })
             .eq("id", pos.id)
             .eq("status", "closing");          // P0b: only revert rows still in closing state
@@ -433,19 +411,12 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
         }
       }
 
-      // 4. Sell landed (or paper trade) — finalize close + credit bankroll exactly once.
-      // IDEMPOTENT close: only transition 'closing' → 'closed'. If another path
-      // already closed the row, the update matches 0 rows and we skip the
-      // bankroll credit + the Telegram alert. Same pattern as the !held branch
-      // above — prevents the double-credit bug observed on Deep Fucking Value.
+      // 4. Sell landed — finalize close. IDEMPOTENT: only 'closing' → 'closed'.
       const ep = exitPrice ?? currentPrice;
-      const pnlUsd = (finalPnl / 100) * posSize;
       const { data: flipped } = await supabase
-        .from("paper_trades")
+        .from("trades")
         .update({
           exit_price: ep,
-          pnl_pct: finalPnl,
-          pnl_usd: pnlUsd,
           status: "closed",
           exit_time: new Date().toISOString(),
           exit_reason: exitReason,
@@ -455,14 +426,13 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
         })
         .eq("id", pos.id)
         .eq("status", "closing")
-        .is("exit_time", null)                   // P0b-fix: use exit_time, not pnl_usd (pnl_usd defaults to 0)
+        .is("exit_time", null)
         .select("id")
         .maybeSingle();
       if (!flipped) {
-        console.log(`  [GUARD] ⚠️ ${coinLabel} already closed/credited by another path — skipping bankroll credit`);
+        console.log(`  [GUARD] ⚠️ ${coinLabel} already closed by another path — skipping`);
         return;
       }
-      await updateBankroll(pnlUsd);
 
       // Telegram alert — only for meaningful exits on LIVE trades
       if (isLiveTrade) {
@@ -474,7 +444,7 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
           : "take_profit";
         void sendAlert(
           kind,
-          `${coinLabel} exit (${exitReason}): ${sign}${finalPnl.toFixed(2)}% / ${sign}$${pnlUsd.toFixed(2)}`
+          `${coinLabel} exit (${exitReason}): ${sign}${finalPnl.toFixed(2)}%`
         );
       }
     }
@@ -560,10 +530,9 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
       const whaleExits = sellSignals.filter((s) =>
         smartMoneyTags.has(s.wallet_tag)
       );
-      // Sprint 9 P0 real-PnL analysis (Apr 18 2026) across all 310 LIVE
-      // trades showed whale_exit is our biggest drain: 94 trades, 23% real
-      // WR, net -1.24 SOL. Paper claimed 74.7% WR — classic DexScreener
-      // mid-at-close lie; real Jupiter fills lag the whale dump.
+      // Real-PnL analysis (Apr 18 2026) across 310 LIVE trades showed
+      // whale_exit as the biggest drain at L0: 94 trades, 23% real WR,
+      // net -1.24 SOL. Mid-price-based WR lagged real Jupiter fills.
       //
       // Fix: once L1+ has fired we've already locked ≥ +7.5% on 50% of the
       // position. Let remaining 50% be protected by SL / trailing / timeout
@@ -671,7 +640,7 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
 
     if (updated) {
       await supabase
-        .from("paper_trades")
+        .from("trades")
         .update({
           grid_level: newLevel,
           remaining_pct: remainingPct,

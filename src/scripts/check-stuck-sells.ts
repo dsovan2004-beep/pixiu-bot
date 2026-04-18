@@ -2,7 +2,7 @@
  * Diagnostic — find stuck sells.
  *
  * Compares on-chain SPL token holdings (both Token + Token-2022 programs)
- * against open [LIVE] paper_trades and recent failed sells. Reports:
+ * against open [LIVE] trades and recent failed sells. Reports:
  *   - Tokens held on-chain but DB says position is closed (orphans, recoverable SOL)
  *   - DB open positions where on-chain balance is 0 (already sold, DB stale)
  *   - DB open positions with non-zero balance still untracked by guard
@@ -71,13 +71,13 @@ async function main() {
   console.log(`On-chain non-zero token accounts: ${holdings.length}`);
 
   const { data: openLive } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("id, coin_address, coin_name, wallet_tag, entry_time, status, exit_reason")
     .eq("status", "open")
     .like("wallet_tag", "%[LIVE]%");
 
   const { data: recentClosed } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("id, coin_address, coin_name, exit_time, exit_reason")
     .eq("status", "closed")
     .like("wallet_tag", "%[LIVE]%")

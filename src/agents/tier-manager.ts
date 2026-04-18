@@ -25,15 +25,15 @@ async function checkDemotion(walletTag: string): Promise<void> {
   // Get all closed trades triggered by this wallet in last 24h
   // wallet_tag format is "T1+confirmer" — check if tag appears in wallet_tag
   const { data: trades } = await supabase
-    .from("paper_trades")
-    .select("pnl_pct, wallet_tag")
+    .from("trades")
+    .select("real_pnl_sol, wallet_tag")
     .eq("status", "closed")
     .gte("exit_time", cutoff)
     .like("wallet_tag", `%${walletTag}%`);
 
   if (!trades || trades.length < DEMOTION_MIN_TRADES) return;
 
-  const wins = trades.filter((t) => Number(t.pnl_pct) > 0).length;
+  const wins = trades.filter((t) => Number(t.real_pnl_sol) > 0).length;
   const wr = wins / trades.length;
 
   if (wr >= DEMOTION_MAX_WR) return;
@@ -84,15 +84,15 @@ async function checkPromotions(): Promise<void> {
   for (const wallet of t2Wallets) {
     // Get trades where this wallet was involved (as confirmer or trigger)
     const { data: trades } = await supabase
-      .from("paper_trades")
-      .select("pnl_pct")
+      .from("trades")
+      .select("real_pnl_sol")
       .eq("status", "closed")
       .gte("exit_time", cutoff)
       .like("wallet_tag", `%${wallet.tag}%`);
 
     if (!trades || trades.length < PROMOTION_MIN_TRADES) continue;
 
-    const wins = trades.filter((t) => Number(t.pnl_pct) > 0).length;
+    const wins = trades.filter((t) => Number(t.real_pnl_sol) > 0).length;
     const wr = wins / trades.length;
 
     if (wr < PROMOTION_MIN_WR) continue;
@@ -126,15 +126,15 @@ export async function startTierManager(): Promise<void> {
     `  [TIER] Promotion: WR > ${PROMOTION_MIN_WR * 100}% on ${PROMOTION_MIN_TRADES}+ trades in 7d → T1`
   );
 
-  // Subscribe to paper_trades changes (closed trades) for demotion checks
+  // Subscribe to trades changes (closed trades) for demotion checks
   supabase
-    .channel("tier:paper_trades")
+    .channel("tier:trades")
     .on(
       "postgres_changes",
       {
         event: "UPDATE",
         schema: "public",
-        table: "paper_trades",
+        table: "trades",
         filter: "status=eq.closed",
       },
       async (payload) => {

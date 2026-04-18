@@ -4,7 +4,7 @@ import supabase from "../lib/supabase-server";
 (async () => {
   const since = new Date(Date.now() - 30 * 60_000).toISOString();
   const { data } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("coin_name, wallet_tag, status, exit_reason, pnl_pct, pnl_usd, exit_time")
     .gte("exit_time", since)
     .order("exit_time", { ascending: false });

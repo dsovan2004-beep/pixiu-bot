@@ -169,7 +169,7 @@ async function processTrade(trade: any, dry: boolean): Promise<string> {
     // Buy never landed on-chain. Bot marked [LIVE] but the tx expired/failed.
     // Zero economic outcome — no real SOL moved for this trade.
     if (!dry) {
-      await supabase.from("paper_trades").update({
+      await supabase.from("trades").update({
         buy_tx_sig: "NEVER_LANDED",
         entry_sol_cost: 0,
         real_pnl_sol: 0,
@@ -183,7 +183,7 @@ async function processTrade(trade: any, dry: boolean): Promise<string> {
     // Bought but never sold on-chain — full loss of entry cost
     const realPnl = -entryCost;
     if (!dry) {
-      await supabase.from("paper_trades").update({
+      await supabase.from("trades").update({
         buy_tx_sig: buy.sig,
         entry_sol_cost: entryCost,
         sell_tx_sig: "SELL_NEVER_LANDED",
@@ -197,7 +197,7 @@ async function processTrade(trade: any, dry: boolean): Promise<string> {
   const lastSell = sells[sells.length - 1];
 
   if (!dry) {
-    await supabase.from("paper_trades").update({
+    await supabase.from("trades").update({
       buy_tx_sig: buy.sig,
       entry_sol_cost: entryCost,
       sell_tx_sig: lastSell.sig,
@@ -226,7 +226,7 @@ async function processTrade(trade: any, dry: boolean): Promise<string> {
 
   // Find LIVE closed trades with real_pnl_sol still null
   let q = supabase
-    .from("paper_trades")
+    .from("trades")
     .select("id, coin_name, coin_address, entry_time, exit_time, pnl_pct")
     .eq("status", "closed")
     .like("wallet_tag", "%[LIVE]%")

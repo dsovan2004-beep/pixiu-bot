@@ -48,7 +48,7 @@ async function getCurrentPrice(mint: string): Promise<number> {
   const owner = kp().publicKey;
 
   const { data: openLive } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("id, coin_name, coin_address, wallet_tag, entry_price, entry_time, grid_level, remaining_pct, partial_pnl, position_size_usd")
     .eq("status", "open")
     .like("wallet_tag", "%[LIVE]%");
@@ -85,7 +85,7 @@ async function getCurrentPrice(mint: string): Promise<number> {
     console.log(`  ${gridLvl > 0 ? "💰" : "🪦"} ${t.coin_name?.padEnd(28)} L${gridLvl} → close at ${closedPnl >= 0 ? "+" : ""}${closedPnl.toFixed(2)}% ($${closedPnlUsd.toFixed(2)})`);
 
     await supabase
-      .from("paper_trades")
+      .from("trades")
       .update({
         pnl_pct: closedPnl,
         pnl_usd: closedPnlUsd,
@@ -104,7 +104,7 @@ async function getCurrentPrice(mint: string): Promise<number> {
   // Apply bankroll delta once
   if (bankrollDelta !== 0) {
     const { data: bk } = await supabase
-      .from("paper_bankroll")
+      .from("DEPRECATED_paper_bankroll")
       .select("id, current_balance, starting_balance")
       .limit(1)
       .single();
@@ -112,7 +112,7 @@ async function getCurrentPrice(mint: string): Promise<number> {
       const newBal = Number(bk.current_balance) + bankrollDelta;
       const newPnl = newBal - Number(bk.starting_balance || 10000);
       await supabase
-        .from("paper_bankroll")
+        .from("DEPRECATED_paper_bankroll")
         .update({
           current_balance: newBal,
           total_pnl_usd: newPnl,

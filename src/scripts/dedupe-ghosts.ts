@@ -9,7 +9,7 @@
  *   - Mooncoin              (2 rows, +48.5%  / +0.059 SOL each)
  *
  * For each pair, keep the earliest row (by entry_time, tiebreak id)
- * and DELETE the newer one. Then decrement paper_bankroll by the
+ * and DELETE the newer one. Then decrement DEPRECATED_paper_bankroll by the
  * deleted row's pnl_usd so the ghost credit is removed.
  *
  * Safety: deletes happen first. If a decrement fails, bankroll stays
@@ -33,7 +33,7 @@ const DUPE_WINDOW_SECONDS = 120;
   console.log(`Ghost-dedupe starting. dry=${dry}\n`);
 
   const { data: all } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("id, coin_name, coin_address, entry_time, exit_time, pnl_pct, pnl_usd, real_pnl_sol, exit_reason, wallet_tag")
     .eq("status", "closed")
     .like("wallet_tag", "%[LIVE]%")
@@ -107,7 +107,7 @@ const DUPE_WINDOW_SECONDS = 120;
   console.log("\nApplying deletes...");
   let deleted = 0;
   for (const r of toDelete) {
-    const { error } = await supabase.from("paper_trades").delete().eq("id", r.id);
+    const { error } = await supabase.from("trades").delete().eq("id", r.id);
     if (error) {
       console.error(`  DELETE failed for ${r.id}: ${error.message}`);
     } else {
@@ -119,7 +119,7 @@ const DUPE_WINDOW_SECONDS = 120;
   // Decrement bankroll
   console.log("\nDecrementing bankroll...");
   const { data: bk } = await supabase
-    .from("paper_bankroll")
+    .from("DEPRECATED_paper_bankroll")
     .select("id, current_balance, starting_balance")
     .limit(1)
     .single();
@@ -128,7 +128,7 @@ const DUPE_WINDOW_SECONDS = 120;
   const after = before - totalPhantomUsd;
   const newTotal = after - Number(bk.starting_balance ?? 10000);
   const { error } = await supabase
-    .from("paper_bankroll")
+    .from("DEPRECATED_paper_bankroll")
     .update({ current_balance: after, total_pnl_usd: newTotal, updated_at: new Date().toISOString() })
     .eq("id", bk.id);
   if (error) {

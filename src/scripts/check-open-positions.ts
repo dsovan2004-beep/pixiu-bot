@@ -3,7 +3,7 @@ import supabase from "../lib/supabase-server";
 
 (async () => {
   const { data } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("coin_name, wallet_tag, status, entry_time, entry_price, grid_level, remaining_pct")
     .eq("status", "open")
     .order("entry_time", { ascending: false });

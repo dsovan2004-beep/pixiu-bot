@@ -1,7 +1,7 @@
 /**
  * PixiuBot Agent 4 — Trade Executor (Live Buy)
  *
- * Polls paper_trades every 3s for new open positions.
+ * Polls trades every 3s for new open positions.
  * If live mode ON → fires Jupiter buy → tags [LIVE].
  * Webhook handles all entry logic (evaluateAndEnter).
  * This agent ONLY handles the live Jupiter buy layer.
@@ -68,7 +68,7 @@ function scheduleBuyRescue(
       console.log(`  [EXECUTOR] 🛟 [RESCUE] ${coinLabel} found on-chain — buy landed late, re-opening trade`);
 
       const { data: row } = await supabase
-        .from("paper_trades")
+        .from("trades")
         .select("id, status, wallet_tag")
         .eq("id", tradeId)
         .single();
@@ -80,7 +80,7 @@ function scheduleBuyRescue(
       }
 
       await supabase
-        .from("paper_trades")
+        .from("trades")
         .update({
           status: "open",
           exit_reason: null,
@@ -122,7 +122,7 @@ export async function startTradeExecutor(): Promise<void> {
 
       // Find open positions NOT yet tagged [LIVE] and not already processed
       const { data: newTrades } = await supabase
-        .from("paper_trades")
+        .from("trades")
         .select("id, coin_address, coin_name, wallet_tag")
         .eq("status", "open")
         .not("wallet_tag", "like", "%[LIVE]%");
@@ -144,7 +144,7 @@ export async function startTradeExecutor(): Promise<void> {
 
         // DB-level duplicate check — skip if another open LIVE trade exists for same mint
         const { count: liveOpenCount } = await supabase
-          .from("paper_trades")
+          .from("trades")
           .select("id", { count: "exact", head: true })
           .eq("coin_address", trade.coin_address)
           .eq("status", "open")
@@ -164,22 +164,20 @@ export async function startTradeExecutor(): Promise<void> {
 
         console.log(`  [EXECUTOR] New trade detected: ${coin} — attempting LIVE BUY...`);
 
-        // Check daily loss limit — sum REAL SOL lost across losing LIVE trades
-        // since midnight UTC. Each trade's real SOL loss = LIVE_BUY_SOL ×
-        // |pnl_pct| / 100, where pnl_pct already reflects the blended outcome
-        // across grid partials (L1/L2 locked profits reduce net loss).
+        // Check daily loss limit — sum REAL SOL lost (real_pnl_sol < 0)
+        // across LIVE trades since midnight UTC.
         const todayStart = `${new Date().toISOString().slice(0, 10)}T00:00:00Z`;
         const { data: losses } = await supabase
-          .from("paper_trades")
-          .select("pnl_pct")
+          .from("trades")
+          .select("real_pnl_sol")
           .eq("status", "closed")
           .gte("exit_time", todayStart)
-          .lt("pnl_pct", 0)
+          .lt("real_pnl_sol", 0)
           .like("wallet_tag", "%[LIVE]%");
         const todayLosses = losses?.length ?? 0;
         const totalLossSol = (losses ?? []).reduce((sum, t) => {
-          const pct = Number(t.pnl_pct);
-          return sum + (LIVE_BUY_SOL * Math.abs(pct)) / 100;
+          const r = t.real_pnl_sol !== null && t.real_pnl_sol !== undefined ? Number(t.real_pnl_sol) : 0;
+          return sum + Math.abs(r);
         }, 0);
 
         if (totalLossSol >= DAILY_LOSS_LIMIT_SOL) {
@@ -194,7 +192,7 @@ export async function startTradeExecutor(): Promise<void> {
             console.log(`  [EXECUTOR] 🔴 LIVE BUY executed: ${sig}`);
             // Tag as [LIVE]
             await supabase
-              .from("paper_trades")
+              .from("trades")
               .update({ wallet_tag: `${trade.wallet_tag} [LIVE]` })
               .eq("id", trade.id);
 
@@ -209,20 +207,19 @@ export async function startTradeExecutor(): Promise<void> {
                 const costSol = Math.abs(delta);
                 try {
                   await supabase
-                    .from("paper_trades")
+                    .from("trades")
                     .update({ buy_tx_sig: sig, entry_sol_cost: costSol })
                     .eq("id", trade.id);
-                  console.log(`  [EXECUTOR] 📊 real entry cost: ${costSol.toFixed(6)} SOL (paper used ${LIVE_BUY_SOL})`);
+                  console.log(`  [EXECUTOR] 📊 real entry cost: ${costSol.toFixed(6)} SOL`);
                 } catch (err: any) {
-                  // Schema not migrated yet — non-fatal. Log once.
-                  console.error(`  [EXECUTOR] entry_sol_cost write failed (run migration 012?): ${err.message}`);
+                  console.error(`  [EXECUTOR] entry_sol_cost write failed: ${err.message}`);
                 }
               }
             })().catch(() => {});
           } else {
             console.log(`  [EXECUTOR] ⚠️ Buy failed — marking failed; will rescue-check in ${BUY_RESCUE_DELAY_MS / 60_000}min`);
             await supabase
-              .from("paper_trades")
+              .from("trades")
               .update({ status: "failed", exit_reason: "buy_failed" })
               .eq("id", trade.id);
 

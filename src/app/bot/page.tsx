@@ -82,20 +82,20 @@ export default function BotPage() {
           .select("id", { count: "exact", head: true })
           .eq("active", true),
         supabase
-          .from("paper_trades")
+          .from("trades")
           .select("*")
           .eq("status", "open")
           .like("wallet_tag", "%[LIVE]%")
           .order("entry_time", { ascending: false }),
         supabase
-          .from("paper_trades")
+          .from("trades")
           .select("*")
           .eq("status", "closed")
           .like("wallet_tag", "%[LIVE]%")
           .order("exit_time", { ascending: false })
           .limit(50),
         supabase
-          .from("paper_trades")
+          .from("trades")
           .select("real_pnl_sol, entry_sol_cost, exit_reason, wallet_tag")
           .eq("status", "closed")
           .like("wallet_tag", "%[LIVE]%"),

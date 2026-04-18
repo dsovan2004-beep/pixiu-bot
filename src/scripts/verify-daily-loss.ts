@@ -7,7 +7,7 @@ import { LIVE_BUY_SOL, DAILY_LOSS_LIMIT_SOL } from "../config/smart-money";
   const todayStart = `${todayUTC}T00:00:00Z`;
 
   const { data: losses } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("coin_name, pnl_pct")
     .eq("status", "closed")
     .gte("exit_time", todayStart)

@@ -2,7 +2,7 @@
  * PixiuBot — Helius Webhook Receiver + Instant Entry
  * POST /api/webhook
  *
- * Receives Helius push → inserts signal → evaluates entry → opens paper trade.
+ * Receives Helius push → inserts signal → evaluates entry → opens trade.
  * Millisecond entry from webhook push. No polling delay.
  */
 
@@ -44,7 +44,7 @@ const RUG_STORM_WINDOW = 5;
 async function webhookIsRugStorm(): Promise<boolean> {
   const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
   const { data: recentTrades } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("pnl_pct")
     .eq("status", "closed")
     .gte("exit_time", twoHoursAgo)
@@ -57,7 +57,7 @@ async function webhookIsRugStorm(): Promise<boolean> {
 
 // ─── Bot Running Check (Edge-runtime safe, inline) ─────────
 // Reads `is_running` from bot_state. If false (dashboard STOP), the
-// webhook must NOT insert paper_trades or executor will fire a Jupiter
+// webhook must NOT insert trades or executor will fire a Jupiter
 // buy during STOP state. Observed: The Bull -60.61%, 千鳥 -44.66%,
 // dogwifbeanie -37.71% all opened while bot was STOPPED.
 // SAFETY: on any error, default to FALSE (not running) — never trade
@@ -370,7 +370,7 @@ async function evaluateAndEnter(
 
   // Check if position already open for this coin
   const { count: openCount } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("id", { count: "exact", head: true })
     .eq("coin_address", mint)
     .eq("status", "open");
@@ -383,7 +383,7 @@ async function evaluateAndEnter(
   // Check recently traded cooldown
   const cooldownCutoff = new Date(Date.now() - RECENTLY_TRADED_COOLDOWN_MS).toISOString();
   const { count: recentCount } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("id", { count: "exact", head: true })
     .eq("coin_address", mint)
     .eq("status", "closed")
@@ -399,7 +399,7 @@ async function evaluateAndEnter(
   if (coinName) {
     const nameCooldownCutoff = new Date(Date.now() - RECENT_NAME_COOLDOWN_MS).toISOString();
     const { count: nameCount } = await supabase
-      .from("paper_trades")
+      .from("trades")
       .select("id", { count: "exact", head: true })
       .eq("coin_name", coinName)
       .eq("status", "closed")
@@ -539,19 +539,14 @@ async function evaluateAndEnter(
     return { entered: false, reason: "top10 holders >80% (developer cluster)" };
   }
 
-  // Get bankroll for position sizing
-  const { data: bankrollRow } = await supabase
-    .from("paper_bankroll")
-    .select("current_balance")
-    .limit(1)
-    .single();
-  const bankrollBalance = Number(bankrollRow?.current_balance || 10000);
-  const positionSize = bankrollBalance * POSITION_SIZE_PCT;
+  // Sprint 10: position sizing is fixed at LIVE_BUY_SOL from config.
+  // Legacy position_size_usd column left at 0 — unused.
+  const positionSize = 0;
 
   const confirmTag = otherNames.length > 0 ? otherNames[0] : smartMoneyNames[1] || smartMoneyNames[0];
   const walletLabel = `${smartMoneyNames[0]}+${confirmTag}${allTags.size > 2 ? `+${allTags.size - 2}more` : ""}`;
 
-  const { error } = await supabase.from("paper_trades").insert({
+  const { error } = await supabase.from("trades").insert({
     coin_address: mint,
     coin_name: coinName,
     wallet_tag: walletLabel,

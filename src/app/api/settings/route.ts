@@ -1,9 +1,10 @@
 /**
  * PixiuBot — Settings API
- * GET  /api/settings → { live_trading: boolean }
- * POST /api/settings { live_trading: boolean } → updates bot_state.mode
+ * GET  /api/settings → { live_trading: true }
  *
- * Uses bot_state.mode field: "paper" | "live"
+ * Sprint 10: only live mode exists. bot_state.mode is always "live".
+ * This endpoint remains for backwards compat with any caller that still
+ * probes for the field; it always reports live=true. POST is a no-op.
  */
 
 import { createClient } from "@supabase/supabase-js";
@@ -15,46 +16,24 @@ const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 export async function GET(): Promise<Response> {
-  const { data } = await supabase
-    .from("bot_state")
-    .select("mode")
-    .limit(1)
-    .single();
-
-  const liveTrading = data?.mode === "live";
+  // Ensure mode is "live" — self-heal if something set it otherwise.
+  try {
+    await supabase
+      .from("bot_state")
+      .update({ mode: "live" })
+      .neq("mode", "live");
+  } catch {}
 
   return new Response(
-    JSON.stringify({ live_trading: liveTrading }),
+    JSON.stringify({ live_trading: true }),
     { status: 200, headers: { "Content-Type": "application/json" } }
   );
 }
 
-export async function POST(request: Request): Promise<Response> {
-  try {
-    const body = await request.json();
-    const liveTrading = body.live_trading === true;
-    const newMode = liveTrading ? "live" : "paper";
-
-    const { error } = await supabase
-      .from("bot_state")
-      .update({ mode: newMode, last_updated: new Date().toISOString() })
-      .neq("id", "00000000-0000-0000-0000-000000000000");
-
-    if (error) {
-      return new Response(
-        JSON.stringify({ ok: false, error: error.message }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
-      );
-    }
-
-    return new Response(
-      JSON.stringify({ ok: true, live_trading: liveTrading, mode: newMode }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    );
-  } catch (err: any) {
-    return new Response(
-      JSON.stringify({ ok: false, error: err.message }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
-  }
+export async function POST(): Promise<Response> {
+  // No-op — live is the only mode now.
+  return new Response(
+    JSON.stringify({ ok: true, live_trading: true, mode: "live" }),
+    { status: 200, headers: { "Content-Type": "application/json" } }
+  );
 }

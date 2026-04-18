@@ -37,20 +37,20 @@ async function main() {
     .eq("transaction_type", "BUY")
     .gte("signal_time", since);
 
-  // 2. Entries (paper_trades rows created)
+  // 2. Entries (trades rows created)
   const { count: trades } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("id", { count: "exact", head: true })
     .gte("entry_time", since);
 
   const { count: liveTrades } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("id", { count: "exact", head: true })
     .gte("entry_time", since)
     .like("wallet_tag", "%[LIVE]%");
 
   const { count: failedTrades } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("id", { count: "exact", head: true })
     .gte("entry_time", since)
     .eq("status", "failed");
@@ -79,7 +79,7 @@ async function main() {
   console.log(`  BUY + rug_check_passed:          ${buyRugPassed}`);
   console.log(`  Rate:                            ${((buyRugPassed || 0) / HOURS).toFixed(1)} valid BUY signals/hour\n`);
 
-  console.log(`─── ENTRIES (paper_trades) ───`);
+  console.log(`─── ENTRIES (trades) ───`);
   console.log(`  Total trades opened:             ${trades}`);
   console.log(`  [LIVE]-tagged (buy landed):      ${liveTrades}`);
   console.log(`  status=failed (buy missed):      ${failedTrades}`);

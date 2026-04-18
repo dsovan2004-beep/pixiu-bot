@@ -3,7 +3,7 @@ import supabase from "../lib/supabase-server";
 
 (async () => {
   const { data } = await supabase
-    .from("paper_trades")
+    .from("trades")
     .select("id, coin_name, wallet_tag, exit_reason, pnl_usd, exit_time")
     .eq("coin_name", "Doge Memes")
     .eq("status", "closed")

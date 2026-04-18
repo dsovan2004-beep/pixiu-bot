@@ -1,6 +1,6 @@
 /**
  * PixiuBot — Smart Money Configuration
- * Shared between webhook (entry) and paper-trader (exits).
+ * Shared between webhook (entry) and risk-guard (exits).
  */
 
 // Tier 1 Smart Money wallet ADDRESSES — entry requires 1 of these
