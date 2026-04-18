@@ -94,7 +94,6 @@ export async function parseSwapSolDelta(
     const keypair = getKeypair();
     if (!keypair) return null;
     const connection = getConnection();
-    const walletPubkey = keypair.publicKey.toBase58();
 
     const tx = await connection.getTransaction(signature, {
       maxSupportedTransactionVersion: 0,
@@ -102,18 +101,15 @@ export async function parseSwapSolDelta(
     });
     if (!tx || !tx.meta) return null;
 
-    // Find the wallet's account index in the tx's account keys.
-    const accountKeys = tx.transaction.message.getAccountKeys
-      ? tx.transaction.message.getAccountKeys().staticAccountKeys
-      : (tx.transaction.message as any).accountKeys;
-    let idx = -1;
-    for (let i = 0; i < accountKeys.length; i++) {
-      const key = (accountKeys[i] as any).toBase58
-        ? (accountKeys[i] as any).toBase58()
-        : String(accountKeys[i]);
-      if (key === walletPubkey) { idx = i; break; }
-    }
-    if (idx < 0) return null;
+    // Solana guarantees the fee payer is at account index 0 of every tx.
+    // Since our wallet signed this swap, WE ARE the fee payer → index 0
+    // is us. Skip account-key resolution entirely — avoids the "Address
+    // lookup tables not resolved" error on Jupiter v0 txs that use ALTs.
+    //
+    // Previous implementation tried to resolve account keys and find the
+    // wallet's index. That failed on ALT-using txs (all post-2024 Jupiter
+    // swaps). Index 0 is always correct for txs our wallet sent.
+    const idx = 0;
 
     const pre = tx.meta.preBalances?.[idx];
     const post = tx.meta.postBalances?.[idx];
