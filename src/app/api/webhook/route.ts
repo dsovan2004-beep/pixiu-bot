@@ -564,6 +564,17 @@ async function evaluateAndEnter(
   });
 
   if (error) {
+    // Sprint 10 P0: partial unique index `one_open_per_mint_idx` on
+    // (coin_address) WHERE status='open' rejects duplicate open rows
+    // from race conditions (multiple webhook signals for same mint in
+    // same ms). Recognize + log cleanly instead of the raw Postgres err.
+    const isDuplicateOpen =
+      error.code === "23505" /* unique_violation */ ||
+      /one_open_per_mint|duplicate key/.test(error.message);
+    if (isDuplicateOpen) {
+      console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — duplicate (another open row already exists for this mint, race)`);
+      return { entered: false, reason: "duplicate open row (race)" };
+    }
     console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — db error: ${error.message}`);
     return { entered: false, reason: `db error: ${error.message}` };
   }
