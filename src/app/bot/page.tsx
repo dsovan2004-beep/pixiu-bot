@@ -331,7 +331,7 @@ export default function BotPage() {
 
         {/* Bankroll — SOL when live, USD when paper */}
         {liveTrading && phantomBalance ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <Card label="Starting" value={`${phantomBalance.startingSol.toFixed(4)} SOL`} />
             <Card
               label="Current"
@@ -339,9 +339,20 @@ export default function BotPage() {
               color={phantomBalance.pnlSol >= 0 ? "text-green-500" : "text-red-500"}
             />
             <Card
-              label="Real P&L"
+              label="Wallet Δ"
               value={`${phantomBalance.pnlSol >= 0 ? "+" : ""}${phantomBalance.pnlSol.toFixed(4)} SOL`}
               color={phantomBalance.pnlSol >= 0 ? "text-green-500" : "text-red-500"}
+            />
+            {/* Sprint 10 P1b — Trade PnL card: sum of real_pnl_sol across
+                tracked LIVE trades. This is the authoritative "what did the
+                bot actually earn" number — excludes fees on failed buys and
+                orphan tokens that show up in wallet Δ. */}
+            <Card
+              label={`Trade PnL${realDataCount > 0 ? ` (${realDataCount})` : ""}`}
+              value={realDataCount > 0
+                ? `${realPnlSol >= 0 ? "+" : ""}${realPnlSol.toFixed(4)} SOL`
+                : "—"}
+              color={realDataCount > 0 ? (realPnlSol >= 0 ? "text-green-500" : "text-red-500") : undefined}
             />
             <Card
               label="Return"
