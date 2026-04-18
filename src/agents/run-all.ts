@@ -47,12 +47,15 @@ async function main(): Promise<void> {
 
   // Graceful shutdown
   process.on("SIGINT", async () => {
-    console.log("\n  [SWARM] Shutting down all agents...");
-    await supabase
-      .from("bot_state")
-      .update({ is_running: false, last_updated: new Date().toISOString() })
-      .neq("id", "00000000-0000-0000-0000-000000000000");
-    console.log("  [SWARM] bot_state set to STOPPED.");
+    // Do NOT write is_running=false on SIGINT. bot_state is user intent
+    // (dashboard START/STOP button), not process state. Clobbering it on
+    // Ctrl+C forces a manual START click on every swarm restart and
+    // makes restart indistinguishable from a real stop.
+    //
+    // If the user wants to halt trading, they click STOP on the
+    // dashboard. If they just want to restart the local swarm, their
+    // intent (RUNNING) should survive.
+    console.log("\n  [SWARM] Shutting down all agents... bot_state preserved.");
     process.exit(0);
   });
 }
