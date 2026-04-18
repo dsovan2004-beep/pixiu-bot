@@ -84,7 +84,7 @@ export default function BotPage() {
         supabase
           .from("trades")
           .select("*")
-          .eq("status", "open")
+          .in("status", ["open", "closing"])       // include in-flight closes so positions don't vanish during sell-confirm
           .like("wallet_tag", "%[LIVE]%")
           .order("entry_time", { ascending: false }),
         supabase
