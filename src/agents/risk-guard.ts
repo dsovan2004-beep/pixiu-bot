@@ -543,7 +543,16 @@ async function checkPositions(): Promise<void> {
       const whaleExits = sellSignals.filter((s) =>
         smartMoneyTags.has(s.wallet_tag)
       );
-      if (whaleExits.length > 0) {
+      // Sprint 9 P0 real-PnL analysis (Apr 18 2026) across all 310 LIVE
+      // trades showed whale_exit is our biggest drain: 94 trades, 23% real
+      // WR, net -1.24 SOL. Paper claimed 74.7% WR — classic DexScreener
+      // mid-at-close lie; real Jupiter fills lag the whale dump.
+      //
+      // Fix: once L1+ has fired we've already locked ≥ +7.5% on 50% of the
+      // position. Let remaining 50% be protected by SL / trailing / timeout
+      // — don't panic-sell into the whale's dump. whale_exit stays as a
+      // safety net for L0 positions only (where nothing is locked yet).
+      if (whaleExits.length > 0 && currentLevel === 0) {
         const whaleTag = whaleExits[0].wallet_tag;
         const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
         await closeTrade(finalPnl, "whale_exit", currentLevel);
@@ -551,6 +560,11 @@ async function checkPositions(): Promise<void> {
           `  [GUARD] 🐳 ${whaleTag} sold ${coinLabel} — exiting with whale | PnL: ${finalPnl >= 0 ? "+" : ""}${finalPnl.toFixed(2)}%`
         );
         continue;
+      }
+      if (whaleExits.length > 0 && currentLevel > 0) {
+        console.log(
+          `  [GUARD] whale_exit skipped on ${coinLabel} — already at grid L${currentLevel}, letting grid/trailing handle exit`
+        );
       }
     }
 
