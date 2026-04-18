@@ -8,7 +8,7 @@
  */
 
 import supabase from "../lib/supabase-server";
-import { buyToken, hasTokenBalance } from "../lib/jupiter-swap";
+import { buyToken, hasTokenBalance, parseSwapSolDelta } from "../lib/jupiter-swap";
 import {
   LIVE_BUY_SOL,
   DAILY_LOSS_LIMIT_SOL,
@@ -197,6 +197,28 @@ export async function startTradeExecutor(): Promise<void> {
               .from("paper_trades")
               .update({ wallet_tag: `${trade.wallet_tag} [LIVE]` })
               .eq("id", trade.id);
+
+            // Sprint 9 P0 — record real SOL cost basis for accurate PnL.
+            // Separate UPDATE so legacy schema (pre-migration 012) doesn't
+            // break the main close path — the new columns are optional.
+            (async () => {
+              const delta = await parseSwapSolDelta(sig);
+              if (delta !== null) {
+                // For a buy, delta is negative (SOL leaving wallet). Store the
+                // absolute cost (positive) in entry_sol_cost.
+                const costSol = Math.abs(delta);
+                try {
+                  await supabase
+                    .from("paper_trades")
+                    .update({ buy_tx_sig: sig, entry_sol_cost: costSol })
+                    .eq("id", trade.id);
+                  console.log(`  [EXECUTOR] 📊 real entry cost: ${costSol.toFixed(6)} SOL (paper used ${LIVE_BUY_SOL})`);
+                } catch (err: any) {
+                  // Schema not migrated yet — non-fatal. Log once.
+                  console.error(`  [EXECUTOR] entry_sol_cost write failed (run migration 012?): ${err.message}`);
+                }
+              }
+            })().catch(() => {});
           } else {
             console.log(`  [EXECUTOR] ⚠️ Buy failed — marking failed; will rescue-check in ${BUY_RESCUE_DELAY_MS / 60_000}min`);
             await supabase

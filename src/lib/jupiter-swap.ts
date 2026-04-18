@@ -76,6 +76,58 @@ async function jupiterFetchWithBackoff(
   return res;
 }
 
+/**
+ * Sprint 9 P0 — parse real SOL delta for the wallet from a confirmed tx.
+ *
+ * Reads pre/post SOL balances of the wallet account from tx.meta and
+ * returns the net delta (positive = received, negative = spent, includes
+ * fees).
+ *
+ * Use after a swap confirms to get the ACTUAL economic outcome, not the
+ * DexScreener mid-price estimate. Returns null on any parse failure —
+ * callers must fall back to the legacy pnl_pct path.
+ */
+export async function parseSwapSolDelta(
+  signature: string
+): Promise<number | null> {
+  try {
+    const keypair = getKeypair();
+    if (!keypair) return null;
+    const connection = getConnection();
+    const walletPubkey = keypair.publicKey.toBase58();
+
+    const tx = await connection.getTransaction(signature, {
+      maxSupportedTransactionVersion: 0,
+      commitment: "confirmed",
+    });
+    if (!tx || !tx.meta) return null;
+
+    // Find the wallet's account index in the tx's account keys.
+    const accountKeys = tx.transaction.message.getAccountKeys
+      ? tx.transaction.message.getAccountKeys().staticAccountKeys
+      : (tx.transaction.message as any).accountKeys;
+    let idx = -1;
+    for (let i = 0; i < accountKeys.length; i++) {
+      const key = (accountKeys[i] as any).toBase58
+        ? (accountKeys[i] as any).toBase58()
+        : String(accountKeys[i]);
+      if (key === walletPubkey) { idx = i; break; }
+    }
+    if (idx < 0) return null;
+
+    const pre = tx.meta.preBalances?.[idx];
+    const post = tx.meta.postBalances?.[idx];
+    if (pre == null || post == null) return null;
+
+    // Return in SOL (not lamports). Includes network fee burden on the
+    // spending side — this IS the real economic delta from the swap.
+    return (post - pre) / 1e9;
+  } catch (err: any) {
+    console.error(`  [JUPITER] parseSwapSolDelta(${signature.slice(0, 8)}...) failed: ${err.message}`);
+    return null;
+  }
+}
+
 function getConnection(): Connection {
   if (isDevnet()) {
     return new Connection("https://api.devnet.solana.com", "confirmed");

@@ -15,7 +15,7 @@ import {
   LIVE_BUY_SOL,
   DAILY_LOSS_LIMIT_SOL,
 } from "../config/smart-money";
-import { sellToken, hasTokenBalance, wasLastSellUnsellable } from "../lib/jupiter-swap";
+import { sellToken, hasTokenBalance, wasLastSellUnsellable, parseSwapSolDelta } from "../lib/jupiter-swap";
 import { sendAlert } from "../lib/telegram";
 
 const POSITION_CHECK_MS = 5_000;
@@ -329,6 +329,38 @@ async function checkPositions(): Promise<void> {
         const sig = await sellToken(pos.coin_address);
         if (sig) {
           console.log(`  [GUARD] 🔴 LIVE SELL executed: ${sig} (${exitReason})`);
+
+          // Sprint 9 P0 — compute + store REAL PnL from on-chain tx.
+          // Non-fatal if schema not migrated (pre-012): caller's close
+          // path still runs on the legacy pnl_pct / pnl_usd values.
+          (async () => {
+            const solReceived = await parseSwapSolDelta(sig);
+            if (solReceived === null) return;
+            // Fetch the entry cost we recorded at buy time.
+            const { data: row } = await supabase
+              .from("paper_trades")
+              .select("entry_sol_cost")
+              .eq("id", pos.id)
+              .maybeSingle();
+            const entryCost = row?.entry_sol_cost ? Number(row.entry_sol_cost) : null;
+            const realPnlSol = entryCost !== null ? solReceived - entryCost : null;
+            try {
+              await supabase
+                .from("paper_trades")
+                .update({
+                  sell_tx_sig: sig,
+                  ...(realPnlSol !== null ? { real_pnl_sol: realPnlSol } : {}),
+                })
+                .eq("id", pos.id);
+              if (realPnlSol !== null) {
+                console.log(`  [GUARD] 📊 real PnL: ${realPnlSol >= 0 ? "+" : ""}${realPnlSol.toFixed(6)} SOL (entry ${entryCost!.toFixed(6)} → received ${solReceived.toFixed(6)}) | paper says ${finalPnl.toFixed(2)}%`);
+              } else {
+                console.log(`  [GUARD] 📊 sell_tx_sig recorded, real_pnl_sol skipped (no entry_sol_cost — legacy trade)`);
+              }
+            } catch (err: any) {
+              console.error(`  [GUARD] real_pnl_sol write failed (run migration 012?): ${err.message}`);
+            }
+          })().catch(() => {});
         } else {
           // Sell failed. Two failure classes:
           //   (a) Jupiter 6024 — un-sellable forever (transfer fee / TLV

@@ -33,6 +33,8 @@ interface PaperTrade {
   exit_price: number | null;
   pnl_pct: number | null;
   pnl_usd: number | null;
+  real_pnl_sol: number | null;       // Sprint 9 P0 — authoritative real-SOL outcome
+  entry_sol_cost: number | null;     // Sprint 9 P0 — real SOL spent on entry
   position_size_usd: number | null;
   status: string;
   priority: string;
@@ -625,7 +627,8 @@ export default function BotPage() {
                     <th className="text-left py-2 px-3">Coin</th>
                     <th className="text-right py-2 px-3">Entry</th>
                     <th className="text-right py-2 px-3">Exit</th>
-                    <th className="text-right py-2 px-3">PnL</th>
+                    <th className="text-right py-2 px-3">PnL (paper)</th>
+                    <th className="text-right py-2 px-3" title="Real on-chain SOL delta — authoritative when available">Real SOL</th>
                     <th className="text-center py-2 px-3">Grid</th>
                     <th className="text-left py-2 px-3">Reason</th>
                     <th className="text-left py-2 px-3">Closed</th>
@@ -657,6 +660,16 @@ export default function BotPage() {
                         >
                           {pnl >= 0 ? "+" : ""}
                           {pnl.toFixed(2)}%
+                        </td>
+                        <td className="py-2 px-3 text-right font-mono text-xs">
+                          {t.real_pnl_sol !== null && t.real_pnl_sol !== undefined ? (
+                            <span className={Number(t.real_pnl_sol) >= 0 ? "text-green-400" : "text-red-400"}>
+                              {Number(t.real_pnl_sol) >= 0 ? "+" : ""}
+                              {Number(t.real_pnl_sol).toFixed(4)}
+                            </span>
+                          ) : (
+                            <span className="text-zinc-700" title="Pre-Sprint-9 trade — real SOL delta not recorded">—</span>
+                          )}
                         </td>
                         <td className="py-2 px-3 text-center">
                           <span className={t.grid_level >= 3 ? "text-green-400" : t.grid_level > 0 ? "text-amber-400" : "text-zinc-600"}>
