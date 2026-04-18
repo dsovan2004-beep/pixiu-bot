@@ -423,7 +423,7 @@ export default function BotPage() {
             {liveTrading ? "Live Trade Performance" : "Paper Trading"}
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Card label="Total Trades" value={String(totalClosed)} />
+            <Card label={liveTrading ? "Closed LIVE Trades" : "Closed Paper Trades"} value={String(totalClosed)} />
             <Card
               label="Win Rate"
               value={`${winRate}%`}
