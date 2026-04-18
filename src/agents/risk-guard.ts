@@ -18,7 +18,14 @@ import {
 import { sellToken, hasTokenBalance, wasLastSellUnsellable, parseSwapSolDelta } from "../lib/jupiter-swap";
 import { sendAlert } from "../lib/telegram";
 
-const POSITION_CHECK_MS = 5_000;
+// Poll cadence split by grid level (Sprint 10 P2a, Apr 18).
+// L0 positions have no grid cushion — a fast rug crosses -15% CB
+// threshold in under 5s and we'd catch it too late. Poll L0 every 2s.
+// L1+ positions have locked partials so 5s is plenty.
+const POSITION_CHECK_MS_L0 = 2_000;
+const POSITION_CHECK_MS_L1_PLUS = 5_000;
+// Used in log banner for backward-compat
+const POSITION_CHECK_MS = POSITION_CHECK_MS_L0;
 
 async function isLiveTrading(): Promise<boolean> {
   // SAFETY: default to false (paper) on ANY failure — never accidentally go live
@@ -194,13 +201,14 @@ const closingPositions = new Set<string>();
 
 // ─── Position Check Loop ────────────────────────────────
 
-async function checkPositions(): Promise<void> {
+async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
   // Guard ALWAYS runs — even when bot is stopped
   // STOP BOT only blocks new entries (executor), never exits
   // Open positions must always be monitored for SL/CB/whale protection
 
   // Reaper: revert any 'closing' rows older than 5 minutes back to 'open'.
   // This recovers from bot crashes mid-sell (sell never landed AND status stuck).
+  // Runs on every poll from either cadence — idempotent, harmless to run more.
   const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString();
   await supabase
     .from("paper_trades")
@@ -208,12 +216,22 @@ async function checkPositions(): Promise<void> {
     .eq("status", "closing")
     .lt("entry_time", fiveMinAgo);
 
-  const { data: positions, error } = await supabase
+  const { data: allPositions, error } = await supabase
     .from("paper_trades")
     .select("*")
     .eq("status", "open");
 
-  if (error || !positions || positions.length === 0) return;
+  if (error || !allPositions || allPositions.length === 0) return;
+
+  // Split cadence: L0 polls every 2s, L1+ polls every 5s. Each interval
+  // processes only its own grid_level bucket.
+  const positions = levelFilter
+    ? allPositions.filter((p) => {
+        const lvl = p.grid_level || 0;
+        return levelFilter === "L0" ? lvl === 0 : lvl > 0;
+      })
+    : allPositions;
+  if (positions.length === 0) return;
 
   // Check daily loss limit (for live trading)
   const liveMode = await isLiveTrading();
@@ -681,14 +699,16 @@ export async function startRiskGuard(): Promise<void> {
   const startLive = await isLiveTrading();
   console.log(`  [GUARD] Starting risk guard... (LIVE: ${startLive ? "🔴 ON" : "⚪ OFF"} — dashboard controlled)`);
   console.log(
-    `  [GUARD] Exit priority: CB(L0 -${CIRCUIT_BREAKER_L0_PCT}% / L1+ -${CIRCUIT_BREAKER_PCT}%) > Whale(L0 only) > SL(-${STOP_LOSS_PCT}%) > TO(${TIMEOUT_MINUTES}min) > Grid | Poll: ${POSITION_CHECK_MS / 1000}s`
+    `  [GUARD] Exit priority: CB(L0 -${CIRCUIT_BREAKER_L0_PCT}% / L1+ -${CIRCUIT_BREAKER_PCT}%) > Whale(L0 only) > SL(-${STOP_LOSS_PCT}%) > TO(${TIMEOUT_MINUTES}min) > Grid | Poll: L0 ${POSITION_CHECK_MS_L0 / 1000}s / L1+ ${POSITION_CHECK_MS_L1_PLUS / 1000}s`
   );
 
-  // Run immediately
+  // Run immediately across all positions
   await checkPositions();
 
-  // Poll every 15s
-  setInterval(checkPositions, POSITION_CHECK_MS);
+  // Split cadence: L0 polls every 2s (fast-rug protection), L1+ every 5s
+  // (partials locked, downside capped).
+  setInterval(() => checkPositions("L0"), POSITION_CHECK_MS_L0);
+  setInterval(() => checkPositions("L1_PLUS"), POSITION_CHECK_MS_L1_PLUS);
 
-  console.log(`  [GUARD] Polling open positions every ${POSITION_CHECK_MS / 1000}s`);
+  console.log(`  [GUARD] Polling L0 every ${POSITION_CHECK_MS_L0 / 1000}s, L1+ every ${POSITION_CHECK_MS_L1_PLUS / 1000}s`);
 }
