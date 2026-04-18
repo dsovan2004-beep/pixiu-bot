@@ -516,6 +516,10 @@ export default function BotPage() {
                 const minutesOpen = (Date.now() - entryTime) / 60_000;
                 const timeoutMin = 20;
                 const timeRemaining = Math.max(0, timeoutMin - minutesOpen);
+                // L3 + remaining > 0 = trailing-stop mode; backend suppresses
+                // timeout in this state (risk-guard.ts), so the UI shouldn't
+                // flag TIMEOUT either. Show TRAILING instead.
+                const isTrailing = (t.grid_level ?? 0) === 3 && (t.remaining_pct ?? 100) > 0;
                 const sells = whaleSells[t.coin_address] || [];
                 const coinLabel =
                   t.coin_name || t.coin_address.slice(0, 8) + "...";
@@ -556,19 +560,23 @@ export default function BotPage() {
                             —
                           </span>
                         )}
-                        {/* Timeout countdown */}
+                        {/* Timeout countdown (or TRAILING when in L3 trailing mode) */}
                         <span
                           className={`text-xs font-mono px-2 py-1 rounded ${
-                            timeRemaining <= 5
-                              ? "bg-red-900/50 text-red-400"
-                              : timeRemaining <= 10
-                                ? "bg-amber-900/50 text-amber-400"
-                                : "bg-zinc-800 text-zinc-400"
+                            isTrailing
+                              ? "bg-purple-900/50 text-purple-400"
+                              : timeRemaining <= 5
+                                ? "bg-red-900/50 text-red-400"
+                                : timeRemaining <= 10
+                                  ? "bg-amber-900/50 text-amber-400"
+                                  : "bg-zinc-800 text-zinc-400"
                           }`}
                         >
-                          {timeRemaining <= 0
-                            ? "TIMEOUT"
-                            : `${timeRemaining.toFixed(0)}m left`}
+                          {isTrailing
+                            ? "TRAILING"
+                            : timeRemaining <= 0
+                              ? "TIMEOUT"
+                              : `${timeRemaining.toFixed(0)}m left`}
                         </span>
                       </div>
                     </div>

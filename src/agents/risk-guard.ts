@@ -206,15 +206,21 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
   // STOP BOT only blocks new entries (executor), never exits
   // Open positions must always be monitored for SL/CB/whale protection
 
-  // Reaper: revert any 'closing' rows older than 5 minutes back to 'open'.
+  // Reaper: revert any 'closing' rows that have been stuck >5 min back to 'open'.
   // This recovers from bot crashes mid-sell (sell never landed AND status stuck).
-  // Runs on every poll from either cadence — idempotent, harmless to run more.
+  //
+  // IMPORTANT: we check `closing_started_at`, not `entry_time`. entry_time
+  // is fixed at buy and has nothing to do with how long the row has been
+  // in closing state. Using entry_time caused a flip-flop race where an
+  // in-flight close (awaiting Jupiter balance check) got reverted by the
+  // other cadence's reaper, causing Yoshi to loop on stop_loss forever
+  // (Apr 18 2026 bug).
   const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString();
   await supabase
     .from("paper_trades")
-    .update({ status: "open" })
+    .update({ status: "open", closing_started_at: null })
     .eq("status", "closing")
-    .lt("entry_time", fiveMinAgo);
+    .lt("closing_started_at", fiveMinAgo);
 
   const { data: allPositions, error } = await supabase
     .from("paper_trades")
@@ -289,7 +295,7 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
       //    If another guard instance already claimed it, abort.
       const { data: claimed, error: claimErr } = await supabase
         .from("paper_trades")
-        .update({ status: "closing" })
+        .update({ status: "closing", closing_started_at: new Date().toISOString() })
         .eq("id", pos.id)
         .eq("status", "open")
         .select("id")
@@ -435,7 +441,7 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
           console.log(`  [GUARD] ⚠️ LIVE SELL failed for ${coinLabel} (held tokens but Jupiter rejected) — reverting status to 'open' for retry`);
           await supabase
             .from("paper_trades")
-            .update({ status: "open" })
+            .update({ status: "open", closing_started_at: null })
             .eq("id", pos.id)
             .eq("status", "closing");          // P0b: only revert rows still in closing state
           void sendAlert(
