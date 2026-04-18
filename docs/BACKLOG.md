@@ -44,6 +44,55 @@ The bot IS profitable in real SOL — just half what paper claimed.
 
 ## Sprint 10 — candidates
 
+## Sprint 10 Candidates — Post-Live-Session Findings (Apr 18)
+
+**Session context:** 19 live trades since rebuild, real PnL -0.1592 SOL (-$13.68), WR 31.6%, wallet 0.6888 SOL. Commit 6b3c2eb (whale_exit L1+ skip) deployed and behaving as designed. Clean data — no paper-era contamination.
+
+### Exit reason breakdown (19 trades)
+
+| Reason | Trades | Net Real SOL | Real WR | Notes |
+| circuit_breaker | 9 | -0.1144 | 22.2% (2W/7L) | Biggest drain; 47% of all trades |
+| whale_exit | 5 | -0.0725 | 20% (1W/4L) | L0 safety net underperforming |
+| trailing_stop | 2 | +0.0572 | 100% (2W/0L) | Asteroid +100.8%, PercyJackson +8.87% |
+| stop_loss | 2 | -0.0280+ | 0% (0W/2L) | Both on L2 positions |
+| timeout | 2 | -0.0194 | 50% (1W/1L) | |
+
+### P0 — CB threshold analysis
+**Problem:** 9 CB trades, net -$9.85, only 22% WR. Biggest current bleed.
+**Action:** Run SQL on all 9 CB trades to see eventual outcome of each token post-exit. Determine if tightening CB from -25% to -15% on L0 would have cut losses or preserved the 2 winners (nobrainer +10%, Snow Pump +1.23%).
+**Do not ship a threshold change without this analysis.**
+
+### P0 — CB on L2 positions is catastrophic
+**Problem:** 1 trade (AHHHHHHH...) hit L2, took partial profit at L1, rode back down past entry, got stopped out at -47.86% via CB. Double-lose scenario.
+**Action:** Investigate whether CB threshold should scale with grid_level. E.g., if L1+ fired, CB should be tighter (-15% or even -10%) since any give-back is pure loss of banked profit.
+**Related to Sprint 9 P1 item about L2 SL behavior — similar pattern.**
+
+### P1 — L0 whale_exit safety net underperforming
+**Data:** 5 L0 WE trades since fix. 1W (Chud +22%), 4L (Naruto -68%, Dicknald -8%, Asteroid Shiba -26%, Walter -21%). Net -$6.25.
+**Hypothesis:** WE fires when a T1 whale sells, but by the time bot executes its own sell, the dump is already priced in. Bot is eating max slippage on the way out.
+**Action:** Consider narrowing WE triggers. Options: require 2+ whales selling within N seconds; only fire if price has dropped >X% in that window; disable WE entirely on L0 and rely on SL + CB.
+**Do not ship without more data.** 5 trades is too small.
+
+### P1 — Stop loss on L2 positions is 0/2
+**Data:** Only 2 SL exits this session (Sob -53%, Peptides unknown%), both on L2 positions, both losses.
+**Hypothesis:** Similar to CB-on-L2 issue. SL -10% threshold after grid partial taken = giving back profits AND entering loss. SL should probably tighten after each grid level fires.
+**Action:** Scale SL threshold by grid_level. E.g., L0: -10%, L1: -7%, L2: -5%, L3: -3%.
+**Sample too small to ship. Revisit at 30+ SL trades.**
+
+### P2 — Trailing stop is the proven edge
+**Data:** 2 TR trades, both winners. Asteroid +100.8% (+0.0526 SOL), PercyJackson +8.87% (+0.0046 SOL). Net +$4.92.
+**This is the only consistently profitable exit type.**
+**Action:** Consider lowering L3 activation threshold from +100% to +50% to catch more moonshots that don't fully send. Measure before/after TR trigger rate and TR PnL.
+
+### P2 — Session bleed rate ~$0.70-$0.86 per trade
+**Note:** At current rate, wallet will hit 0.50 SOL floor around trade 32-35 of target-50 sample. Consider setting hard daily stop-loss in bot (auto-STOP if wallet drops below configurable floor).
+**Related Sprint 8 backlog item: daily loss limit.**
+
+### P3 — Insufficient sample caveat
+CB sample = 9, WE = 5, TR = 2, SL = 2, TO = 2. Reliable fixes need ~30/type. Do not ship aggressive threshold changes yet. Running to 50 trades would give ~15 CB trades (directional), but WE/SL/TO still underpowered. Combining with pre-rebuild historical data may be option — requires separate DB query to check what exists.
+
+---
+
 ### P0 (NEW, found live Apr 18) — Webhook race creates duplicate rows
 
 **Evidence:** WHERE IS THE AIRDROP today created 5 paper_trades rows
