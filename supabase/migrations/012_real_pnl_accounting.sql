@@ -1,8 +1,8 @@
 -- Sprint 9 P0 — Real PnL accounting
 --
--- Problem: paper_trades.pnl_pct / pnl_usd are derived from DexScreener
+-- Problem: trades.pnl_pct / pnl_usd are derived from DexScreener
 -- mid-price at close time. Jupiter sells slip, fail, or confirm at
--- different prices. 5.4 SOL phantom gap between paper math and wallet.
+-- different prices. 5.4 SOL phantom gap between mark-to-market math and wallet.
 --
 -- This migration adds two columns that record REAL on-chain SOL
 -- movements parsed from Jupiter tx.meta:
@@ -13,17 +13,17 @@
 -- accounting era" — do not attempt to backfill without the tx signatures,
 -- which were not persisted pre-Sprint 9.
 
-ALTER TABLE paper_trades
+ALTER TABLE trades
   ADD COLUMN IF NOT EXISTS entry_sol_cost NUMERIC NULL,
   ADD COLUMN IF NOT EXISTS real_pnl_sol   NUMERIC NULL;
 
 -- Also persist the Jupiter tx signatures for forensic lookup + future
 -- backfill of recent trades. Nullable — legacy rows stay NULL.
-ALTER TABLE paper_trades
+ALTER TABLE trades
   ADD COLUMN IF NOT EXISTS buy_tx_sig  TEXT NULL,
   ADD COLUMN IF NOT EXISTS sell_tx_sig TEXT NULL;
 
-COMMENT ON COLUMN paper_trades.entry_sol_cost IS 'Real SOL spent on Jupiter buy, parsed from tx.meta.postBalances - preBalances. Includes fees + slippage. Null for pre-Sprint-9 trades.';
-COMMENT ON COLUMN paper_trades.real_pnl_sol   IS 'Net SOL outcome of the round trip: solReceivedFromSell - entry_sol_cost. The authoritative P&L number. Null for pre-Sprint-9 trades.';
-COMMENT ON COLUMN paper_trades.buy_tx_sig     IS 'Jupiter buy transaction signature, persisted on successful confirmation for forensic lookup.';
-COMMENT ON COLUMN paper_trades.sell_tx_sig    IS 'Jupiter sell transaction signature. Overwritten on each retry — final write = actually-confirmed tx.';
+COMMENT ON COLUMN trades.entry_sol_cost IS 'Real SOL spent on Jupiter buy, parsed from tx.meta.postBalances - preBalances. Includes fees + slippage. Null for pre-Sprint-9 trades.';
+COMMENT ON COLUMN trades.real_pnl_sol   IS 'Net SOL outcome of the round trip: solReceivedFromSell - entry_sol_cost. The authoritative P&L number. Null for pre-Sprint-9 trades.';
+COMMENT ON COLUMN trades.buy_tx_sig     IS 'Jupiter buy transaction signature, persisted on successful confirmation for forensic lookup.';
+COMMENT ON COLUMN trades.sell_tx_sig    IS 'Jupiter sell transaction signature. Overwritten on each retry — final write = actually-confirmed tx.';

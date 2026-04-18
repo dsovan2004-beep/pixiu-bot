@@ -22,9 +22,9 @@ commit.
 
 ## Tables
 
-### `paper_trades` — the entry ledger
+### `trades` — the entry ledger
 
-The only table that represents a live or paper position. Every row
+The only table that represents a live position. Every row
 is a single trade from entry to close.
 
 **Key columns** (verified against live schema Apr 18 2026)
@@ -38,7 +38,7 @@ is a single trade from entry to close.
     etc.). `exit_reason='buy_failed'`. Executor sets this.
 - `entry_price`, `entry_mc`, `entry_time`
 - `exit_price`, `exit_time`, `exit_reason`, `pnl_pct`
-- `pnl_usd` — paper-bankroll PnL derived from `pnl_pct`.
+- `pnl_usd` — legacy-bankroll PnL derived from `pnl_pct`.
   **Defaults to 0 on INSERT**, not NULL (caught as regression in
   Sprint 8 P0b-followup — never latch idempotency on `.is(null)`
   against this column).
@@ -47,7 +47,7 @@ is a single trade from entry to close.
 - `grid_level` — 0 | 1 | 2 | 3 (L3 = trailing mode active on 25%
   remaining)
 - `remaining_pct` — 100 → 50 → 25 → 0 as grid levels fire
-- `partial_pnl` — locked % from L1/L2 grid partials (paper math)
+- `partial_pnl` — locked % from L1/L2 grid partials (mark math)
 
 **Sprint 9 real-PnL accounting columns** (added by migration 012,
 populated by code from commit `e264000` onward + backfill from
@@ -92,7 +92,7 @@ commit `d690937`):
   note above). Sprint 9+ also writes `sell_tx_sig` + `real_pnl_sol`
   in a separate non-blocking UPDATE.
 - `src/scripts/*` one-shot scripts:
-  - `reconcile-bankroll-p0c.ts` — syncs paper_bankroll to
+  - `reconcile-bankroll-p0c.ts` — syncs DEPRECATED_bankroll to
     `SUM(pnl_usd)` after any double-credit drift
   - `backfill-real-pnl.ts` — populates `real_pnl_sol` on historic
     rows via Helius `getTransaction`
@@ -166,14 +166,14 @@ Single-row table (by convention). The authoritative kill switch.
 
 ---
 
-### `paper_bankroll` — virtual + real accounting
+### `DEPRECATED_bankroll` — virtual + real accounting
 
-Tracks the paper/real hybrid balance used for position sizing. Single
+Tracks the legacy hybrid balance used for position sizing. Single
 row by convention.
 
 **Key columns**
-- `current_balance` — SOL (or USD-scaled paper units depending on era;
-  currently paper-USD for sizing, real-SOL for reporting)
+- `current_balance` — SOL (or USD-scaled legacy units depending on era;
+  currently legacy-USD for sizing, real-SOL for reporting)
 - `last_updated`
 - `reconcile_note` (optional)
 
@@ -243,7 +243,7 @@ reintroduces them without knowing the history.
 - **Deleted** in Sprint 7 D3. Publisher was `price-scout.ts`;
   subscribers were supposed to drive trade execution but none existed
   after Sprint 5 D1 (`d59053e`, which replaced broadcast with
-  `paper_trades` polling). Scout's output landed nowhere for weeks
+  `trades` polling). Scout's output landed nowhere for weeks
   before its delete.
 
 ### Policy going forward
@@ -261,7 +261,7 @@ in `PLAYBOOK.md`.
 
 ### Idempotent close (the `status=closing` latch)
 
-Any code that closes a `paper_trades` row must:
+Any code that closes a `trades` row must:
 
 1. First UPDATE from `status='open'` to `status='closing'` with
    `RETURNING *`. If zero rows returned, another path claimed it —
@@ -288,10 +288,10 @@ local-time or unix-epoch columns.
 
 ### Column-level invariants
 
-- `paper_trades.pnl_pct` on a `closed` row is the final realized PnL
+- `trades.pnl_pct` on a `closed` row is the final realized PnL
   percentage including slippage. It's the single number the daily
   loss counter uses (`PLAYBOOK.md` > Daily loss accounting).
-- `paper_trades.wallet_tag` is informational only. Do not parse it
+- `trades.wallet_tag` is informational only. Do not parse it
   for routing decisions. The `[LIVE]` suffix is a signal for
   reporting / daily-loss filtering but the source of truth for
   "this trade really swapped" is `live_tx_signature != null`.

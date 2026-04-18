@@ -21,7 +21,7 @@ without reading the full git history.
 ## The Golden Rule: one entry path
 
 **As of Sprint 7 Day 3 (Apr 17 2026), there is exactly one place that
-inserts rows into `paper_trades`: `src/app/api/webhook/route.ts` inside
+inserts rows into `trades`: `src/app/api/webhook/route.ts` inside
 `evaluateAndEnter()`.**
 
 Before this rule, the code had two entry paths — the Cloudflare edge
@@ -42,9 +42,9 @@ and solve the problem differently.
 
 | Component | Runtime | Role |
 |---|---|---|
-| `src/app/api/webhook/route.ts` | Cloudflare Edge | Helius webhook receiver; runs `evaluateAndEnter()` — owns all 15 entry guards and is the only code path that inserts `paper_trades` |
+| `src/app/api/webhook/route.ts` | Cloudflare Edge | Helius webhook receiver; runs `evaluateAndEnter()` — owns all 15 entry guards and is the only code path that inserts `trades` |
 | `src/agents/wallet-watcher.ts` | Node (local or DO) | Watches tracked wallets, writes to `coin_signals` table |
-| `src/agents/trade-executor.ts` | Node | Polls `paper_trades` every 3s, performs Jupiter swaps, tags `[LIVE]` |
+| `src/agents/trade-executor.ts` | Node | Polls `trades` every 3s, performs Jupiter swaps, tags `[LIVE]` |
 | `src/agents/risk-guard.ts` | Node | Polls open positions every 5s, fires exits |
 | `src/agents/tier-manager.ts` | Node | Demotes/promotes tracked wallets T1↔T2 |
 
@@ -210,7 +210,7 @@ per position, in order — first match wins:
 
 ### Atomic-claim pattern
 
-Guard uses `UPDATE paper_trades SET status='closing' WHERE id=X AND
+Guard uses `UPDATE trades SET status='closing' WHERE id=X AND
 status='open' RETURNING *` to claim a row before selling. If zero rows
 return, another poll beat us — skip. After Jupiter sell confirms,
 `UPDATE ... SET status='closed' WHERE id=X AND status='closing'`.
@@ -248,7 +248,7 @@ proportionally.
 ## Live-trading safety rules
 
 1. **`is_running` is authoritative.** Every entry path must check
-   `bot_state.is_running` before inserting `paper_trades`. Currently
+   `bot_state.is_running` before inserting `trades`. Currently
    that's one path (webhook). If you ever add another — check it
    first, then write the code.
 2. **Do not skip the check under any optimisation.** The bypass
@@ -326,15 +326,15 @@ SIGINT handler sets `is_running=false` and cleanly exits.
 
 ## Runbook: bankroll reconcile
 
-Paper bankroll (in `paper_bankroll`) and real SOL wallet drift over
+Legacy bankroll (in `DEPRECATED_bankroll`) and real SOL wallet drift over
 time — phantoms, partial fills, rescue sells outside the bot.
 
 1. `src/scripts/phantom-balance.ts` — reads real on-chain wallet
    balance.
-2. Compute delta vs. `paper_bankroll.current_balance`.
+2. Compute delta vs. `DEPRECATED_bankroll.current_balance`.
 3. Apply the delta as a single UPDATE with a reason string:
    ```sql
-   UPDATE paper_bankroll
+   UPDATE DEPRECATED_bankroll
    SET current_balance = current_balance + <delta>,
        last_updated = now(),
        reconcile_note = '<reason>';
@@ -357,7 +357,7 @@ attempts in the log:
 3. If balance = 0 — the sell happened but the close UPDATE failed.
    Force-close:
    ```sql
-   UPDATE paper_trades
+   UPDATE trades
    SET status='closed', exit_time=now(),
        exit_reason='manual_recovery',
        pnl_pct=<computed from actual sell>
@@ -375,14 +375,14 @@ mechanism generalises. Don't repeat these mistakes.
 
 ### Webhook bypass of `is_running` (Sprint 7, commit `8772d39`)
 
-**Symptom:** bot showed `STOPPED` on dashboard, but new `paper_trades`
+**Symptom:** bot showed `STOPPED` on dashboard, but new `trades`
 rows kept appearing with `[LIVE]` tag. The Bull −60.61%, 千鳥 −44.66%,
 dogwifbeanie −37.71% all opened during a dashboard STOP.
 
 **Root cause:** webhook's `evaluateAndEnter()` never checked
 `bot_state.is_running`. Only the swarm-side executor did. So the
 dashboard STOP button halted execution but not entry — the bot kept
-filling up `paper_trades` until executor came back on.
+filling up `trades` until executor came back on.
 
 **Fix:** inline `webhookIsBotRunning()` helper at the top of
 `evaluateAndEnter()` — step 1 of 15 in the guard order.
@@ -400,7 +400,7 @@ webhook) in ways no one tracked.
 
 **Root cause:** the `pixiubot:entries → pixiubot:confirmed` broadcast
 path that fed scout's output into execution had been broken since
-Supabase Realtime dropped — replaced with polling of `paper_trades`
+Supabase Realtime dropped — replaced with polling of `trades`
 in commit `d59053e`. Nobody removed the validator/scout pipeline.
 They kept logging like they were enforcing, but weren't.
 
@@ -408,7 +408,7 @@ They kept logging like they were enforcing, but weren't.
 deleted both files (−577 lines); migrated their guards into webhook.
 
 **Generalised lesson:** if a module produces log lines that look
-active but don't insert into `paper_trades`, don't trust the logs —
+active but don't insert into `trades`, don't trust the logs —
 trace the actual write path end-to-end. Broadcast channels are
 especially easy to silently orphan.
 

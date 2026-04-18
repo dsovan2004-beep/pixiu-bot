@@ -1,7 +1,7 @@
 # Sprint 5 Day 1 Recap — April 15, 2026
 
 ## Summary
-First day of live trading with real SOL. Rough start with multiple bugs during paper-to-live transition, but ended with a working end-to-end system: buy → grid exits → auto-sell → SOL returned.
+First day of live trading with real SOL. Rough start with multiple bugs during simulation-to-live transition, but ended with a working end-to-end system: buy → grid exits → auto-sell → SOL returned.
 
 ## Live Trade Results
 
@@ -32,7 +32,7 @@ First day of live trading with real SOL. Rough start with multiple bugs during p
 2. **Webhook bypassing swarm** → restored webhook entry path
 3. **Supabase Realtime dropping** → replaced with 3s polling
 4. **Rug storm deadlock** → 2-hour window
-5. **Daily loss limit paper USD** → counts trades × 0.05 SOL
+5. **Daily loss limit USD** → counts trades × 0.05 SOL
 6. **Daily loss limit lockout** → raised to 2.0 SOL
 7. **Sell slippage too low** → 5% (now auto-escalating 5→10→20%)
 8. **Token 2022 sell failure** → checks both SPL Token programs
@@ -66,7 +66,7 @@ First day of live trading with real SOL. Rough start with multiple bugs during p
 ## Key Lessons
 
 1. Never disable working code — just add live buy on top
-2. Daily loss limit must use actual SOL, not paper USD
+2. Daily loss limit must use actual SOL, not USD
 3. pump.fun tokens use Token 2022 — need both program checks
 4. Sell slippage needs to be higher than buy slippage
 5. Solana drops transactions — non-blocking confirmation is essential

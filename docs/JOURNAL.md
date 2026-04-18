@@ -22,22 +22,21 @@ findings. This was the first day the bot's dashboard told the truth.
 | `375b18b` | `divergence-flagger.ts` observability script |
 | `bc2a581` | Banner line updated to reflect new CB + whale_exit logic |
 
-### The 5.4 → 1.83 SOL gap resolution
+### The 5.4 → 1.83 SOL mark-vs-real gap
 
-Previous-session finding of "5.4 SOL phantom gap" was across all 310
-trades via sum(pnl_pct) × 0.05 vs wallet delta. Refined numbers after
-backfill:
+Previous-session finding of a "5.4 SOL gap" was across all 310 trades
+via sum(pnl_pct) × 0.05 vs wallet delta. Refined after backfill:
 
 ```
-Paper math (Σ pnl_pct × 0.05):  +2.67 SOL
-Real math (Σ real_pnl_sol):     +0.79 SOL
-Paper inflation:                +1.83 SOL
-Wallet delta:                   −2.70 SOL
-Remaining gap (wallet − real):  −3.49 SOL
+Mark-to-market (Σ pnl_pct × 0.05):  +2.67 SOL
+Real (Σ real_pnl_sol):              +0.79 SOL
+Mark inflation:                     +1.83 SOL
+Wallet delta:                       −2.70 SOL
+Remaining gap (wallet − real):      −3.49 SOL
 ```
 
 The 3.49 SOL gap between real PnL and wallet delta = fees on 71 failed
-Jupiter buys + orphan tokens + rescue sells outside paper_trades.
+Jupiter buys + orphan tokens + rescue sells outside the trade records.
 Trade-level accounting is now accurate; wallet-level reconciliation is
 separate and not needed for strategy decisions.
 
@@ -55,10 +54,10 @@ separate and not needed for strategy decisions.
 
 ### The whale_exit realisation
 
-Paper said whale_exit had 74.7% WR / +47% avg. Real says 23.4% WR /
-−17.6% avg. Classic DexScreener-mid-at-close lie: by the time our
-Jupiter sell lands, the whale has already dumped; we fill at the
-bottom while paper records the "close-time mid price" as a profit.
+Mark-at-close said whale_exit had 74.7% WR / +47% avg. Real says 23.4%
+WR / −17.6% avg. By the time our Jupiter sell lands, the whale has
+already dumped; we fill at the bottom while the DexScreener mid still
+reads as a profit.
 
 Fix: whale_exit only fires on L0 positions (where there's no grid
 cushion). Once L1+ has locked ≥ +7.5%, let SL/trailing/timeout handle
@@ -69,9 +68,9 @@ exits — don't panic-sell into the whale's dump.
 - 73–88% of rows flagged with >20pp divergence across all exit_reasons
 - 3 duplicate row pairs confirmed (Broke Company, Justice for Raccoon,
   Mooncoin) — pre-P0b ghost credits still in the data
-- Many trailing_stop / take_profit rows are paper UNDER-claimed
-  (Jupiter filled higher than DS mid) — we've been making more than
-  the old dashboard showed on winners
+- Many trailing_stop / take_profit rows were mark UNDER-claimed
+  (Jupiter filled higher than DS mid) — we made more than the old
+  dashboard showed on winners
 
 ### State at sign-off
 
@@ -84,25 +83,24 @@ exits — don't panic-sell into the whale's dump.
 ## 2026-04-18 (late night) — Sprint 9 P0 go-forward accounting shipped
 
 Turning point. After live-stats.ts surfaced a 5.4 SOL gap between
-paper math and wallet reality, shipped the first half of Sprint 9 P0
-despite earlier "doc-only tonight" plan — bot was STOPPED with 0
-open positions, which is the safest possible window for hot-path
-changes.
+mark-to-market math and wallet reality, shipped the first half of
+Sprint 9 P0 despite earlier "doc-only tonight" plan — bot was STOPPED
+with 0 open positions, which is the safest possible window for
+hot-path changes.
 
 ### The gap confirmed
 
 ```
 310 LIVE closed trades
-Sum(pnl_pct × 0.05 / 100) = +2.6989 SOL  (paper math)
+Sum(pnl_pct × 0.05 / 100) = +2.6989 SOL  (mark-to-market)
 Wallet delta (3.6705 → 0.9669) = -2.7036 SOL  (reality)
-Gap: 5.4025 SOL ($~476) of phantom paper gains
+Gap: 5.4025 SOL ($~476) of phantom gains in the mark
 ```
 
-Root cause: `paper_trades.pnl_pct` is derived from DexScreener
-mid-price at close time. Jupiter sells slip, fail, or confirm at
-different prices. Losses are accurate (bot holds through crashes);
-gains are inflated (big-pump trades claim wins that never
-materialized in the wallet).
+Root cause: `pnl_pct` is derived from DexScreener mid-price at close
+time. Jupiter sells slip, fail, or confirm at different prices. Losses
+are accurate (bot holds through crashes); gains were inflated (big-pump
+trades claimed wins that never materialized in the wallet).
 
 ### Commits tonight (late)
 
@@ -114,7 +112,7 @@ materialized in the wallet).
 ### What `e264000` does
 
 1. **Migration 012** — adds `entry_sol_cost`, `real_pnl_sol`,
-   `buy_tx_sig`, `sell_tx_sig` to paper_trades. All nullable.
+   `buy_tx_sig`, `sell_tx_sig` to the trades table. All nullable.
    Applied via Supabase dashboard SQL editor — verified 4 columns
    present post-apply.
 2. **`jupiter-swap.ts parseSwapSolDelta(sig)`** — fetches tx,
@@ -124,14 +122,13 @@ materialized in the wallet).
    writes `buy_tx_sig` + `entry_sol_cost`. Wrapped in try/catch.
 4. **`risk-guard.ts closeTrade()`** — on sell success, non-blocking
    UPDATE writes `sell_tx_sig` + `real_pnl_sol` (= solReceived −
-   entry_sol_cost). Logs real + paper side-by-side:
+   entry_sol_cost). Logs real PnL:
    ```
    [GUARD] 📊 real PnL: +0.012345 SOL (entry 0.050123 → received
-   0.062468) | paper says +24.82%
+   0.062468)
    ```
 5. **Dashboard `/bot`** — new "Real SOL" column in Closed Trades
-   table. Shows `—` for legacy trades. PnL% header relabeled
-   "PnL (paper)" for clarity.
+   table.
 
 ### What's still pending from Sprint 9 P0
 
@@ -140,10 +137,9 @@ materialized in the wallet).
   per trade to find the Jupiter tx, then parse tx.meta. ~30+ min
   runtime with rate limits. Deferred.
 - **Divergence flagger** — post-backfill analysis. Flag trades
-  where `|pnl_pct − derived real PnL| > 20%`. Deferred.
-- **Top-line dashboard stats swap** — dashboard header still shows
-  paper totals. Wait 48h for go-forward data to accumulate, then
-  swap to real.
+  with large mark-vs-real gaps. Deferred.
+- **Top-line dashboard stats swap** — wait 48h for go-forward real
+  data to accumulate, then swap the top card.
 
 ### State at sign-off
 
@@ -153,16 +149,16 @@ materialized in the wallet).
 - All tonight's prior fixes still live (SIGINT no-write, exit_time
   latch, whale-exit DB tier, bundle detect, Jupiter 429 retry, P0b
   idempotent close)
-- Next LIVE buy+sell will show side-by-side real/paper PnL in
-  terminal logs — first ground truth in the bot's history
+- Next LIVE buy+sell will show real PnL in terminal logs — first
+  ground truth in the bot's history
 
 ---
 
 ## 2026-04-18 (evening) — Sprint 8 gate closed; 2 new bug fixes + P0b regression caught
 
 Bot resumed live trading after the P0 gate shipped this morning.
-Tonight: 2 new bugs found in sanity check + a regression in my own
-P0b fix surfaced live.
+Tonight: 2 new bugs found in sanity check + a regression in the P0b
+fix surfaced live.
 
 ### Commits tonight
 
@@ -176,19 +172,25 @@ P0b fix surfaced live.
 | Coin | PnL | Grid | Reason |
 |---|---|---|---|
 | X CEO Flōki | +7.50% | L1 | TP |
-| Moon Dog | +17.50% | L2 | TP (whale_exit later confirmed after L2 locked) |
+| Moon Dog | +17.50% | L2 | TP |
 | Tung Tung Tung Sahur | −42.15% | L0 | CB |
 | hold if your not gay. | −88.67% | L0 | CB (price collapsed faster than 5s guard poll; whales buy+dumped within one window) |
 | Retail Coin | +7.50% | L1 | TP (afternoon) |
 
-Real SOL: 1.0043 → 0.9811 tonight (net ~−$2 after recovery of locked L1/L2 partials).
-Cumulative real P&L today: −$238.74 (majority from the −88% and the Moon Dog-style recoveries).
+Real SOL: 1.0043 → 0.9811 tonight.
+Cumulative real P&L today: −$238.74.
 
-### Lessons captured (added to PLAYBOOK follow-up)
+### Lessons
 
-- **Supabase column defaults matter.** `pnl_usd` has a 0 default, not NULL. Any `.is(column, null)` idempotency latch must pick a column that's actually nullable. `exit_time` is the right choice.
-- **A 5s guard poll is sometimes too slow.** `hold if your not gay.` went +37% → −88% between polls. Worth considering either a tighter CB threshold (−15% on L0) or a 2s poll for L0-only positions.
-- **Tier-manager has promoted a lot of wallets.** DB has 63 tier=1 active vs 14 hardcoded in config. The hardcoded list is effectively stale and should probably be removed entirely as a follow-up.
+- **Supabase column defaults matter.** `pnl_usd` has a 0 default, not
+  NULL. Any `.is(column, null)` idempotency latch must pick a column
+  that's actually nullable. `exit_time` is the right choice.
+- **A 5s guard poll is sometimes too slow.** `hold if your not gay.`
+  went +37% → −88% between polls. Worth considering either a tighter
+  CB threshold (−15% on L0) or a 2s poll for L0-only positions.
+- **Tier-manager has promoted a lot of wallets.** DB has 63 tier=1
+  active vs 14 hardcoded in config. The hardcoded list is stale
+  and should probably be removed.
 
 ### State at sign-off
 
@@ -227,7 +229,7 @@ larger than the $165 estimated from Retail Coin alone, indicating a
 longer tail of historical double-credits from the same code path.
 P0b fix in `1b808a7` prevents recurrence.
 
-Authoritative source going forward: `SUM(paper_trades.pnl_usd)` for
+Authoritative source going forward: `SUM(trades.pnl_usd)` for
 `status='closed'`. Any future drift > $0.01 indicates a regression.
 
 ### Bot state
@@ -254,7 +256,7 @@ logging.
 
 **Architecture delta:**
 - Entry: webhook `evaluateAndEnter()` is now the **only** place
-  `paper_trades` inserts happen.
+  trade inserts happen.
 - Swarm agents: `wallet-watcher`, `trade-executor`, `risk-guard`,
   `tier-manager`. Validator + scout deleted.
 - Dead code confirmed: validator/scout were producing log lines with

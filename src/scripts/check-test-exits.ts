@@ -9,7 +9,7 @@ import supabase from "../lib/supabase-server";
     .gte("exit_time", since)
     .order("exit_time", { ascending: false });
   for (const t of data || []) {
-    const live = t.wallet_tag?.includes("[LIVE]") ? "🔴LIVE" : "📝paper";
+    const live = t.wallet_tag?.includes("[LIVE]") ? "🔴LIVE" : "📝sim";
     console.log(`${live} ${t.coin_name?.padEnd(20)} ${t.exit_reason?.padEnd(15)} ${(t.pnl_pct ?? 0).toFixed(2).padStart(7)}%  $${(t.pnl_usd ?? 0).toFixed(2)}`);
   }
 })();

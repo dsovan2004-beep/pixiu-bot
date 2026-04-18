@@ -18,8 +18,8 @@
 --
 -- Fix: dedicated timestamp for when the close started. Reaper checks that.
 
-ALTER TABLE paper_trades
+ALTER TABLE trades
   ADD COLUMN IF NOT EXISTS closing_started_at timestamptz;
 
-COMMENT ON COLUMN paper_trades.closing_started_at IS
+COMMENT ON COLUMN trades.closing_started_at IS
   'Sprint 10 P0: set when risk-guard claims open→closing. Reaper uses this to detect truly stuck sells (>5min) without racing against in-flight closes.';

@@ -46,8 +46,8 @@ async function getSolPrice(): Promise<number> {
   // Real SOL P&L per trade: LIVE_BUY_SOL × pnl_pct / 100
   const totalSolPnl = trades.reduce((s,t) => s + LIVE_BUY_SOL * Number(t.pnl_pct) / 100, 0);
   console.log(`  Real SOL P&L:  ${totalSolPnl >= 0 ? "+" : ""}${totalSolPnl.toFixed(4)} SOL (${totalSolPnl >= 0 ? "+" : ""}$${(totalSolPnl * solUsd).toFixed(2)})`);
-  const totalPaperPnl = trades.reduce((s,t) => s + Number(t.pnl_usd || 0), 0);
-  console.log(`  Paper P&L:     ${totalPaperPnl >= 0 ? "+" : ""}$${totalPaperPnl.toFixed(2)}`);
+  const totalMarkPnl = trades.reduce((s,t) => s + Number(t.pnl_usd || 0), 0);
+  console.log(`  Mark P&L:     ${totalMarkPnl >= 0 ? "+" : ""}$${totalMarkPnl.toFixed(2)}`);
 
   // 2. Per-day breakdown
   console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

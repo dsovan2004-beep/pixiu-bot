@@ -9,7 +9,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 **As of Sprint 7 Day 3 (Apr 17 2026), there is ONE entry path.**
 
 `src/app/api/webhook/route.ts` → `evaluateAndEnter()` is the **only**
-place that inserts rows into the `paper_trades` table. If you're
+place that inserts rows into the `trades` table. If you're
 thinking about adding an entry guard, rejection check, or a second
 insert site, add it there — not in the swarm.
 
@@ -17,9 +17,9 @@ insert site, add it there — not in the swarm.
 
 | Component | Runtime | Role |
 |---|---|---|
-| `src/app/api/webhook/route.ts` | Cloudflare Edge | Helius webhook receiver; runs `evaluateAndEnter()` which owns **all 15 entry guards** and is the only code path that inserts `paper_trades` |
+| `src/app/api/webhook/route.ts` | Cloudflare Edge | Helius webhook receiver; runs `evaluateAndEnter()` which owns **all 15 entry guards** and is the only code path that inserts `trades` |
 | `src/agents/wallet-watcher.ts` | Node (local/DO) | Watches tracked wallets, writes to `coin_signals` table |
-| `src/agents/trade-executor.ts` | Node | Polls `paper_trades` every 3s, performs Jupiter swaps |
+| `src/agents/trade-executor.ts` | Node | Polls `trades` every 3s, performs Jupiter swaps |
 | `src/agents/risk-guard.ts` | Node | Polls open positions every 5s, handles exits |
 | `src/agents/tier-manager.ts` | Node | Demotes/promotes wallets T1↔T2 |
 

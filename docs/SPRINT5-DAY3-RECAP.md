@@ -14,12 +14,12 @@ going forward.
 |--------|-------|
 | Session window | ~21:00 Apr 16 PDT → ~02:00 Apr 17 PDT (autonomous overnight) |
 | Real SOL wallet | 3.6705 → 2.0434 (−1.6271 SOL, −$143) |
-| Paper dashboard | 204 trades, 64.2% WR (131W/73L), avg gain +36.9%, avg loss −22.7% |
+| Dashboard (mark) | 204 trades, 64.2% WR (131W/73L), avg gain +36.9%, avg loss −22.7% |
 | On-chain stuck at end of session | 0 |
 | Commits shipped | 3 (2bb9246, 1c0eeea, 10db69c) |
 
-The paper vs real gap is because many [LIVE]-tagged buys never actually
-landed on-chain — paper PnL piled up, real SOL did not. The Day 3 fixes
+The mark vs real gap is because many [LIVE]-tagged buys never actually
+landed on-chain — mark PnL piled up, real SOL did not. The Day 3 fixes
 close that gap for future sessions.
 
 ## Bugs Fixed
@@ -113,7 +113,7 @@ Once L3 fires at +100%, 0% remaining — we can't ride further. A 140x token
 pays for dozens of losing trades, but the current strategy caps us at
 +42.5%.
 
-Also: Day 3's phantom bug means even the +42.5% paper profit on airdropper
+Also: Day 3's phantom bug means even the +42.5% mark profit on airdropper
 wasn't real — the buy never landed on-chain.
 
 Proposal (not yet implemented — P2 in backlog):
@@ -167,7 +167,7 @@ standard trades.
    caused by retry logic that couldn't recognize "token is just gone."
 2. **Distinguish error classes before retrying.** 6001 and 6024 look
    similar in the logs but have totally different resolution paths.
-3. **Paper WR ≠ real WR.** Dashboard showed 64.2% WR, wallet was down −1.63
+3. **Mark WR ≠ real WR.** Dashboard showed 64.2% WR, wallet was down −1.63
    SOL. Phantom positions inflate the numerator. Now fixed at the source.
 4. **Grid strategies leave moonshots on the table.** That's a tradeoff
    you pick deliberately, not a bug. Worth considering a partial-ride

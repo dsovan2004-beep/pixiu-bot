@@ -98,7 +98,7 @@ Webhook is already on Cloudflare Edge — no edge work needed.
 
 1. **48 hours of clean runs** after Sprint 8 ships.
 2. **Win rate > 55%** on a rolling 20+ trade window (LIVE only,
-   not paper).
+   not mark-to-market).
 3. **Buy-land rate > 90%** over the same window.
 
 ### What "clean" means
@@ -138,7 +138,7 @@ size, Jupiter route depth, or Helius RPC congestion.
 
 - On-chain transfer of ~\$1,000 worth of SOL into the live wallet
   (`ESK3r8n5jhaLn9Few59QKNJ5UMeD9iqZ5p1rbU9euvey`).
-- `paper_bankroll.current_balance` reconciles automatically via the
+- `DEPRECATED_bankroll.current_balance` reconciles automatically via the
   existing phantom-balance path. Manually log the injection in
   `docs/JOURNAL.md` with tx sig and USD amount.
 - `LIVE_BUY_SOL` stays at 0.10 unless we're scaling up the gate

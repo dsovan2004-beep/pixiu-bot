@@ -30,7 +30,7 @@ Only when all four are green does `is_running` flip back on.
 Scoped, no code shipped yet. Backlog priorities set after the
 Apr 17 22:00 UTC session surfaced two P0 issues:
 - Jupiter 429 cascade (71 `status=failed` buys today)
-- Paper bankroll double-credit on Retail Coin close (+$21.72
+- Bankroll double-credit on Retail Coin close (+$21.72
   phantom + ≈$145 unbooked mark-to-zero = ≈$165 drift)
 
 ### Active backlog
@@ -59,7 +59,7 @@ would otherwise corrupt the WR measurement.
 
 | Sprint | Dates | Headline | Recap |
 |---|---|---|---|
-| 1–2 | early Apr 2026 | Webhook + paper trader monolith | *(no dedicated recap)* |
+| 1–2 | early Apr 2026 | Webhook + trader monolith | *(no dedicated recap)* |
 | 3 | mid Apr 2026 | 6-agent swarm shipped — 131 trades, 56.5% WR | *(no dedicated recap)* |
 | 4 | Apr 14 2026 | Jupiter live swaps, dashboard toggle, safety audit | `docs/SPRINT4-COMPLETE.md` |
 | 5 D1 | Apr 15 2026 | First live trades — 4/5 wins, +0.0224 SOL | `docs/SPRINT5-DAY1-RECAP.md` |
@@ -85,7 +85,7 @@ the Sprint 7 D3 consolidation starting `add1a4d`) contained:
 - `e888c5e` — (urgent) inline rug-storm check in webhook to fix edge
 - `9e83741` — idempotent close on normal path (double-credit fix)
 - `8772d39` — **critical:** webhook must check `is_running` before
-  inserting `paper_trades`
+  inserting `trades`
 
 Pattern: parameter tuning + critical webhook bypass fixes. The
 `is_running` bypass fix (`8772d39`) was the trigger for Sprint 7 D3 —

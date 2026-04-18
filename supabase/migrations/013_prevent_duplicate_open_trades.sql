@@ -1,6 +1,6 @@
 -- Sprint 10 P0 — prevent webhook race duplicates
 --
--- Today (Apr 18 2026) WHERE IS THE AIRDROP created 5 paper_trades
+-- Today (Apr 18 2026) WHERE IS THE AIRDROP created 5 trades
 -- rows within 230ms from a single Cupsey BUNDLE signal storm. The
 -- webhook's "position already open" check is not race-safe: N
 -- simultaneous requests all see count=0 before any commits, all
@@ -16,7 +16,7 @@
 -- is constrained.
 
 CREATE UNIQUE INDEX IF NOT EXISTS one_open_per_mint_idx
-  ON paper_trades(coin_address)
+  ON trades(coin_address)
   WHERE status = 'open';
 
 COMMENT ON INDEX one_open_per_mint_idx IS 'Sprint 10 P0: prevents webhook race from creating duplicate open rows for the same mint. Violating INSERT returns a unique-constraint error; webhook skips entry.';

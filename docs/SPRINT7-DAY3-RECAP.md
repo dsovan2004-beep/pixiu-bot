@@ -18,7 +18,7 @@ guard, tier manager); entry logic is 100% webhook-driven.
 | Net lines | −577 (2 agent files deleted, run-all.ts trimmed) |
 | CF builds | 5 green, 0 failed |
 | Real SOL wallet | 1.0248 (start 3.6705, day P&L −2.6457 SOL / −$235.81) |
-| Paper dashboard | 303 trades, 62.4% WR (189W/114L), avg gain +42.93%, avg loss −23.77% |
+| Dashboard (mark) | 303 trades, 62.4% WR (189W/114L), avg gain +42.93%, avg loss −23.77% |
 | Bot status post-restart | RUNNING, LIVE, 0 open positions |
 
 The day-negative P&L reflects pre-consolidation bypass losses (Asteroid
@@ -58,8 +58,8 @@ ${reason}`. Pure observability commit — no guard logic touched.
 ### 5. `7dbe342` — Delete dead entry pipeline
 `signal-validator.ts` (302 lines) and `price-scout.ts` (275 lines)
 deleted. `run-all.ts` updated: 6 agents → 4 agents, banner corrected,
-stale `pixiubot:confirmed → paper_trades` label on Trade Executor
-fixed (executor polls `paper_trades` every 3s, never subscribed to
+stale `pixiubot:confirmed → trades` label on Trade Executor
+fixed (executor polls `trades` every 3s, never subscribed to
 that channel — verified by grep).
 
 ## Architecture Change
@@ -68,21 +68,21 @@ that channel — verified by grep).
 ```
 wallet-watcher → signals channel → signal-validator → entries channel
   → price-scout → confirmed channel → [NO SUBSCRIBERS]
-                                      trade-executor (polls paper_trades)
+                                      trade-executor (polls trades)
   ──────────────────────────────────────────
-  webhook (Helius direct) → evaluateAndEnter → paper_trades
+  webhook (Helius direct) → evaluateAndEnter → trades
 ```
 Two entry paths with duplicated guards that drifted out of sync.
 `pixiubot:confirmed` channel had zero subscribers — scout's output
 landed nowhere. Webhook was the only path actually inserting
-`paper_trades` rows; scout was producing log lines with zero
+`trades` rows; scout was producing log lines with zero
 enforcement.
 
 **After**
 ```
 wallet-watcher → coin_signals table (signals sidecar)
-webhook (Helius direct) → evaluateAndEnter() → paper_trades
-trade-executor (polls paper_trades every 3s) → Jupiter swap
+webhook (Helius direct) → evaluateAndEnter() → trades
+trade-executor (polls trades every 3s) → Jupiter swap
 risk-guard (polls open positions every 5s) → exits
 tier-manager → demote/promote T1↔T2
 ```

@@ -9,7 +9,7 @@
  *   - Mooncoin              (2 rows, +48.5%  / +0.059 SOL each)
  *
  * For each pair, keep the earliest row (by entry_time, tiebreak id)
- * and DELETE the newer one. Then decrement DEPRECATED_paper_bankroll by the
+ * and DELETE the newer one. Then decrement DEPRECATED_DEPRECATED_bankroll by the
  * deleted row's pnl_usd so the ghost credit is removed.
  *
  * Safety: deletes happen first. If a decrement fails, bankroll stays
@@ -119,7 +119,7 @@ const DUPE_WINDOW_SECONDS = 120;
   // Decrement bankroll
   console.log("\nDecrementing bankroll...");
   const { data: bk } = await supabase
-    .from("DEPRECATED_paper_bankroll")
+    .from("DEPRECATED_DEPRECATED_bankroll")
     .select("id, current_balance, starting_balance")
     .limit(1)
     .single();
@@ -128,7 +128,7 @@ const DUPE_WINDOW_SECONDS = 120;
   const after = before - totalPhantomUsd;
   const newTotal = after - Number(bk.starting_balance ?? 10000);
   const { error } = await supabase
-    .from("DEPRECATED_paper_bankroll")
+    .from("DEPRECATED_DEPRECATED_bankroll")
     .update({ current_balance: after, total_pnl_usd: newTotal, updated_at: new Date().toISOString() })
     .eq("id", bk.id);
   if (error) {

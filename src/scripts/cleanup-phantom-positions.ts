@@ -104,7 +104,7 @@ async function getCurrentPrice(mint: string): Promise<number> {
   // Apply bankroll delta once
   if (bankrollDelta !== 0) {
     const { data: bk } = await supabase
-      .from("DEPRECATED_paper_bankroll")
+      .from("DEPRECATED_DEPRECATED_bankroll")
       .select("id, current_balance, starting_balance")
       .limit(1)
       .single();
@@ -112,7 +112,7 @@ async function getCurrentPrice(mint: string): Promise<number> {
       const newBal = Number(bk.current_balance) + bankrollDelta;
       const newPnl = newBal - Number(bk.starting_balance || 10000);
       await supabase
-        .from("DEPRECATED_paper_bankroll")
+        .from("DEPRECATED_DEPRECATED_bankroll")
         .update({
           current_balance: newBal,
           total_pnl_usd: newPnl,

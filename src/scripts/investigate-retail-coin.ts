@@ -91,20 +91,20 @@ const WALLET = "ESK3r8n5jhaLn9Few59QKNJ5UMeD9iqZ5p1rbU9euvey";
     }
   }
 
-  // ─── 3. Paper bankroll history ───
+  // ─── 3. Legacy bankroll history ───
   const { data: bankrollNow } = await supabase
-    .from("DEPRECATED_paper_bankroll")
+    .from("DEPRECATED_DEPRECATED_bankroll")
     .select("*");
-  console.log(`\n=== DEPRECATED_paper_bankroll current ===`);
+  console.log(`\n=== DEPRECATED_DEPRECATED_bankroll current ===`);
   console.log(JSON.stringify(bankrollNow, null, 2));
 
   // Try bankroll history table if it exists
   const { data: hist, error: histErr } = await supabase
-    .from("DEPRECATED_paper_bankroll_history")
+    .from("DEPRECATED_DEPRECATED_bankroll_history")
     .select("*")
     .order("created_at", { ascending: false })
     .limit(20);
-  console.log(`\n=== DEPRECATED_paper_bankroll_history (last 20) ===`);
+  console.log(`\n=== DEPRECATED_DEPRECATED_bankroll_history (last 20) ===`);
   if (histErr) {
     console.log(`  (table not found or inaccessible: ${histErr.message})`);
   } else {

@@ -34,7 +34,7 @@ motivated Sprint 7's full shared-guard consolidation.
 | `0ac8725` | Attempted webhook rug-storm check — **BROKE CF Edge build** because `entry-guards.ts` imported `supabase-server.ts` which pulled `path` (Node builtin). Webhook was down ~10min |
 | `e888c5e` | **Emergency fix** — inlined rug-storm check in `webhook/route.ts` with edge-safe Supabase client. Unblocked CF deploy |
 | `9e83741` | Idempotent-close on the normal path — completes the double-credit fix from Sprint 5 D2 (`status='closing' → status='closed'` gate on final UPDATE) |
-| `8772d39` | **CRITICAL** — webhook must check `is_running` before inserting paper_trades. Discovery: The Bull −60.61%, 千鳥 −44.66%, dogwifbeanie −37.71% all opened while bot was STOPPED via dashboard. Added inline `webhookIsBotRunning()` as guard #1 |
+| `8772d39` | **CRITICAL** — webhook must check `is_running` before inserting trades. Discovery: The Bull −60.61%, 千鳥 −44.66%, dogwifbeanie −37.71% all opened while bot was STOPPED via dashboard. Added inline `webhookIsBotRunning()` as guard #1 |
 
 ## Pattern recognition (drove Sprint 7)
 
@@ -54,7 +54,7 @@ rather than fighting shared modules.
 
 ### Webhook bypass of `is_running` (`8772d39`)
 
-**Symptom:** dashboard showed STOPPED, but new `paper_trades` rows
+**Symptom:** dashboard showed STOPPED, but new `trades` rows
 kept appearing with `[LIVE]` tag — opening real-SOL positions that
 the user had explicitly disabled. Three losing trades confirmed as
 unauthorized: The Bull, 千鳥, dogwifbeanie.
@@ -62,7 +62,7 @@ unauthorized: The Bull, 千鳥, dogwifbeanie.
 **Root cause:** webhook's `evaluateAndEnter()` never checked
 `bot_state.is_running`. Only the swarm-side executor did. So the
 dashboard STOP button halted execution but not entry — webhook kept
-filling `paper_trades`.
+filling `trades`.
 
 **Fix:** inline `webhookIsBotRunning()` as guard #1 of evaluation.
 
@@ -110,5 +110,5 @@ strongly-positive exit reasons.
 - Webhook/validator guard drift → full consolidation in Sprint 7 D3
 - `entry-guards.ts` orphaned after validator delete → flagged for
   Sprint 8 cleanup
-- Paper/real PnL divergence suspected but not quantified → surfaced in
+- Mark/real PnL divergence suspected but not quantified → surfaced in
   Sprint 9 as the 5.4→1.83 SOL gap

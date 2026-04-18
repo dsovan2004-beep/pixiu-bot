@@ -10,7 +10,7 @@ See `PLAYBOOK.md` for operational details, `ROADMAP.md` for what's next, `DATA_M
 
 | Sprint | Status | Summary |
 |--------|--------|---------|
-| Sprint 1-2 | COMPLETE | Webhook + paper trader monolith |
+| Sprint 1-2 | COMPLETE | Webhook + trade executor monolith |
 | Sprint 3 | COMPLETE | 6-agent swarm, 131 trades, 56.5% WR, $11,325 (+13.26%) |
 | Sprint 4 | COMPLETE | Jupiter live swaps, dashboard toggle, safety audit |
 | Sprint 5 Day 1 | COMPLETE | 4/5 wins (80% WR), +0.0224 SOL gross — 16 transition bugs fixed |
@@ -18,17 +18,17 @@ See `PLAYBOOK.md` for operational details, `ROADMAP.md` for what's next, `DATA_M
 | Sprint 5 Day 3 | COMPLETE | Phantom-loop + 6024 bail + Token-2022 filter + pump.fun rescue script |
 | Sprint 6 | COMPLETE (undocumented) | Trailing stop after L3, daily-loss counter fixed to real SOL, webhook `is_running` bypass fix — see `SPRINT.md` |
 | Sprint 7 Day 3 | **LIVE** | Shared-guard consolidation — 5 commits, dual entry path removed, validator + scout deleted, `[WEBHOOK] ❌` logging normalized |
-| Recovery Goal | $3,325 — REACHED | $3,971 gross wins from $10K paper start |
+| Recovery Goal | $3,325 — REACHED | $3,971 gross wins from $10K starting stake |
 
 ## Architecture
 
 Single entry path (webhook on Cloudflare Edge) + 4-agent node swarm for execution, exits, watching, and tier management.
 
 ```
-Helius push → Cloudflare webhook (evaluateAndEnter, 15 guards) → paper_trades
+Helius push → Cloudflare webhook (evaluateAndEnter, 15 guards) → trades
                                                                       |
                                                       Agent 2: Trade Executor
-                                                      Polls paper_trades every 3s
+                                                      Polls trades every 3s
                                                       New trade → Jupiter buy → [LIVE] tag
                                                                       |
                                                       Agent 3: Risk Guard
@@ -125,7 +125,7 @@ History per sprint: [SPRINT.md](SPRINT.md).
 2. Webhook bypassing swarm → restored webhook entry path (proven)
 3. Supabase Realtime silently dropping → replaced with 3s polling
 4. Rug storm deadlock → 2-hour window instead of all-time
-5. Daily loss limit counting paper losses → LIVE-only filter
+5. Daily loss limit counting prior losses → LIVE-only filter
 6. Sell slippage too low (2%) → increased to 5% for pump.fun
 7. TX confirmation blocking 30s → non-blocking async
 8. Phantom balance API failing on CF edge → DexScreener SOL price
@@ -154,4 +154,4 @@ cd ~/PixiuBot && caffeinate -i npx tsx src/agents/run-all.ts
 
 Live at `https://pixiu-bot.pages.dev/bot`
 
-Shows: SOL balance, real P&L, live/paper mode toggle, trade history, open positions with live PnL, whale status, grid progress, timeout countdown, signal feed.
+Shows: SOL balance, real P&L, live mode, trade history, open positions with live PnL, whale status, grid progress, timeout countdown, signal feed.

@@ -10,7 +10,7 @@
  * Progressive: writes each matched trade immediately so Ctrl+C is safe.
  *
  * Expected match rate: 70-85%. Unmatched trades stay with real_pnl_sol
- * null (caller can see paper vs null for "pre-accounting-era" trades).
+ * null (caller can see mark vs null for "pre-accounting-era" trades).
  *
  * Usage:
  *   npx tsx src/scripts/backfill-real-pnl.ts           # all unprocessed
@@ -205,10 +205,10 @@ async function processTrade(trade: any, dry: boolean): Promise<string> {
     }).eq("id", trade.id);
   }
 
-  const paperPct = Number(trade.pnl_pct);
+  const markPct = Number(trade.pnl_pct);
   const realPct = (realPnl / entryCost) * 100;
-  const divergence = paperPct - realPct;
-  return `entry ${entryCost.toFixed(4)} → sells ${sellReceived.toFixed(4)} = ${realPnl.toFixed(4)} SOL (real ${realPct.toFixed(1)}%, paper ${paperPct.toFixed(1)}%, div ${divergence.toFixed(1)}pp)`;
+  const divergence = markPct - realPct;
+  return `entry ${entryCost.toFixed(4)} → sells ${sellReceived.toFixed(4)} = ${realPnl.toFixed(4)} SOL (real ${realPct.toFixed(1)}%, mark ${markPct.toFixed(1)}%, div ${divergence.toFixed(1)}pp)`;
 }
 
 (async () => {

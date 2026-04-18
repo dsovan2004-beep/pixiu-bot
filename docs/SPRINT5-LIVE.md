@@ -17,7 +17,7 @@
 
 ## What Went Wrong During Transition
 
-The paper-to-live transition was painful. Multiple issues cascaded:
+The simulation-to-live transition was painful. Multiple issues cascaded:
 
 1. **Webhook disabled** — I disabled the webhook's evaluateAndEnter() to route through the swarm. But the swarm depended on Supabase Realtime which silently dropped. No trades entered for hours.
 
@@ -25,7 +25,7 @@ The paper-to-live transition was painful. Multiple issues cascaded:
 
 3. **Rug storm deadlock** — Old losses stayed in the "last 5" forever because no new trades could enter. Created a permanent block on all entries.
 
-4. **Daily loss limit counted paper losses** — $772 in paper losses exceeded the 0.2 SOL limit, blocking all live buys.
+4. **Daily loss limit counted prior losses** — $772 in prior losses exceeded the 0.2 SOL limit, blocking all live buys.
 
 5. **Sell slippage too low** — 2% slippage caused error 6001 on pump.fun token sells. Increased to 5%.
 
@@ -34,7 +34,7 @@ The paper-to-live transition was painful. Multiple issues cascaded:
 ## What Fixed It
 
 **Restored the proven path:**
-- Webhook evaluateAndEnter() re-enabled (the code that made money on paper)
+- Webhook evaluateAndEnter() re-enabled (the code that was profitable in simulation)
 - Trade executor simplified to poll for new trades and fire Jupiter buy
 - Watcher switched from Realtime to 3s polling
 - Rug storm limited to 2-hour window
@@ -57,7 +57,7 @@ The paper-to-live transition was painful. Multiple issues cascaded:
 ```
 Helius push → Cloudflare webhook → inserts coin_signals + evaluateAndEnter()
                                           ↓
-                                    paper_trades (open)
+                                    trades (open)
                                           ↓
                               Trade Executor (polls 3s)
                               Detects new trade → Jupiter buy → [LIVE] tag
@@ -77,7 +77,7 @@ Bot ran autonomously through a full session. Highlights:
 ## Day 3 Update (April 17, 2026)
 
 Overnight autonomous session surfaced two more P0-class bugs + shipped
-infra. Real wallet down −1.63 SOL on the day (paper showed 64.2% WR but
+infra. Real wallet down −1.63 SOL on the day (mark showed 64.2% WR but
 many [LIVE]-tagged buys never actually landed). All fixed.
 
 Headlines:

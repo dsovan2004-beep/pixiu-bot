@@ -14,8 +14,8 @@
 - Devnet/mainnet toggle via `SOLANA_NETWORK` env var
 
 ### Dashboard Live Trading Toggle
-- PAPER ONLY / LIVE TRADING button on `/bot` dashboard
-- Writes to `bot_state.mode` in Supabase (`"paper"` or `"live"`)
+- SIMULATED / LIVE TRADING button on `/bot` dashboard
+- Writes to `bot_state.mode` in Supabase (`"simulated"` or `"live"`)
 - API route: `GET/POST /api/settings`
 - Agents read mode dynamically — no restart needed to toggle
 
@@ -27,7 +27,7 @@
 - **Token balance fetch**: queries on-chain balance before selling
 
 ### Trade Executor Updates
-- Calls `buyToken()` after paper trade insert when live mode enabled
+- Calls `buyToken()` after trade insert when live mode enabled
 - Checks daily loss limit before buying
 - Logs: `[EXECUTOR] LIVE BUY executed: {signature}`
 
@@ -62,7 +62,7 @@
 - Queries today's losses correctly
 - 0.2 SOL threshold enforced
 - Both executor and guard respect it
-- Paper trading continues unaffected
+- Simulated trading continues unaffected
 
 ### Environment
 - SOLANA_NETWORK=mainnet-beta
@@ -93,7 +93,7 @@
 
 ## Sprint 5 Plan
 1. Fund wallet: 5-6 SOL ($500) to ESK3r8n...uvey
-2. Toggle: PAPER ONLY → LIVE TRADING on dashboard
+2. Toggle: SIMULATED → LIVE TRADING on dashboard
 3. Monitor: first 50 live trades at 0.05 SOL each
 4. Max daily exposure: 0.2 SOL loss limit
 5. Scale up if WR > 55% after 50 live trades
