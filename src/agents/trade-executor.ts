@@ -220,12 +220,25 @@ export async function startTradeExecutor(): Promise<void> {
           console.log(
             `  [FILTER] SKIP ${coin} — age ${ageMin.toFixed(1)}min < ${MIN_TOKEN_AGE_MINUTES}min threshold`
           );
+          // Mark row so guard doesn't adopt it as a phantom position
+          // after the 2-min pre-confirmation window. Uses status='failed'
+          // so dashboard filters it out of WR/PnL stats.
+          await supabase
+            .from("trades")
+            .update({ status: "failed", exit_reason: "filter_age" })
+            .eq("id", trade.id)
+            .eq("status", "open");
           continue;
         }
         if (coBuyerCount > MAX_CO_BUYERS_5MIN) {
           console.log(
             `  [FILTER] SKIP ${coin} — ${coBuyerCount} co-buyers in last 5min > ${MAX_CO_BUYERS_5MIN}`
           );
+          await supabase
+            .from("trades")
+            .update({ status: "failed", exit_reason: "filter_cobuyers" })
+            .eq("id", trade.id)
+            .eq("status", "open");
           continue;
         }
         console.log(
