@@ -362,55 +362,68 @@ export async function buyToken(
       );
       return jitoResult.signature;
     }
+
+    // Jito either (a) rejected submission outright (429 / network fail)
+    // or (b) accepted but the bundle didn't land within the 60s poll
+    // window. In both cases, the only tx we have signed carries
+    // jitoTipLamports but NO standard compute-unit-price, so non-Jito
+    // validators drop it. Fix: re-request the swap from Jupiter with
+    // prioritizationFeeLamports:"auto" so the tx carries a real priority
+    // fee, then submit via public RPC.
+    //
+    // For path (b) we do one RPC sig check first to avoid a double-
+    // submit if Jito ends up landing after the poll timeout (rare but
+    // possible — tokens would land 2x otherwise). If the Jito sig is
+    // already confirmed we use it; if "not found" (the typical case),
+    // we proceed with re-quote.
     if (jitoResult && !jitoResult.landed) {
-      // Jito submitted but bundle didn't land within 60s — tx may still
-      // land late; reuse the same signature and let the RPC-status-poll
-      // below resolve final state. Do NOT re-submit via RPC (duplicate
-      // signature would dedupe anyway but wastes an RPC call).
-      signature = jitoResult.signature;
-      console.log(
-        `  [JUPITER] BUY Jito poll inconclusive — verifying via RPC: ${signature.slice(0, 16)}...`
-      );
-    } else {
-      // Jito submission itself failed — re-request swap with "auto"
-      // priority fee (NOT jitoTipLamports), then submit via public RPC.
-      //
-      // Why re-request: the original tx has jitoTipLamports baked in,
-      // which Jupiter builds as a tip instruction to a Jito tip account.
-      // Non-Jito validators don't treat that as priority — they see zero
-      // priority fee and drop the tx in congested slots (Apex Penguin
-      // 2026-04-19: tx broadcast OK, 6x "not found yet", dropped).
-      // "auto" yields a proper setComputeUnitPrice the leader recognizes.
-      console.log(`  [JUPITER] BUY Jito failed — re-requesting swap with auto priority for RPC fallback`);
-      const fallbackSwapRes = await jupiterFetchWithBackoff(
-        JUPITER_SWAP_URL,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            quoteResponse,
-            userPublicKey: walletPubkey,
-            wrapAndUnwrapSol: true,
-            prioritizationFeeLamports: "auto",
-          }),
-        },
-        "buy-swap-fallback"
-      );
-      if (!fallbackSwapRes.ok) {
-        console.error(`  [JUPITER] BUY fallback swap tx failed: ${fallbackSwapRes.status}`);
-        return null;
+      try {
+        const preCheck = await connection.getSignatureStatus(jitoResult.signature);
+        const cs = preCheck.value?.confirmationStatus;
+        if (cs === "confirmed" || cs === "finalized") {
+          if (preCheck.value!.err) {
+            console.error(`  [JUPITER] BUY Jito sig confirmed but failed on-chain: ${preCheck.value!.err}`);
+            return null;
+          }
+          console.log(`  [JUPITER] BUY Jito sig already confirmed (late-land): ${jitoResult.signature}`);
+          return jitoResult.signature;
+        }
+      } catch {
+        /* treat as not-found, proceed with re-quote */
       }
-      const { swapTransaction: fallbackSwapTx } = await fallbackSwapRes.json();
-      const fallbackTx = VersionedTransaction.deserialize(Buffer.from(fallbackSwapTx, "base64"));
-      fallbackTx.sign([keypair]);
-      signature = await connection.sendRawTransaction(fallbackTx.serialize(), {
-        skipPreflight: true,
-        maxRetries: 3,
-      });
-      console.log(
-        `  [JUPITER] BUY sent via RPC: ${coinAddress.slice(0, 8)}... ${amountSol} SOL → ${signature}`
-      );
+      console.log(`  [JUPITER] BUY Jito poll inconclusive, sig not on-chain — re-requesting swap with auto priority for RPC fallback`);
+    } else {
+      console.log(`  [JUPITER] BUY Jito failed — re-requesting swap with auto priority for RPC fallback`);
     }
+
+    const fallbackSwapRes = await jupiterFetchWithBackoff(
+      JUPITER_SWAP_URL,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          quoteResponse,
+          userPublicKey: walletPubkey,
+          wrapAndUnwrapSol: true,
+          prioritizationFeeLamports: "auto",
+        }),
+      },
+      "buy-swap-fallback"
+    );
+    if (!fallbackSwapRes.ok) {
+      console.error(`  [JUPITER] BUY fallback swap tx failed: ${fallbackSwapRes.status}`);
+      return null;
+    }
+    const { swapTransaction: fallbackSwapTx } = await fallbackSwapRes.json();
+    const fallbackTx = VersionedTransaction.deserialize(Buffer.from(fallbackSwapTx, "base64"));
+    fallbackTx.sign([keypair]);
+    signature = await connection.sendRawTransaction(fallbackTx.serialize(), {
+      skipPreflight: true,
+      maxRetries: 3,
+    });
+    console.log(
+      `  [JUPITER] BUY sent via RPC (auto priority): ${coinAddress.slice(0, 8)}... ${amountSol} SOL → ${signature}`
+    );
 
     // Wait for confirmation — must know if buy landed before tagging [LIVE]
     // Retry up to 6 times with 10s intervals (total ~60s) to handle slow RPC
@@ -677,50 +690,78 @@ export async function sellToken(
           console.log(
             `  [JUPITER] SELL sent via Jito at ${slippage / 100}%: ${coinAddress.slice(0, 8)}... → ${signature}`
           );
-        } else if (jitoResult && !jitoResult.landed) {
-          // Jito submitted; bundle didn't confirm within 60s. Reuse the
-          // signature and let the RPC poll below resolve the state.
-          signature = jitoResult.signature;
-          console.log(
-            `  [JUPITER] SELL Jito poll inconclusive at ${slippage / 100}% — verifying via RPC: ${signature.slice(0, 16)}...`
-          );
         } else {
-          // Jito submission failed — re-request swap with "auto" priority
-          // fee for RPC fallback (non-Jito validators drop txs with only
-          // jitoTipLamports as they see zero priority). Same fix as buyToken.
-          console.log(`  [JUPITER] SELL Jito failed at ${slippage / 100}% — re-requesting swap with auto priority for RPC fallback`);
-          const fallbackSwapRes = await jupiterFetchWithBackoff(
-            JUPITER_SWAP_URL,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                quoteResponse,
-                userPublicKey: walletPubkey,
-                wrapAndUnwrapSol: true,
-                prioritizationFeeLamports: "auto",
-              }),
-            },
-            "sell-swap-fallback"
-          );
-          if (!fallbackSwapRes.ok) {
-            console.error(`  [JUPITER] SELL fallback swap tx failed at ${slippage / 100}%: ${fallbackSwapRes.status}`);
-            continue;
+          // Jito either failed submission outright (429 / network) or
+          // accepted but bundle didn't land in 60s. In both cases the
+          // signed tx has jitoTipLamports (no standard priority fee) so
+          // non-Jito validators drop it. Re-quote with "auto" priority
+          // and submit via public RPC.
+          //
+          // For the poll-timeout case we do one RPC sig check first to
+          // avoid double-submit if Jito late-lands. Rare but possible;
+          // double-submit would credit us with 2x tokens at 2x SOL cost.
+          let alreadyConfirmed = false;
+          if (jitoResult && !jitoResult.landed) {
+            try {
+              const preCheck = await connection.getSignatureStatus(jitoResult.signature);
+              const cs = preCheck.value?.confirmationStatus;
+              if (cs === "confirmed" || cs === "finalized") {
+                if (preCheck.value!.err) {
+                  onChainError = preCheck.value!.err;
+                  signature = jitoResult.signature;
+                  console.error(`  [JUPITER] SELL Jito sig confirmed but failed on-chain at ${slippage / 100}%: ${JSON.stringify(preCheck.value!.err)}`);
+                } else {
+                  signature = jitoResult.signature;
+                  confirmed = true;
+                  alreadyConfirmed = true;
+                  console.log(`  [JUPITER] SELL Jito sig already confirmed (late-land) at ${slippage / 100}%: ${signature}`);
+                }
+              }
+            } catch {
+              /* treat as not-found, proceed with re-quote */
+            }
+            if (!alreadyConfirmed && !onChainError) {
+              console.log(`  [JUPITER] SELL Jito poll inconclusive at ${slippage / 100}%, sig not on-chain — re-requesting swap with auto priority for RPC fallback`);
+            }
+          } else {
+            console.log(`  [JUPITER] SELL Jito failed at ${slippage / 100}% — re-requesting swap with auto priority for RPC fallback`);
           }
-          const { swapTransaction: fallbackSwapTx } = await fallbackSwapRes.json();
-          const fallbackTx = VersionedTransaction.deserialize(Buffer.from(fallbackSwapTx, "base64"));
-          fallbackTx.sign([keypair]);
-          signature = await connection.sendRawTransaction(fallbackTx.serialize(), {
-            skipPreflight: true,
-            maxRetries: 3,
-          });
-          console.log(
-            `  [JUPITER] SELL sent via RPC (auto priority) at ${slippage / 100}%: ${coinAddress.slice(0, 8)}... → ${signature}`
-          );
+
+          if (!alreadyConfirmed && !onChainError) {
+            const fallbackSwapRes = await jupiterFetchWithBackoff(
+              JUPITER_SWAP_URL,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  quoteResponse,
+                  userPublicKey: walletPubkey,
+                  wrapAndUnwrapSol: true,
+                  prioritizationFeeLamports: "auto",
+                }),
+              },
+              "sell-swap-fallback"
+            );
+            if (!fallbackSwapRes.ok) {
+              console.error(`  [JUPITER] SELL fallback swap tx failed at ${slippage / 100}%: ${fallbackSwapRes.status}`);
+              continue;
+            }
+            const { swapTransaction: fallbackSwapTx } = await fallbackSwapRes.json();
+            const fallbackTx = VersionedTransaction.deserialize(Buffer.from(fallbackSwapTx, "base64"));
+            fallbackTx.sign([keypair]);
+            signature = await connection.sendRawTransaction(fallbackTx.serialize(), {
+              skipPreflight: true,
+              maxRetries: 3,
+            });
+            console.log(
+              `  [JUPITER] SELL sent via RPC (auto priority) at ${slippage / 100}%: ${coinAddress.slice(0, 8)}... → ${signature}`
+            );
+          }
         }
 
-        if (!confirmed) {
-          // Blocking confirmation — must know result before returning
+        if (!confirmed && !onChainError) {
+          // Blocking confirmation — must know result before returning.
+          // Skip if onChainError already set (Jito sig confirmed with err).
           console.log(`  [JUPITER] SELL waiting for confirmation (up to 60s)...`);
 
         try {
