@@ -46,6 +46,99 @@ const SELL_SLIPPAGE_BPS = [500, 1000, 2000, 3000]; // Auto-escalate: 5% → 10% 
 // BASED/Nintondo/Dicknald (mark diverged from real fill by 40-95pp).
 const JITO_TIP_LAMPORTS = 1_000_000; // 0.001 SOL
 
+// Jito block engine bundle endpoint (public, no auth required).
+// sendBundle atomically lands the tx with the tip; getBundleStatuses
+// polls landing. Falls back to public RPC on any Jito failure — we
+// never want a Jito outage to block a sell.
+const JITO_BUNDLE_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles";
+const JITO_POLL_INTERVAL_MS = 2_000;
+const JITO_POLL_TIMEOUT_MS = 60_000;
+
+/**
+ * Submit a signed VersionedTransaction via Jito block engine bundle.
+ * Returns { signature, landed } on success, null on Jito-side failure
+ * (the caller should fall back to public RPC in that case).
+ *
+ * Landing is confirmed by polling getBundleStatuses every 2s up to 60s.
+ */
+async function submitViaJito(
+  tx: VersionedTransaction,
+  label: string
+): Promise<{ signature: string; landed: boolean } | null> {
+  // Extract the base58 signature BEFORE any submission — we need it to
+  // poll landing status regardless of which path lands the tx.
+  const sigBytes = tx.signatures[0];
+  if (!sigBytes || sigBytes.length === 0) {
+    console.error(`  [JITO] ${label}: tx has no signature, cannot submit`);
+    return null;
+  }
+  const signature = bs58.encode(sigBytes);
+
+  const serialized = Buffer.from(tx.serialize()).toString("base64");
+  try {
+    const res = await fetch(JITO_BUNDLE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "sendBundle",
+        params: [[serialized], { encoding: "base64" }],
+      }),
+    });
+    if (!res.ok) {
+      console.error(`  [JITO] ${label}: sendBundle HTTP ${res.status}`);
+      return null;
+    }
+    const json: any = await res.json();
+    if (json.error) {
+      console.error(`  [JITO] ${label}: sendBundle error ${JSON.stringify(json.error)}`);
+      return null;
+    }
+    const bundleId = json.result as string;
+    console.log(`  [JITO] Bundle submitted: ${label} bundleId=${bundleId} sig=${signature.slice(0, 16)}...`);
+
+    // Poll status
+    const deadline = Date.now() + JITO_POLL_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, JITO_POLL_INTERVAL_MS));
+      try {
+        const sres = await fetch(JITO_BUNDLE_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getBundleStatuses",
+            params: [[bundleId]],
+          }),
+        });
+        if (!sres.ok) continue;
+        const sjson: any = await sres.json();
+        const statuses = sjson.result?.value ?? [];
+        const entry = statuses[0];
+        if (!entry) continue; // not found yet
+        const cs = entry.confirmation_status;
+        if (cs === "confirmed" || cs === "finalized") {
+          if (entry.err) {
+            console.error(`  [JITO] Bundle failed on-chain: ${label} err=${JSON.stringify(entry.err)}`);
+            return { signature, landed: false };
+          }
+          console.log(`  [JITO] Bundle landed: ${label} ${cs} sig=${signature.slice(0, 16)}...`);
+          return { signature, landed: true };
+        }
+      } catch {
+        // transient poll failure — keep trying until deadline
+      }
+    }
+    console.log(`  [JITO] Bundle poll timeout after ${JITO_POLL_TIMEOUT_MS / 1000}s: ${label} — falling back to RPC check`);
+    return { signature, landed: false };
+  } catch (err: any) {
+    console.error(`  [JITO] ${label}: submission crashed ${err.message}`);
+    return null;
+  }
+}
+
 function isDevnet(): boolean {
   return process.env.SOLANA_NETWORK === "devnet";
 }
@@ -227,20 +320,41 @@ export async function buyToken(
     }
     const { swapTransaction } = await swapRes.json();
 
-    // 3. Deserialize, sign, and send
+    // 3. Deserialize, sign, and send via Jito bundle (fallback to public RPC)
     const connection = getConnection();
     const txBuf = Buffer.from(swapTransaction, "base64");
     const tx = VersionedTransaction.deserialize(txBuf);
     tx.sign([keypair]);
 
-    const signature = await connection.sendRawTransaction(tx.serialize(), {
-      skipPreflight: true,
-      maxRetries: 3,
-    });
-
-    console.log(
-      `  [JUPITER] BUY sent: ${coinAddress.slice(0, 8)}... ${amountSol} SOL → ${signature}`
-    );
+    let signature: string;
+    const jitoResult = await submitViaJito(tx, `BUY ${coinAddress.slice(0, 8)}`);
+    if (jitoResult && jitoResult.landed) {
+      // Jito confirmed landing — no need for further RPC confirmation
+      console.log(
+        `  [JUPITER] BUY sent via Jito: ${coinAddress.slice(0, 8)}... ${amountSol} SOL → ${jitoResult.signature}`
+      );
+      return jitoResult.signature;
+    }
+    if (jitoResult && !jitoResult.landed) {
+      // Jito submitted but bundle didn't land within 60s — tx may still
+      // land late; reuse the same signature and let the RPC-status-poll
+      // below resolve final state. Do NOT re-submit via RPC (duplicate
+      // signature would dedupe anyway but wastes an RPC call).
+      signature = jitoResult.signature;
+      console.log(
+        `  [JUPITER] BUY Jito poll inconclusive — verifying via RPC: ${signature.slice(0, 16)}...`
+      );
+    } else {
+      // Jito submission itself failed — fall back to public RPC submission
+      console.log(`  [JUPITER] BUY Jito submission failed — falling back to public RPC`);
+      signature = await connection.sendRawTransaction(tx.serialize(), {
+        skipPreflight: true,
+        maxRetries: 3,
+      });
+      console.log(
+        `  [JUPITER] BUY sent via RPC: ${coinAddress.slice(0, 8)}... ${amountSol} SOL → ${signature}`
+      );
+    }
 
     // Wait for confirmation — must know if buy landed before tagging [LIVE]
     // Retry up to 6 times with 10s intervals (total ~60s) to handle slow RPC
@@ -422,24 +536,47 @@ export async function sellToken(
         }
         const { swapTransaction } = await swapRes.json();
 
-        // 3. Deserialize, sign, and send
+        // 3. Deserialize, sign, and send via Jito bundle (fallback to public RPC)
         const txBuf = Buffer.from(swapTransaction, "base64");
         const tx = VersionedTransaction.deserialize(txBuf);
         tx.sign([keypair]);
 
-        const signature = await connection.sendRawTransaction(tx.serialize(), {
-          skipPreflight: true,
-          maxRetries: 3,
-        });
-
-        console.log(
-          `  [JUPITER] SELL sent at ${slippage / 100}%: ${coinAddress.slice(0, 8)}... → ${signature}`
-        );
-
-        // Blocking confirmation — must know result before returning
-        console.log(`  [JUPITER] SELL waiting for confirmation (up to 60s)...`);
+        let signature: string;
         let confirmed = false;
         let onChainError: any = null;
+
+        const jitoResult = await submitViaJito(
+          tx,
+          `SELL ${coinAddress.slice(0, 8)} ${slippage / 100}%`
+        );
+        if (jitoResult && jitoResult.landed) {
+          signature = jitoResult.signature;
+          confirmed = true;
+          console.log(
+            `  [JUPITER] SELL sent via Jito at ${slippage / 100}%: ${coinAddress.slice(0, 8)}... → ${signature}`
+          );
+        } else if (jitoResult && !jitoResult.landed) {
+          // Jito submitted; bundle didn't confirm within 60s. Reuse the
+          // signature and let the RPC poll below resolve the state.
+          signature = jitoResult.signature;
+          console.log(
+            `  [JUPITER] SELL Jito poll inconclusive at ${slippage / 100}% — verifying via RPC: ${signature.slice(0, 16)}...`
+          );
+        } else {
+          // Jito submission failed — fall back to public RPC
+          console.log(`  [JUPITER] SELL Jito submission failed at ${slippage / 100}% — falling back to public RPC`);
+          signature = await connection.sendRawTransaction(tx.serialize(), {
+            skipPreflight: true,
+            maxRetries: 3,
+          });
+          console.log(
+            `  [JUPITER] SELL sent via RPC at ${slippage / 100}%: ${coinAddress.slice(0, 8)}... → ${signature}`
+          );
+        }
+
+        if (!confirmed) {
+          // Blocking confirmation — must know result before returning
+          console.log(`  [JUPITER] SELL waiting for confirmation (up to 60s)...`);
 
         try {
           const conf = await connection.confirmTransaction(signature, "confirmed");
@@ -470,6 +607,7 @@ export async function sellToken(
             }
           }
         }
+        } // end if (!confirmed)
 
         if (confirmed) {
           console.log(`  [JUPITER] SELL confirmed on-chain: ${signature}`);
