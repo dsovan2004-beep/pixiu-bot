@@ -37,6 +37,15 @@ export function wasLastSellUnsellable(mint: string): boolean {
 const BUY_SLIPPAGE_BPS = 1000; // 10% for buys — pump.fun tokens need higher
 const SELL_SLIPPAGE_BPS = [500, 1000, 2000, 3000]; // Auto-escalate: 5% → 10% → 20% → 30% on retry
 
+// Sprint 10 Phase 1 (Apr 18 PM) — Jito tip on every swap.
+// 0.001 SOL flat tip routed to Jito validators via prioritizationFeeLamports.
+// Addresses sandwich MEV and lands us in the same block as the tx we depend
+// on. Every dominant pump.fun bot (Axiom, BullX, Photon, Trojan, Banana Gun,
+// BonkBot) ships tips; running without one means our txs get front-run and
+// back-run during drainage windows — which is exactly what happened on
+// BASED/Nintondo/Dicknald (mark diverged from real fill by 40-95pp).
+const JITO_TIP_LAMPORTS = 1_000_000; // 0.001 SOL
+
 function isDevnet(): boolean {
   return process.env.SOLANA_NETWORK === "devnet";
 }
@@ -207,7 +216,7 @@ export async function buyToken(
           quoteResponse,
           userPublicKey: walletPubkey,
           wrapAndUnwrapSol: true,
-          prioritizationFeeLamports: "auto",
+          prioritizationFeeLamports: { jitoTipLamports: JITO_TIP_LAMPORTS },
         }),
       },
       "buy-swap"
@@ -402,7 +411,7 @@ export async function sellToken(
               quoteResponse,
               userPublicKey: walletPubkey,
               wrapAndUnwrapSol: true,
-              prioritizationFeeLamports: "auto",
+              prioritizationFeeLamports: { jitoTipLamports: JITO_TIP_LAMPORTS },
             }),
           },
           "sell-swap"
