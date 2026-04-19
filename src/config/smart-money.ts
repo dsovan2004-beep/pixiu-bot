@@ -57,7 +57,12 @@ export const MIN_TOKEN_AGE_MINUTES = 30;
 // entries. Clustered multi-wallet buys were anti-selecting; those tokens
 // get pumped then dumped as the cluster exits together. If >1 distinct
 // wallet has signaled BUY on the same mint within the last 5min, skip.
-export const MAX_CO_BUYERS_5MIN = 1;
+// Loosened 1 → 2 on 2026-04-19 after 40+ min drought with zero FILTER PASS.
+// Original (≤1) meant only "lone wolf" — just the followed wallet, no cluster.
+// On pump.fun most signals have at least one other followed wallet co-buying
+// within seconds, so ≤1 filtered ~everything. ≤2 still blocks the 3+ wallet
+// pump clusters that anti-selected fat-tail winners in postmortem.
+export const MAX_CO_BUYERS_5MIN = 2;
 
 // Late-confirm window for Jupiter buys (Bug P1).
 // After a buy is marked "failed", check on-chain again after this delay —
