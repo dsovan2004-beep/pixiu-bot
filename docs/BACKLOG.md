@@ -5,6 +5,98 @@ when shipped, then delete from here.
 
 ---
 
+## Sprint 10 — Day 2 Phase 2+3 shipped (Apr 19 PM UTC — filters, holder monitor, timeout)
+
+Continued from AM execution hardening. This half of the day shipped:
+**(a)** Jito fallback bug fixes after Phase 1 drops exposed real-world
+issues; **(b)** data-driven entry filters from the postmortem; **(c)**
+academic-validated rug filters (SolRugDetector); **(d)** one fat-tail
+win locked in (Soltards +284%).
+
+### Sprint 10 Day 2 PM commits (chronological)
+
+| Commit | What |
+|---|---|
+| `15da784` | `fix(jupiter-swap): re-quote with auto priority on Jito fallback` — Apex Penguin drop-tx bug |
+| `5beeda4` | `fix(jupiter-swap): re-quote on Jito poll-timeout` (not just on submit failure) |
+| `b38ee9e` | `fix(jupiter-swap): initialize signature variable for TS strict check` |
+| `09fc37a` | `chore(config): revert daily loss limit 0.50 → 0.25` |
+| `ef4a2c5` | `feat(scripts): daily-postmortem diagnostic` — 5 analytical cuts, read-only |
+| `9327b3e` | `chore(config): raise daily loss limit 0.25 → 0.50` **again, tonight only — REVERT** |
+| `5601e1f` | `feat(executor): entry filter — skip tokens <30min old` |
+| `f5e7b66` | `feat(executor): entry filter — skip if >1 co-buyer within 5min` |
+| `14d8861` | `feat(executor): log every filter decision (pass/skip with reason)` |
+| `1eba735` | `fix(executor): mark filtered rows as status=failed` (phantom cleanup) |
+| `13dd0ab` | `feat(risk-guard): tighten timeout 20min → 10min` |
+| `525e18b` | `fix(dashboard): timeout countdown 20 → 10` |
+| `24c43e9` | `chore(config): loosen co-buyer filter 1 → 2` (after 40min drought) |
+| `3c5b1e6` | `feat(executor): freeze authority pre-buy check` — SolRugDetector 93% precision |
+| `a2f4990` | `feat(risk-guard): holder drop >73% emergency exit` — SolRugDetector τ_down=0.73 |
+
+### What shipped (runtime behavior, PM half)
+
+**Jito fallback robustness (c2911a4 family):**
+- Unified Jito-failure handling: 429, submit-fail, AND poll-timeout
+  all trigger re-quote with auto priority
+- One-shot RPC sig check before re-submit → prevents double-submit
+- Skip the 60s RPC confirmation poll when onChainError is known
+
+**Entry filters (postmortem-driven):**
+- `MIN_TOKEN_AGE_MINUTES = 30` — skip tokens younger than 30min at
+  first-seen. Postmortem showed <5min = 31.8% WR / −0.20 SOL vs
+  >6h = 50% WR / +0.075 SOL.
+- `MAX_CO_BUYERS_5MIN = 2` — originally 1 (based on fat-tail N=2),
+  loosened to 2 after 40min drought. Still blocks 3+ wallet pump
+  clusters.
+- Filtered rows marked `status=failed` so guard doesn't adopt as
+  phantoms after the 2-min pre-confirm window.
+
+**Timeout tightened 20 → 10 min:**
+- Research + postmortem: pump.fun winners moonshot in first 5-8 min
+  or not at all. 20min let stale losers bleed. L3 trailing still
+  bypasses timeout so moonshots ride.
+
+**Academic-validated rug filters (Tier A):**
+- **Freeze authority check (3c5b1e6)**: if mint has freeze authority
+  set, creator can freeze holder accounts. SolRugDetector (ArXiv
+  2603.24625) validated, 93% precision. Rare catch (only 2 of 117
+  paper rugs used this) but near-zero false positives.
+- **Holder exodus monitor (a2f4990)**: snapshot top-20 holders at
+  entry (excluding bonding curve / LP). Every 60s re-query. If
+  >73% of entry holders have exited OR summed balance dropped
+  >73%, emergency close with `exit_reason='holder_rug'`. Targets
+  the 76% of SolRugDetector Pump-and-Dump class (89 of 117 rugs).
+
+### Day 2 results
+
+**Wins (all trailing_stop L3):**
+- Soltards: +0.1486 SOL (+284.85%, 1 wallet, 15h-old token)
+
+**Losses (small, execution-clean):**
+- Shrek2 SL −0.0025 / Potoooooooo TO −0.0058 (Phase 1 execution
+  working; sim recoveries of 94-104% confirmed mid-flight).
+- Multiple pre-Phase-1 trades drained the daily limit earlier.
+
+**Filter-era trades:** 2 (Shrek2 via filter pass, Potoooooooo via
+filter pass) — sample too small to validate WR uplift yet.
+
+**Session wallet trajectory:** 1.619 → 1.6243 (peak after Soltards)
+→ 1.4757 by end of filter-era. Net session: roughly flat-to-mild-down
+depending on exact close.
+
+### Sprint 10 Day 2 AM commits (chronological)
+
+| Commit | What |
+|---|---|
+| `06f0c09` | `fix(risk-guard): disable whale_exit` — pool drainage race, Dicknald evidence |
+| `c2911a4` | `feat(jupiter-swap): add Jito tip to swap requests (0.001 SOL)` |
+| `f11021d` | `feat(jupiter-swap): submit via Jito bundle with public RPC fallback` |
+| `958b8f5` | `feat(risk-guard): pre-flight sim check on sells, abort if recovery <30%` |
+| `5972157` | `docs(journal): Sprint 10 Phase 1 execution hardening entry` |
+| `8084cec` | `chore(config): DAILY_LOSS_LIMIT_SOL 0.25 → 0.50` — **TEMPORARY, revert after validation** |
+
+---
+
 ## Sprint 10 — Day 2 Phase 1 shipped (Apr 19 AM UTC — execution hardening)
 
 Evening session after Dicknald post-mortem + BASED / Nintondo
@@ -91,15 +183,51 @@ Total: 22 trades, 28.6% WR, **−0.1787 SOL** (−16.4% ROI on capital deployed)
 
 ## Sprint 10 — remaining candidates
 
-### P0 — **REVERT DAILY_LOSS_LIMIT_SOL 0.50 → 0.25**
+### P0 — **REVERT DAILY_LOSS_LIMIT_SOL 0.50 → 0.25 (again)**
 
-`8084cec` was a one-night bump so Phase 1 could validate without
-waiting 15h for UTC reset. Revert after ~10 closed trades of Phase 1
-data regardless of outcome. Do not leave at 0.50 — real exposure per
-trade is still 0.05 SOL, but 0.50 means 10 full losers before halt
-which is wider than the wallet can tolerate.
+Bumped TWICE today (`8084cec` → reverted by `09fc37a` → re-bumped
+by `9327b3e`). Leave at 0.50 only through tonight's run; revert
+tomorrow AM regardless of outcome. Pattern is getting repeat-y.
 
-### P0 — Validate Phase 1 on 10+ trades
+### P0 — Phase 3: liquidity velocity metric (strongest ArXiv predictor)
+
+ArXiv 2602.14860 (655K-token study) identified **liquidity velocity**
+(SOL accumulated per trade count) as "the single most informative
+predictor of graduation." We track NONE of this currently.
+
+Implementation:
+1. Sample 20–30 pump.fun tokens (mix of graduated + non-graduated)
+   to establish the velocity distribution baseline.
+2. Add pre-buy metric: `velocity = sol_in_curve / trade_count_since_launch`
+3. If velocity > p75 of sample baseline → PASS bonus; if < p25 → add
+   as skip condition (or size-down via Tier 3).
+
+Needs sampling before threshold can be set. Estimated half-day.
+
+### P0 — Phase 3: top-K holder concentration relative to pump.fun baseline
+
+MemeTrans (ArXiv 2602.13480) confirmed top 10-20 buyer concentration
+is **17-19pp higher for rugs**. No paper validates "30% top-10" as
+an absolute threshold — it's a delta from the pump.fun baseline.
+
+Implementation:
+1. Sample 100 recent pump.fun tokens at 30-min age → compute median
+   top-10 concentration (likely ~25-35% due to bonding curve mechanics).
+2. Set `SKIP if top_10_pct > baseline + 17pp`.
+
+Needs same sampling pass as liquidity velocity. Do them together.
+
+### P0 — Validate Phase 1+2 on 20+ post-filter trades
+
+Current post-filter sample: 2 trades (Shrek2 −$0.21, Potoooooooo
+−$0.50). Way too small. Watch for:
+- `[FILTER] PASS` rate vs `SKIP` rate
+- `[GUARD] [HOLDER]` retention distribution — validate the 73%
+  threshold isn't too loose (no rug fires on healthy positions)
+- `[FILTER] SKIP ... freeze authority present` — expect very rare
+- `[GUARD] Sim recovery: X%` distribution on filter-era sells
+- Mark-vs-real divergence post-filters — does filtering reduce?
+- Real WR on filter-era trades — target >30% (current 20%)
 
 Need log/DB distribution of:
 - `[GUARD] Sim recovery: X%` on every sell (gated or not). Expected
