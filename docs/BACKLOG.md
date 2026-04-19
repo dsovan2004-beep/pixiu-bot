@@ -5,6 +5,55 @@ when shipped, then delete from here.
 
 ---
 
+## Sprint 10 — Day 2 Phase 1 shipped (Apr 19 AM UTC — execution hardening)
+
+Evening session after Dicknald post-mortem + BASED / Nintondo
+mark-vs-real divergence. Surgical execution-path rebuild:
+Jito bundles + pre-flight sim gate. See JOURNAL entry for full detail.
+
+### Sprint 10 Day 2 commits (chronological)
+
+| Commit | What |
+|---|---|
+| `06f0c09` | `fix(risk-guard): disable whale_exit` — pool drainage race, Dicknald evidence |
+| `c2911a4` | `feat(jupiter-swap): add Jito tip to swap requests (0.001 SOL)` |
+| `f11021d` | `feat(jupiter-swap): submit via Jito bundle with public RPC fallback` |
+| `958b8f5` | `feat(risk-guard): pre-flight sim check on sells, abort if recovery <30%` |
+| `5972157` | `docs(journal): Sprint 10 Phase 1 execution hardening entry` |
+| `8084cec` | `chore(config): DAILY_LOSS_LIMIT_SOL 0.25 → 0.50` — **TEMPORARY, revert after validation** |
+
+### What changed (runtime behavior)
+
+- **Every swap carries a 0.001 SOL Jito tip** (jitoTipLamports in
+  prioritizationFeeLamports)
+- **Swaps submit via Jito block engine bundle** with public RPC as
+  fallback. On Jito submitted-but-not-confirmed we reuse the signature
+  and let RPC polling resolve (no duplicate submission).
+- **Rescue-exit sells (whale/CB/SL/trailing) run a pre-flight sim
+  gate.** If quoted recovery < 30% of entry SOL cost, abort and revert
+  `closing → open`. Grid take_profit bypasses the gate (voluntary).
+- **Sim recovery % logged on every sell** for floor-tuning data.
+- **`wasSellSimAborted(mint)` helper** in jupiter-swap; risk-guard
+  reads read-once to distinguish drain-abort from transient failure.
+
+### Safety rails held
+
+- No change to CB / SL / TO / grid / trailing triggers
+- No change to slippage ladder (5 → 10 → 20 → 30%)
+- whale_exit stays DISABLED
+- `sellToken` opts param optional → all scripts still compile
+- `buyToken` only gained tip + bundle; NO sim check (entry latency preserved)
+
+### Day 2 evening results
+
+Zero trades closed on the new code yet — Phase 1 shipped after the
+Day 1 bleed exhausted the daily limit. Shipped the temporary
+`DAILY_LOSS_LIMIT_SOL` bump so Phase 1 could be exercised without
+waiting for 00:00 UTC. Signal feed went quiet after restart; bot
+running idle, Telegram armed.
+
+---
+
 ## Sprint 10 — Day 1 shipped (Apr 18 PM)
 
 Framework rebuild + safety rails. See `docs/JOURNAL.md` for the full
@@ -42,7 +91,29 @@ Total: 22 trades, 28.6% WR, **−0.1787 SOL** (−16.4% ROI on capital deployed)
 
 ## Sprint 10 — remaining candidates
 
-### P0 — Measure new thresholds (48h observation)
+### P0 — **REVERT DAILY_LOSS_LIMIT_SOL 0.50 → 0.25**
+
+`8084cec` was a one-night bump so Phase 1 could validate without
+waiting 15h for UTC reset. Revert after ~10 closed trades of Phase 1
+data regardless of outcome. Do not leave at 0.50 — real exposure per
+trade is still 0.05 SOL, but 0.50 means 10 full losers before halt
+which is wider than the wallet can tolerate.
+
+### P0 — Validate Phase 1 on 10+ trades
+
+Need log/DB distribution of:
+- `[GUARD] Sim recovery: X%` on every sell (gated or not). Expected
+  healthy range 0.70–1.50; abort band <0.30.
+- `[JITO] Bundle landed` vs `[JITO] Bundle failed → RPC fallback`
+  ratio. If >30% fall through to RPC consistently, get a Jito API
+  key (rate-limit hypothesis).
+- Mark-vs-real divergence on rescue exits. If still >20pp after
+  Jito+sim, the tip is too low and/or Jito isn't routing; consider
+  bumping 0.001 → 0.002 SOL.
+- Any false sim-abort (pool NOT drained but gate fired). Tells us
+  the 0.30 floor is too tight.
+
+### P0 — Measure old thresholds (48h observation)
 
 Behavioral fixes shipped this session need data before declaring good
 or rolling back:
