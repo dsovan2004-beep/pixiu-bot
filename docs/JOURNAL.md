@@ -5,6 +5,61 @@ Newest first.
 
 ---
 
+## 2026-04-19 (early morning UTC) — whale_exit DISABLED after Dicknald post-mortem
+
+First trade post daily-limit reset. Dicknald Trump closed −97.48% real
+on a −9.45% mark — 88pp divergence. Read-only investigation pointed
+cleanly at AMM depth depletion, not honeypot or transfer fee.
+
+### Post-mortem facts (verified on-chain)
+
+- **Tokens bought:** 51,638,452,990 at slot 414148529 for 0.050005 SOL
+- **Tokens sold:** 51,638,452,990 at slot 414148816 (~287 slots / 2 min later) for 0.001260 SOL
+- **Recovery rate:** 2.52% of entry
+- **Sell tx sig:** `65KGwpFd74vo5MBgi1JYTV2yok5vohmaVFmhZZybLYR1x5QdgPeJZ24HySGju1npFUpiEbs1iRePYS7iVE3ffFrn`
+- **Sell tx err:** null. Confirmed on FIRST 5% slippage attempt — no cascade.
+- **Mint:** Token-2022 with ONLY `metadataPointer` + `tokenMetadata` extensions. NO `TransferFeeConfig`, NO `TransferHook`. Not a honeypot.
+- **AMM:** pump.fun post-graduation AMM program `pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`
+
+### Root cause
+
+Jupiter's quote at sell time priced 51.6B tokens at 0.001260 SOL. The
+sell executed within 5% of that quote. DexScreener mid-price at the
+same moment read −9.5%. Mark and on-chain pool diverged by 88pp because
+DexScreener caches pool state with 5-30s latency, and the followed
+whale (GMGN_SM_5) dumped into the AMM between our buy and our sell.
+
+By the time whale_exit fires, the whale's tx has already landed — the
+pool is drained. Our reactive sell eats whatever dust is left.
+"Require mark confirmation" wouldn't help because the mark source is
+slower than the state it's supposed to verify.
+
+### Fix
+
+Commit `3a84c6c` (hypothetical — filled in below): `WHALE_EXIT_ENABLED = false`.
+
+Logic kept intact, just flag-gated. Can re-enable if a predictive
+signal materializes (exit BEFORE the whale, not after). SL (−10%),
+CB (L0/L1+ −15%), trailing, and TO are now the only exits.
+
+### Pre-disable whale_exit track record
+
+6 L0 WE trades this sprint:
+
+| Coin | Real % | Notes |
+|---|---|---|
+| Chud | +22.13% | one winner — whale-into-momentum, not reactive |
+| Dicknald Trump (old) | −7.62% | |
+| Walter | −21.38% | |
+| Asteroid Shiba | −26.33% | |
+| NarutoUzumaki... | −67.98% | |
+| Dicknald Trump (new) | **−97.48%** | pool drainage, this post-mortem |
+
+**1W / 5L, net ~−0.14 SOL.** The one win had nothing to do with the
+reactive-exit mechanism; it was riding momentum the whale created.
+
+---
+
 ## 2026-04-18 (evening) — Sprint 10 DAY 1: framework rebuild + safety rails
 
 Started as real-data observation; evolved into a full day of framework

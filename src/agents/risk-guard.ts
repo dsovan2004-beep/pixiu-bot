@@ -129,6 +129,27 @@ const CIRCUIT_BREAKER_L0_PCT = 15;  // no partials locked yet — exit earlier
 const CIRCUIT_BREAKER_PCT = 15;     // L1+ with partials locked — protect the bank
 const TIMEOUT_MINUTES = 20;
 
+// Sprint 10 Day 1 (Apr 18 PM) — WHALE_EXIT DISABLED.
+//
+// Post-mortem on Dicknald Trump (sell sig
+// 65KGwpFd74vo5MBgi1JYTV2yok5vohmaVFmhZZybLYR1x5QdgPeJZ24HySGju1npFUpiEbs1iRePYS7iVE3ffFrn):
+// 51.6B tokens bought for 0.050005 SOL at slot 414148529; sold 287
+// slots (~2min) later for 0.001260 SOL — 2.52% recovery. DexScreener
+// mark said -9.5% but Jupiter's quote (pump.fun AMM) said -97% at
+// sell time. Sell succeeded at first 5% slippage try, no cascade.
+// Root cause: AMM depth depletion in the 2-min window between our
+// buy and the followed whale's sell. By the time whale_exit fires,
+// the whale's tx has already landed and the pool is drained. Mark
+// sources (DexScreener) lag AMM state by 5-30s so a "require mark
+// confirmation" gate wouldn't help.
+//
+// 6 live L0 WE trades, 1W/5L, net ~-0.14 SOL. The one winner (Chud
+// +22%) was whale-into-momentum, not a repeatable edge.
+//
+// Logic is kept (not deleted) so we can re-enable if we find a
+// predictive signal (e.g. exit BEFORE the whale, not after).
+const WHALE_EXIT_ENABLED = false;
+
 // In-memory peak tracker for trailing mode: tradeId → peak USD price.
 // Resets on bot restart (trailing continues from "peak since restart"
 // instead of absolute peak — minor degradation, no DB migration needed).
@@ -528,15 +549,11 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
       const whaleExits = sellSignals.filter((s) =>
         smartMoneyTags.has(s.wallet_tag)
       );
-      // Real-PnL analysis (Apr 18 2026) across 310 LIVE trades showed
-      // whale_exit as the biggest drain at L0: 94 trades, 23% real WR,
-      // net -1.24 SOL. Mid-price-based WR lagged real Jupiter fills.
-      //
-      // Fix: once L1+ has fired we've already locked ≥ +7.5% on 50% of the
-      // position. Let remaining 50% be protected by SL / trailing / timeout
-      // — don't panic-sell into the whale's dump. whale_exit stays as a
-      // safety net for L0 positions only (where nothing is locked yet).
-      if (whaleExits.length > 0 && currentLevel === 0) {
+      // Kept for observability + future predictive re-enable. Gated by
+      // WHALE_EXIT_ENABLED (Sprint 10 Day 1: disabled after Dicknald
+      // Trump post-mortem — pool drainage race, not recoverable via
+      // mark-confirmation). See constant comment above for full reasoning.
+      if (whaleExits.length > 0 && WHALE_EXIT_ENABLED && currentLevel === 0) {
         const whaleTag = whaleExits[0].wallet_tag;
         const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
         await closeTrade(finalPnl, "whale_exit", currentLevel);
@@ -545,7 +562,13 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
         );
         continue;
       }
-      if (whaleExits.length > 0 && currentLevel > 0) {
+      if (whaleExits.length > 0 && !WHALE_EXIT_ENABLED) {
+        const whaleTag = whaleExits[0].wallet_tag;
+        console.log(
+          `  [GUARD] whale_exit disabled — ignoring ${whaleTag} SELL on ${coinLabel}, letting SL/CB/TO handle`
+        );
+      }
+      if (whaleExits.length > 0 && WHALE_EXIT_ENABLED && currentLevel > 0) {
         console.log(
           `  [GUARD] whale_exit skipped on ${coinLabel} — already at grid L${currentLevel}, letting grid/trailing handle exit`
         );
@@ -653,7 +676,7 @@ export async function startRiskGuard(): Promise<void> {
   const startLive = await isLiveTrading();
   console.log(`  [GUARD] Starting risk guard... (LIVE: ${startLive ? "🔴 ON" : "⚪ OFF"} — dashboard controlled)`);
   console.log(
-    `  [GUARD] Exit priority: CB(L0 -${CIRCUIT_BREAKER_L0_PCT}% / L1+ -${CIRCUIT_BREAKER_PCT}%) > Whale(L0 only) > SL(-${STOP_LOSS_PCT}%) > TO(${TIMEOUT_MINUTES}min) > Grid | Poll: L0 ${POSITION_CHECK_MS_L0 / 1000}s / L1+ ${POSITION_CHECK_MS_L1_PLUS / 1000}s`
+    `  [GUARD] Exit priority: CB(L0 -${CIRCUIT_BREAKER_L0_PCT}% / L1+ -${CIRCUIT_BREAKER_PCT}%) > Whale(${WHALE_EXIT_ENABLED ? "L0 only" : "DISABLED"}) > SL(-${STOP_LOSS_PCT}%) > TO(${TIMEOUT_MINUTES}min) > Grid | Poll: L0 ${POSITION_CHECK_MS_L0 / 1000}s / L1+ ${POSITION_CHECK_MS_L1_PLUS / 1000}s`
   );
 
   // Run immediately across all positions
