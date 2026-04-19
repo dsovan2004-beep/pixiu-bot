@@ -382,7 +382,7 @@ export default function BotPage() {
                     : null;
                 const entryTime = new Date(t.entry_time).getTime();
                 const minutesOpen = (Date.now() - entryTime) / 60_000;
-                const timeoutMin = 20;
+                const timeoutMin = 10; // matches risk-guard TIMEOUT_MINUTES
                 const timeRemaining = Math.max(0, timeoutMin - minutesOpen);
                 const isTrailing = (t.grid_level ?? 0) === 3 && (t.remaining_pct ?? 100) > 0;
                 const sells = whaleSells[t.coin_address] || [];
