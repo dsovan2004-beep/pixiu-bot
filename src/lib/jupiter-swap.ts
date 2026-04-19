@@ -54,6 +54,33 @@ const JITO_BUNDLE_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles";
 const JITO_POLL_INTERVAL_MS = 2_000;
 const JITO_POLL_TIMEOUT_MS = 60_000;
 
+// Sprint 10 Phase 1 — Pre-flight simulation recovery floor.
+// Before signing a sell, we simulate the tx and compare the quoted SOL
+// out against the original entry cost. If recovery is below this floor
+// AND the exit reason is "catastrophic loss" (whale_exit / CB / SL /
+// trailing), we abort — the pool is drained and selling into it just
+// realizes the dust. Grid take_profit exits bypass the floor (they're
+// voluntary partial fills, not rescues).
+//
+// Intentionally narrow at 0.30 — catches the Dicknald-class tail
+// (2.5% recovery) while letting normal −40 to −70% losses through.
+// Tune after 30+ trades of real sim data.
+const SELL_MIN_RECOVERY_FLOOR = 0.30;
+
+// In-memory sim-abort tracker: mint → timestamp of last abort.
+// Caller polls `wasSellSimAborted(mint)` (read-once) to distinguish a
+// pool-drained abort from a transient failure. Risk-guard's existing
+// closingPositions 60s lock already prevents re-fire within the same
+// cycle; this just surfaces the reason for better logging / future
+// cooldown decisions.
+const sellSimAborts = new Map<string, number>();
+export function wasSellSimAborted(mint: string): boolean {
+  const t = sellSimAborts.get(mint);
+  if (t == null) return false;
+  sellSimAborts.delete(mint); // read-once
+  return Date.now() - t < 60_000;
+}
+
 /**
  * Submit a signed VersionedTransaction via Jito block engine bundle.
  * Returns { signature, landed } on success, null on Jito-side failure
@@ -473,11 +500,22 @@ export async function hasTokenBalance(coinAddress: string): Promise<boolean> {
 /**
  * Sell a token for SOL via Jupiter.
  * Automatically fetches on-chain token balance.
+ *
+ * Sprint 10 Phase 1: when `opts.entrySolCost` + `opts.exitReason` are
+ * provided AND the reason is a rescue exit (whale_exit/circuit_breaker/
+ * stop_loss/trailing_stop), runs a pre-flight simulation. If the
+ * simulated SOL out divided by entry cost is below SELL_MIN_RECOVERY_FLOOR,
+ * the sell aborts with a sim-abort flag — the pool is likely drained and
+ * crystallizing the dust doesn't help. Grid take_profit always executes.
+ *
  * @param coinAddress - Token mint address to sell
- * @returns Transaction signature or null on failure
+ * @param opts.entrySolCost - SOL spent on entry (for recovery math)
+ * @param opts.exitReason - Why we're selling (determines sim-gate behavior)
+ * @returns Transaction signature or null on failure / sim abort
  */
 export async function sellToken(
-  coinAddress: string
+  coinAddress: string,
+  opts?: { entrySolCost?: number; exitReason?: string }
 ): Promise<string | null> {
   try {
     const keypair = getKeypair();
@@ -536,9 +574,64 @@ export async function sellToken(
         }
         const { swapTransaction } = await swapRes.json();
 
-        // 3. Deserialize, sign, and send via Jito bundle (fallback to public RPC)
+        // 3. Deserialize (don't sign yet — need to simulate first)
         const txBuf = Buffer.from(swapTransaction, "base64");
         const tx = VersionedTransaction.deserialize(txBuf);
+
+        // 3a. Pre-flight sim gate (rescue exits only).
+        // We always log the sim-implied recovery % for distribution
+        // analysis, but only ABORT on rescue exits when recovery is
+        // below SELL_MIN_RECOVERY_FLOOR.
+        const gatedReasons = new Set([
+          "whale_exit",
+          "circuit_breaker",
+          "stop_loss",
+          "trailing_stop",
+        ]);
+        const shouldGate =
+          opts?.entrySolCost != null &&
+          opts.entrySolCost > 0 &&
+          opts.exitReason != null &&
+          gatedReasons.has(opts.exitReason);
+
+        // Quote's outAmount is the authoritative expected SOL out
+        // (Jupiter already simulated against pool depth). Use it as
+        // the primary recovery signal; the on-chain simulate call
+        // below is a tx-will-execute sanity check.
+        const quoteOutLamports = Number(quoteResponse?.outAmount ?? 0);
+        const expectedSolOut = quoteOutLamports / 1e9;
+        const recovery =
+          opts?.entrySolCost && opts.entrySolCost > 0
+            ? expectedSolOut / opts.entrySolCost
+            : null;
+
+        if (recovery !== null) {
+          console.log(
+            `  [GUARD] Sim recovery: ${(recovery * 100).toFixed(2)}% on ${coinAddress.slice(0, 8)}... (${opts?.exitReason ?? "?"}) | entry ${opts!.entrySolCost!.toFixed(6)} → quoted ${expectedSolOut.toFixed(6)} SOL`
+          );
+        }
+
+        if (shouldGate && recovery !== null && recovery < SELL_MIN_RECOVERY_FLOOR) {
+          // Belt-and-suspenders: also try a chain simulation so we have
+          // two independent signals in logs before aborting.
+          let simErr: any = null;
+          try {
+            const simRes = await connection.simulateTransaction(tx, {
+              commitment: "processed",
+              replaceRecentBlockhash: true,
+            });
+            simErr = simRes.value.err;
+          } catch (e: any) {
+            console.log(`  [GUARD] simulateTransaction crashed: ${e.message} (ignoring, using quote recovery)`);
+          }
+          console.log(
+            `  [GUARD] SELL ABORTED — sim shows recovery ${(recovery * 100).toFixed(2)}% < ${(SELL_MIN_RECOVERY_FLOOR * 100).toFixed(0)}% floor. Pool likely drained. (${opts?.exitReason}, chain sim err=${JSON.stringify(simErr) || "none"})`
+          );
+          sellSimAborts.set(coinAddress, Date.now());
+          return null;
+        }
+
+        // 3b. Sign and send via Jito bundle (fallback to public RPC)
         tx.sign([keypair]);
 
         let signature: string;

@@ -15,7 +15,7 @@ import {
   LIVE_BUY_SOL,
   DAILY_LOSS_LIMIT_SOL,
 } from "../config/smart-money";
-import { sellToken, hasTokenBalance, wasLastSellUnsellable, parseSwapSolDelta } from "../lib/jupiter-swap";
+import { sellToken, hasTokenBalance, wasLastSellUnsellable, wasSellSimAborted, parseSwapSolDelta } from "../lib/jupiter-swap";
 import { sendAlert } from "../lib/telegram";
 
 // Poll cadence split by grid level (Sprint 10 P2a, Apr 18).
@@ -342,7 +342,13 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
         }
 
         console.log(`  [GUARD] [LIVE SELL] ${coinLabel} grid_level=${gridLvl} remaining=${remainingPct}% — selling via Jupiter`);
-        const sig = await sellToken(pos.coin_address);
+        // Pass entry cost + exit reason so jupiter-swap can run the
+        // pre-flight recovery gate on rescue exits (Sprint 10 Phase 1).
+        const entryCostForSim = pos.entry_sol_cost != null ? Number(pos.entry_sol_cost) : undefined;
+        const sig = await sellToken(pos.coin_address, {
+          entrySolCost: entryCostForSim,
+          exitReason,
+        });
         if (sig) {
           console.log(`  [GUARD] 🔴 LIVE SELL executed: ${sig} (${exitReason})`);
 
@@ -385,6 +391,26 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
           //       revert is GATED on status='closing' so we do not
           //       clobber a row that's already been closed by another
           //       path (was the root cause of the double-credit bug).
+          // Sprint 10 Phase 1 — sim-gate abort: pool drained, selling would
+          // realize dust. Revert to 'open' and let the 60s in-memory
+          // closingPositions lock keep us from re-firing this cycle.
+          // Next poll cycle will re-evaluate with fresh quote/sim.
+          if (wasSellSimAborted(pos.coin_address)) {
+            sellLanded = false;
+            console.log(
+              `  [GUARD] 🛑 ${coinLabel} sell aborted by sim gate (${exitReason}) — reverting to open, will re-check next cycle`
+            );
+            await supabase
+              .from("trades")
+              .update({ status: "open", closing_started_at: null })
+              .eq("id", pos.id)
+              .eq("status", "closing");
+            void sendAlert(
+              "sell_failed",
+              `${coinLabel} sell sim-aborted (${exitReason}) — pool drained, held for re-check`
+            );
+            return;
+          }
           if (wasLastSellUnsellable(pos.coin_address)) {
             // (a) mark-to-zero close
             const zeroPnlPct = (pos.partial_pnl ?? 0) + (-100 * remainingPct) / 100;
