@@ -5,6 +5,85 @@ Newest first.
 
 ---
 
+## 2026-04-18 (evening) — Sprint 10 DAY 1: framework rebuild + safety rails
+
+Started as real-data observation; evolved into a full day of framework
+work. Bot now 100% real-only with deposit-safe accounting, tightened
+risk thresholds, reaper race fixed, and auto-resume daily limit.
+
+### Commits (chronological)
+
+| Commit | What |
+|---|---|
+| `3d11157` | Partial unique index `one_open_per_mint_idx` — webhook race can no longer create duplicate open rows |
+| `e31b75b` | `parseSwapSolDelta` uses fee-payer index 0 — fixes ALT decode failure on Jupiter v0 txs |
+| `a386ed2` | **Reaper flip-flop fix** — `closing_started_at` column + migration 014. Reaper now uses close-time, not entry-time. Yoshi stop-loss loop resolved |
+| `c3153cc` | Dashboard stripped of paper framework — real-only stats, no Recovery Goal, no Mode toggle |
+| `d5978bc` | Dashboard includes `status='closing'` rows under Open Positions (no more vanishing mid-close) |
+| `071ace8` | Daily loss limit tightened 2.0 → 0.25 SOL (wallet dropped to 0.82 SOL, old cap too wide) |
+| `11d8c6a` | Migration 015: rename `paper_trades` → `trades`, wipe rows, drop `paper_bankroll`. Fresh real-only DB |
+| `d7829b4` | Backlog: Sprint 10 post-session findings |
+| `bf149dc` | **L1+ CB tightened −25% → −15%** (was 0W/2L, banked profit giving back past entry) |
+| `be206c4` | Full scrub — 'paper' word removed from entire repo (33 files, 4 migration renames) |
+| `eba800a` | Kill hardcoded `STARTING_SOL`. Dashboard shows Wallet/Wallet USD/Trade PnL/Trade ROI — deposit-safe |
+| `5d68772` | Daily loss limit no longer writes `is_running=false`. Counter-based gate auto-clears at midnight UTC |
+
+### Real results (Sprint 10 Day 1, 22 LIVE trades post-rebuild)
+
+```
+Win Rate:   28.6%   (6W / 16L)
+Trade PnL:  −0.1787 SOL (−$15.38)
+Trade ROI:  −16.41%  (on ~1.09 SOL deployed)
+Avg Win:    +24.15%
+Avg Loss:   −32.74%
+Wallet:     1.77 SOL after $95 deposit
+```
+
+### Exit reason breakdown — matches Sprint 9 Day 2 pattern
+
+| Reason | Trades | Net SOL | Real WR | Note |
+|---|---|---|---|---|
+| trailing_stop | 2 | +0.0572 | 100% | Asteroid +100.8%, PercyJackson +8.87% — **proven edge** |
+| circuit_breaker | 9 | −0.1144 | 22% | biggest drain; L0 dominates |
+| whale_exit | 5 | −0.0725 | 20% | still underperforming even L0-only |
+| stop_loss | 3 | −0.042 | 0% | all on L1/L2 — giving back banked profit |
+| timeout | 2 | −0.019 | 50% | |
+
+### Architectural decisions
+
+- **Mark-to-market vs real — fully separated.** `pnl_pct` / `pnl_usd` columns remain in `trades` but are no longer written. All outcome accounting flows from `real_pnl_sol`. Mark-to-market is an internal trigger signal only.
+- **Wallet display vs performance accounting — decoupled.** Dashboard wallet card = live Helius RPC balance. Performance cards derived only from `real_pnl_sol` / `entry_sol_cost`. Deposits & withdrawals no longer affect metrics.
+- **Daily loss limit — soft gate.** No longer halts bot. Per-buy check in executor blocks entries until midnight UTC rollover. Bot stays RUNNING throughout.
+
+### Bugs fixed this session
+
+- **Webhook race** (3d11157): 5 duplicate rows from one Cupsey signal storm
+- **ALT decode** (e31b75b): parseSwapSolDelta was failing silently on v0 txs with Address Lookup Tables
+- **Reaper flip-flop** (a386ed2): stuck close loops on trades > 5 min old
+- **STARTING_SOL hardcode** (eba800a): deposit of 1.1 SOL showed as −1.1 SOL loss on dashboard
+- **Daily limit auto-halt** (5d68772): required manual START BOT click every day after limit trip
+
+### Sanity check: 19/19 passed
+
+```
+▸ Database schema: trades table ok, paper_* all removed, all cols present, unique index enforced
+▸ Bot state: mode=live, is_running=true
+▸ Config: LIVE_BUY_SOL=0.05, DAILY_LOSS_LIMIT_SOL=0.25, CB L0/L1+=15/15
+▸ Source: daily limit no longer writes is_running=false
+▸ Runtime code: zero 'paper' references
+▸ APIs: phantom-balance returns only {sol, usd, lamports, solPrice}; settings returns live_trading:true
+▸ Tables: coin_signals ok, 751 active wallets
+```
+
+### State at sign-off
+
+- Bot: RUNNING, watching for 2+ smart-money confirmers
+- Wallet: 1.77 SOL ($152) after deposit
+- Daily limit: 0/0.25 SOL (fresh counter, midnight UTC rolled)
+- Next: observe L1+ −15% CB behavior and trailing_stop conversion rate
+
+---
+
 ## 2026-04-18 (afternoon) — Sprint 9 P0 COMPLETE + strategy changes from real data
 
 Backfill finished all 310 LIVE trades, dashboard flipped to real math,
