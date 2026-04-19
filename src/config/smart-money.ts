@@ -45,6 +45,12 @@ export const LIVE_BUY_SOL = 0.05;
 // the bag. 0.25 SOL caps overnight bleed at ~5 losing trades worth.
 export const DAILY_LOSS_LIMIT_SOL = 0.50;
 
+// Sprint 10 Phase 2 — entry filter: token age at entry.
+// Postmortem 2026-04-19 showed <5min-old tokens had 31.8% WR / -0.20 SOL,
+// while >6h-old had 50% WR / +0.075 SOL. Skipping freshest tokens should
+// tilt the distribution away from the biggest loss bucket.
+export const MIN_TOKEN_AGE_MINUTES = 30;
+
 // Late-confirm window for Jupiter buys (Bug P1).
 // After a buy is marked "failed", check on-chain again after this delay —
 // if the wallet now holds the token, the buy actually landed late.

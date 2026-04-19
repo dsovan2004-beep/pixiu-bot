@@ -13,6 +13,7 @@ import {
   LIVE_BUY_SOL,
   DAILY_LOSS_LIMIT_SOL,
   BUY_RESCUE_DELAY_MS,
+  MIN_TOKEN_AGE_MINUTES,
 } from "../config/smart-money";
 import { sendAlert } from "../lib/telegram";
 
@@ -183,6 +184,30 @@ export async function startTradeExecutor(): Promise<void> {
         if (totalLossSol >= DAILY_LOSS_LIMIT_SOL) {
           console.log(`  [EXECUTOR] 🛑 LIVE BUY skipped — daily loss limit: ${todayLosses} losses, real SOL lost: ${totalLossSol.toFixed(3)} (max ${DAILY_LOSS_LIMIT_SOL} SOL, resets midnight UTC)`);
           continue;
+        }
+
+        // ── Entry filter: token age ≥ MIN_TOKEN_AGE_MINUTES ──
+        // Uses min(coin_signals.signal_time) as proxy for first-seen. If
+        // no prior signal exists for this mint, we consider it age=0 (we
+        // are the first observation) and skip — that's the freshest
+        // bucket and the worst-performing in today's postmortem.
+        {
+          const { data: firstSignal } = await supabase
+            .from("coin_signals")
+            .select("signal_time")
+            .eq("coin_address", trade.coin_address)
+            .order("signal_time", { ascending: true })
+            .limit(1);
+          const firstSeenMs = firstSignal?.[0]
+            ? new Date(firstSignal[0].signal_time).getTime()
+            : Date.now();
+          const ageMin = (Date.now() - firstSeenMs) / 60_000;
+          if (ageMin < MIN_TOKEN_AGE_MINUTES) {
+            console.log(
+              `  [FILTER] SKIP ${coin} — age ${ageMin.toFixed(1)}min < ${MIN_TOKEN_AGE_MINUTES}min threshold`
+            );
+            continue;
+          }
         }
 
         activeBuys.add(trade.coin_address);
