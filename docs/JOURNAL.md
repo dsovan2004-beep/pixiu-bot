@@ -5,6 +5,89 @@ Newest first.
 
 ---
 
+## 2026-04-19 (PM UTC) — Sprint 10 Phase 1: execution hardening (Jito + sim gate)
+
+Three surgical commits targeting the real leak surfaced by Sprint 10
+Day 1: mark-vs-real divergence on rescue exits. BASED trailing_stop
+closed at +77% mark / −56% real. Nintondo: +74% mark / −40% real.
+Dicknald whale_exit (already addressed): −9% mark / −97% real. Root
+cause is NOT whale_exit-specific — it's any sell that lands into a
+drained pool. Whale_exit just got there first.
+
+Disabling whale_exit (`06f0c09`) stopped the reactive dumps into
+post-whale depletion, but trailing/CB/SL paths still had no MEV
+protection and no way to detect drainage before signing.
+
+### Commits
+
+| Commit | Change |
+|---|---|
+| `c2911a4` | `feat(jupiter-swap): add Jito tip to swap requests (0.001 SOL)` |
+| `f11021d` | `feat(jupiter-swap): submit via Jito bundle with public RPC fallback` |
+| `958b8f5` | `feat(risk-guard): pre-flight sim check on sells, abort if recovery <30%` |
+
+### What each does
+
+**1. Jito tip.** Swap requests now pass
+`prioritizationFeeLamports: { jitoTipLamports: 1_000_000 }`. Jupiter
+embeds the tip instruction into the returned swap tx. 0.001 SOL
+matches what dominant pump.fun bots (Axiom, BullX, Photon, Trojan,
+BonkBot, Banana Gun) run.
+
+**2. Jito bundle submission.** New `submitViaJito()` helper posts
+`sendBundle` to `https://mainnet.block-engine.jito.wtf/api/v1/bundles`
+(public endpoint, no auth) and polls `getBundleStatuses` every 2s up
+to 60s. Signature is extracted from signed tx before submission so
+it's usable on either path. On Jito HTTP failure → fall back to
+`connection.sendRawTransaction`. On Jito submitted-but-not-confirmed →
+reuse the same signature and let the existing RPC status-poll resolve
+final state (no duplicate submission). Applies to both `buyToken` and
+`sellToken`. Full MEV protection requires BOTH the tip and the bundle
+route — a tip-only tx through public RPC still gets sandwiched.
+
+**3. Pre-flight sim gate.** `sellToken(coinAddress, opts?)` now takes
+optional `{ entrySolCost, exitReason }`. For rescue exits
+(whale_exit / circuit_breaker / stop_loss / trailing_stop) it
+computes `recovery = quote.outAmount / entrySolCost` and aborts when
+recovery < `SELL_MIN_RECOVERY_FLOOR` (0.30). A `connection.simulate
+Transaction` call runs as a secondary sanity check for telemetry.
+Grid `take_profit` always executes regardless (voluntary partial on
+winners, not a rescue). Sim recovery % is logged on every sell so we
+can study the distribution and tune the floor after 30+ trades.
+
+Abort state lives in an in-memory `sellSimAborts` Map with a read-once
+`wasSellSimAborted(mint)` helper. Risk-guard reads it in the sell-
+failed branch, reverts `closing` → `open` with a distinct log + Telegram
+alert. The existing 60s `closingPositions` lock prevents immediate
+re-fire in the same cycle.
+
+### Safety rails (explicit)
+
+- No change to CB / SL / TO / grid / trailing triggers
+- No change to slippage ladder (5 → 10 → 20 → 30%)
+- Whale_exit stays DISABLED
+- Only `sellToken` gets the sim gate; `buyToken` unchanged past the tip
+- Existing error handling (6024 unsellable, 6001 slippage cascade,
+  late-confirm rescue) all preserved
+- Script callers of `sellToken(mint)` keep working — opts is optional
+
+### Floor rationale (0.30)
+
+Intentionally narrow. Catches Dicknald-class tail (2.5% recovery) and
+would have aborted BASED (~44% recovery based on +77% mark / −56%
+real on 0.05 SOL entry) and Nintondo (~60% — NOT gated). So this will
+NOT save every mark-vs-real loser. First cut is designed to block
+only catastrophic drainage (<30%) while letting ordinary losses
+through. Will revisit the threshold after 30+ sim-logged trades.
+
+### Bot state on ship
+
+Bot remains STOPPED. User flips START after reviewing final state.
+Guard still runs when stopped — sim logs will appear on any natural
+close of existing positions.
+
+---
+
 ## 2026-04-19 (early morning UTC) — whale_exit DISABLED after Dicknald post-mortem
 
 First trade post daily-limit reset. Dicknald Trump closed −97.48% real
