@@ -89,24 +89,16 @@ async function checkDailyLossLimit(): Promise<void> {
   if (totalLossSol >= DAILY_LOSS_LIMIT_SOL) {
     dailyLossLimitHit = true;
     console.log(
-      `  [GUARD] 🛑 Daily loss limit hit — ${lossCount} losing trades, real SOL lost: ${totalLossSol.toFixed(3)}`
+      `  [GUARD] 🛑 Daily loss limit hit — ${lossCount} losing trades, real SOL lost: ${totalLossSol.toFixed(3)} (cap ${DAILY_LOSS_LIMIT_SOL} SOL, auto-resumes at midnight UTC)`
     );
     void sendAlert(
       "daily_limit",
-      `Daily loss limit hit: ${lossCount} losses = ${totalLossSol.toFixed(3)} SOL real. Bot stopped.`
+      `Daily loss limit hit: ${lossCount} losses = ${totalLossSol.toFixed(3)} SOL real. Entries paused until midnight UTC.`
     );
-    // Stop the bot via Supabase — executor checks is_running on every poll
-    try {
-      await supabase
-        .from("bot_state")
-        .update({ is_running: false })
-        .eq("is_running", true);
-      console.log(
-        `  [GUARD] Daily loss limit reached — setting bot to STOPPED.`
-      );
-    } catch (err: any) {
-      console.error(`  [GUARD] Failed to stop bot: ${err.message}`);
-    }
+    // Do NOT flip is_running=false. The per-buy daily_limit check in
+    // trade-executor.ts already blocks new entries while the limit is
+    // active, and it auto-clears at midnight UTC when the date flips.
+    // Setting is_running=false would require a manual restart every day.
   }
 }
 
