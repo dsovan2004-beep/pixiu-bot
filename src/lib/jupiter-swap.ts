@@ -676,7 +676,7 @@ export async function sellToken(
         // 3b. Sign and send via Jito bundle (fallback to public RPC)
         tx.sign([keypair]);
 
-        let signature: string;
+        let signature: string = "";
         let confirmed = false;
         let onChainError: any = null;
 
