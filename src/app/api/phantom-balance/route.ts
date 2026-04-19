@@ -1,18 +1,20 @@
 /**
- * PixiuBot — Phantom Wallet Balance API
- * GET /api/phantom-balance → { sol, usd, lamports }
+ * PixiuBot — Wallet Balance API
+ * GET /api/phantom-balance → { sol, usd, solPrice }
  *
  * Fetches LIVE SOL balance from Helius RPC. No caching.
+ * No baseline/starting SOL tracked — wallet numbers are pure current state.
+ * Performance accounting (Trade PnL, Win Rate, ROI) is computed by the
+ * dashboard from `trades.real_pnl_sol`, which is decoupled from wallet
+ * balance and unaffected by deposits/withdrawals.
  */
 
 export const runtime = "edge";
 
 const WALLET_PUBKEY = "ESK3r8n5jhaLn9Few59QKNJ5UMeD9iqZ5p1rbU9euvey";
 const HELIUS_KEY = process.env.HELIUS_API_KEY || "f3a19f49-e666-407d-b11f-0a0d58b24d5d";
-const STARTING_SOL = 3.6705; // Balance before first live trade
 
 async function getSolPrice(): Promise<number> {
-  // DexScreener — works on CF edge (SOL/USDC pair on Raydium)
   try {
     const res = await fetch("https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112");
     if (res.ok) {
@@ -24,7 +26,6 @@ async function getSolPrice(): Promise<number> {
       if (price > 0) return price;
     }
   } catch {}
-  // Fallback: Helius getPrice for SOL
   try {
     const res = await fetch(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`, {
       method: "POST",
@@ -40,7 +41,7 @@ async function getSolPrice(): Promise<number> {
       if (typeof price === "number" && price > 0) return price;
     }
   } catch {}
-  return 84; // last known approximate
+  return 84; // last-known approximate fallback
 }
 
 const HEADERS = {
@@ -57,7 +58,7 @@ export async function GET(): Promise<Response> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         jsonrpc: "2.0",
-        id: Date.now(), // Unique ID prevents any caching
+        id: Date.now(),
         method: "getBalance",
         params: [WALLET_PUBKEY],
       }),
@@ -65,7 +66,7 @@ export async function GET(): Promise<Response> {
 
     if (!res.ok) {
       return new Response(
-        JSON.stringify({ sol: 0, usd: 0, lamports: 0, startingSol: STARTING_SOL, pnlSol: 0, pnlUsd: 0 }),
+        JSON.stringify({ sol: 0, usd: 0, lamports: 0, solPrice: 0 }),
         { status: 200, headers: HEADERS }
       );
     }
@@ -74,24 +75,19 @@ export async function GET(): Promise<Response> {
     const lamports = data.result?.value ?? 0;
     const sol = lamports / 1e9;
     const usd = sol * solPrice;
-    const pnlSol = sol - STARTING_SOL;
-    const pnlUsd = pnlSol * solPrice;
 
     return new Response(
       JSON.stringify({
         sol: Number(sol.toFixed(4)),
         usd: Number(usd.toFixed(2)),
         lamports,
-        startingSol: STARTING_SOL,
-        pnlSol: Number(pnlSol.toFixed(4)),
-        pnlUsd: Number(pnlUsd.toFixed(2)),
         solPrice: Number(solPrice.toFixed(2)),
       }),
       { status: 200, headers: HEADERS }
     );
   } catch (err: any) {
     return new Response(
-      JSON.stringify({ sol: 0, usd: 0, lamports: 0, startingSol: STARTING_SOL, pnlSol: 0, pnlUsd: 0, error: err.message }),
+      JSON.stringify({ sol: 0, usd: 0, lamports: 0, solPrice: 0, error: err.message }),
       { status: 200, headers: HEADERS }
     );
   }

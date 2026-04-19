@@ -57,7 +57,7 @@ export default function BotPage() {
   const [toggling, setToggling] = useState(false);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
   const [phantomBalance, setPhantomBalance] = useState<{
-    sol: number; usd: number; pnlSol: number; pnlUsd: number; startingSol: number; solPrice?: number;
+    sol: number; usd: number; solPrice?: number;
   } | null>(null);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [whaleSells, setWhaleSells] = useState<
@@ -215,6 +215,16 @@ export default function BotPage() {
       : "0";
 
   const realPnlSol = statsWithPct.reduce((s, t) => s + t._pnlSol, 0);
+  // Total capital deployed across all closed trades with known entry cost.
+  // Used for Trade ROI so the % is stable across wallet deposits/withdrawals.
+  const totalDeployedSol = statsWithPct.reduce(
+    (s: number, t: any) =>
+      s + (t.entry_sol_cost !== null && t.entry_sol_cost !== undefined
+        ? Number(t.entry_sol_cost)
+        : 0),
+    0
+  );
+  const tradeROI = totalDeployedSol > 0 ? (realPnlSol / totalDeployedSol) * 100 : 0;
 
   if (loading) {
     return <div className="text-zinc-500 text-center mt-20">Loading...</div>;
@@ -229,7 +239,8 @@ export default function BotPage() {
           <span className="text-xs text-zinc-600">Live Trading</span>
         </div>
 
-        {/* Wallet Balance */}
+        {/* Wallet Balance — live, no baseline. Deposits/withdrawals are
+            invisible to trade accounting below. */}
         {phantomBalance && (
           <div className="bg-red-900/30 border border-red-600 rounded-lg p-4">
             <div className="flex items-center justify-between mb-2">
@@ -246,19 +257,10 @@ export default function BotPage() {
                 </span>
               </div>
             </div>
-            <div className="flex items-center justify-between text-xs font-mono">
-              <span className="text-zinc-500">
-                Start: {phantomBalance.startingSol.toFixed(4)} SOL
-              </span>
-              <span className={phantomBalance.pnlSol >= 0 ? "text-green-400" : "text-red-400"}>
-                Wallet Δ: {phantomBalance.pnlSol >= 0 ? "+" : ""}{phantomBalance.pnlSol.toFixed(4)} SOL
-                ({phantomBalance.pnlUsd >= 0 ? "+" : ""}${phantomBalance.pnlUsd.toFixed(2)})
-              </span>
-            </div>
             {totalClosed > 0 && (
-              <div className="flex items-center justify-between text-xs font-mono mt-1 pt-1 border-t border-zinc-800">
+              <div className="flex items-center justify-between text-xs font-mono pt-1 border-t border-zinc-800">
                 <span className="text-zinc-500">
-                  Sum real PnL across {totalClosed} trades
+                  Trade PnL across {totalClosed} trades
                 </span>
                 <span className={realPnlSol >= 0 ? "text-green-400" : "text-red-400"}>
                   {realPnlSol >= 0 ? "+" : ""}{realPnlSol.toFixed(4)} SOL
@@ -269,19 +271,19 @@ export default function BotPage() {
           </div>
         )}
 
-        {/* Bankroll (all SOL, real wallet) */}
+        {/* Top-line metrics — all derived from on-chain data; no baseline.
+            Wallet = live RPC balance.
+            Trade PnL = Σ real_pnl_sol on closed trades (deposit-safe).
+            Trade ROI = Trade PnL / Σ entry_sol_cost (return on capital deployed). */}
         {phantomBalance && (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <Card label="Starting" value={`${phantomBalance.startingSol.toFixed(4)} SOL`} />
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Card
-              label="Current"
+              label="Wallet"
               value={`${phantomBalance.sol.toFixed(4)} SOL`}
-              color={phantomBalance.pnlSol >= 0 ? "text-green-500" : "text-red-500"}
             />
             <Card
-              label="Wallet Δ"
-              value={`${phantomBalance.pnlSol >= 0 ? "+" : ""}${phantomBalance.pnlSol.toFixed(4)} SOL`}
-              color={phantomBalance.pnlSol >= 0 ? "text-green-500" : "text-red-500"}
+              label="Wallet USD"
+              value={`$${phantomBalance.usd.toFixed(2)}`}
             />
             <Card
               label={`Trade PnL${totalClosed > 0 ? ` (${totalClosed})` : ""}`}
@@ -291,9 +293,11 @@ export default function BotPage() {
               color={totalClosed > 0 ? (realPnlSol >= 0 ? "text-green-500" : "text-red-500") : undefined}
             />
             <Card
-              label="Return"
-              value={`${phantomBalance.pnlSol >= 0 ? "+" : ""}${((phantomBalance.pnlSol / phantomBalance.startingSol) * 100).toFixed(2)}%`}
-              color={phantomBalance.pnlSol >= 0 ? "text-green-500" : "text-red-500"}
+              label="Trade ROI"
+              value={totalDeployedSol > 0
+                ? `${tradeROI >= 0 ? "+" : ""}${tradeROI.toFixed(2)}%`
+                : "—"}
+              color={totalDeployedSol > 0 ? (tradeROI >= 0 ? "text-green-500" : "text-red-500") : undefined}
             />
           </div>
         )}
