@@ -7,8 +7,17 @@
  * This agent ONLY handles the live Jupiter buy layer.
  */
 
+import { Connection, PublicKey } from "@solana/web3.js";
 import supabase from "../lib/supabase-server";
 import { buyToken, hasTokenBalance, parseSwapSolDelta } from "../lib/jupiter-swap";
+
+// RPC connection for mint-account introspection (freeze-authority check).
+// Separate from Jupiter's connection inside jupiter-swap.ts — reads only.
+const HELIUS_KEY = process.env.HELIUS_API_KEY || "";
+const introspectConn = new Connection(
+  `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`,
+  "confirmed"
+);
 import {
   LIVE_BUY_SOL,
   DAILY_LOSS_LIMIT_SOL,
@@ -214,6 +223,36 @@ export async function startTradeExecutor(): Promise<void> {
           coBuyerCount = new Set(
             (recentBuys ?? []).map((r) => r.wallet_tag)
           ).size;
+        }
+
+        // ── Filter: freeze authority pre-buy check ──
+        // SolRugDetector (ArXiv 2603.24625) validated rule: if mint has
+        // a freeze authority set, creator can freeze any holder's
+        // account at will — classic rug vector. Legit pump.fun tokens
+        // have freeze_authority = null (revoked at mint). Only 2 of 117
+        // confirmed rugs in the paper used this mechanism, so this
+        // filter catches a small but clean class with near-zero false
+        // positives.
+        try {
+          const info = await introspectConn.getParsedAccountInfo(
+            new PublicKey(trade.coin_address)
+          );
+          const parsed = (info.value?.data as any)?.parsed?.info;
+          const freezeAuth = parsed?.freezeAuthority;
+          if (freezeAuth != null && freezeAuth !== "") {
+            console.log(
+              `  [FILTER] SKIP ${coin} — freeze authority present: ${freezeAuth.slice(0, 8)}...`
+            );
+            await supabase
+              .from("trades")
+              .update({ status: "failed", exit_reason: "filter_freeze_auth" })
+              .eq("id", trade.id)
+              .eq("status", "open");
+            continue;
+          }
+        } catch (err: any) {
+          // RPC failure → don't block trade, just log. Next filter may still skip.
+          console.log(`  [FILTER] freeze auth check failed for ${coin}: ${err.message} — proceeding`);
         }
 
         if (ageMin < MIN_TOKEN_AGE_MINUTES) {
