@@ -127,7 +127,11 @@ const CIRCUIT_BREAKER_L0_PCT = 15;  // no partials locked yet — exit earlier
 // protected. Matches L0 threshold for consistency. Wider than -10% to
 // tolerate normal volatility before trailing kicks in.
 const CIRCUIT_BREAKER_PCT = 15;     // L1+ with partials locked — protect the bank
-const TIMEOUT_MINUTES = 20;
+// Sprint 10 Phase 2 (Apr 19 PM) — tightened 20 → 10 min.
+// Pump.fun tokens pump within 5-8 min of entry or not at all; 20min
+// let stale losers bleed for another 12min after the window closed.
+// Trailing mode (L3) still bypasses timeout — moonshots can ride.
+const TIMEOUT_MINUTES = 10;
 
 // Sprint 10 Day 1 (Apr 18 PM) — WHALE_EXIT DISABLED.
 //
