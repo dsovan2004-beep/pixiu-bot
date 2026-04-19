@@ -51,6 +51,14 @@ export const DAILY_LOSS_LIMIT_SOL = 0.50;
 // tilt the distribution away from the biggest loss bucket.
 export const MIN_TOKEN_AGE_MINUTES = 30;
 
+// Sprint 10 Phase 2 — entry filter: co-buyer ceiling.
+// Postmortem 2026-04-19 fat-tail isolation: both big winners (agent +238%,
+// Asteroid +101%) had exactly 1 distinct co-buyer within ±5min — LONE WOLF
+// entries. Clustered multi-wallet buys were anti-selecting; those tokens
+// get pumped then dumped as the cluster exits together. If >1 distinct
+// wallet has signaled BUY on the same mint within the last 5min, skip.
+export const MAX_CO_BUYERS_5MIN = 1;
+
 // Late-confirm window for Jupiter buys (Bug P1).
 // After a buy is marked "failed", check on-chain again after this delay —
 // if the wallet now holds the token, the buy actually landed late.

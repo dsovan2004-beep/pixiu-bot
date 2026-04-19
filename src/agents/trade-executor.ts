@@ -14,6 +14,7 @@ import {
   DAILY_LOSS_LIMIT_SOL,
   BUY_RESCUE_DELAY_MS,
   MIN_TOKEN_AGE_MINUTES,
+  MAX_CO_BUYERS_5MIN,
 } from "../config/smart-money";
 import { sendAlert } from "../lib/telegram";
 
@@ -205,6 +206,29 @@ export async function startTradeExecutor(): Promise<void> {
           if (ageMin < MIN_TOKEN_AGE_MINUTES) {
             console.log(
               `  [FILTER] SKIP ${coin} — age ${ageMin.toFixed(1)}min < ${MIN_TOKEN_AGE_MINUTES}min threshold`
+            );
+            continue;
+          }
+        }
+
+        // ── Entry filter: co-buyer ceiling ≤ MAX_CO_BUYERS_5MIN ──
+        // Count distinct wallet_tag values with a BUY signal on this mint
+        // in the last 5 minutes. If > threshold, skip — cluster buys
+        // anti-selected fat-tail winners in today's postmortem.
+        {
+          const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+          const { data: recentBuys } = await supabase
+            .from("coin_signals")
+            .select("wallet_tag")
+            .eq("coin_address", trade.coin_address)
+            .eq("transaction_type", "BUY")
+            .gte("signal_time", fiveMinAgo);
+          const distinctTags = new Set(
+            (recentBuys ?? []).map((r) => r.wallet_tag)
+          );
+          if (distinctTags.size > MAX_CO_BUYERS_5MIN) {
+            console.log(
+              `  [FILTER] SKIP ${coin} — ${distinctTags.size} co-buyers in last 5min > ${MAX_CO_BUYERS_5MIN}`
             );
             continue;
           }
