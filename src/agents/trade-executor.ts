@@ -187,11 +187,11 @@ export async function startTradeExecutor(): Promise<void> {
           continue;
         }
 
-        // ── Entry filter: token age ≥ MIN_TOKEN_AGE_MINUTES ──
-        // Uses min(coin_signals.signal_time) as proxy for first-seen. If
-        // no prior signal exists for this mint, we consider it age=0 (we
-        // are the first observation) and skip — that's the freshest
-        // bucket and the worst-performing in today's postmortem.
+        // ── Entry filters: compute metrics once, log pass/skip ──
+        // Both filters query coin_signals; we run them together so the
+        // PASS log can report both dimensions (age + co-buyer count).
+        let ageMin = 0;
+        let coBuyerCount = 0;
         {
           const { data: firstSignal } = await supabase
             .from("coin_signals")
@@ -202,20 +202,8 @@ export async function startTradeExecutor(): Promise<void> {
           const firstSeenMs = firstSignal?.[0]
             ? new Date(firstSignal[0].signal_time).getTime()
             : Date.now();
-          const ageMin = (Date.now() - firstSeenMs) / 60_000;
-          if (ageMin < MIN_TOKEN_AGE_MINUTES) {
-            console.log(
-              `  [FILTER] SKIP ${coin} — age ${ageMin.toFixed(1)}min < ${MIN_TOKEN_AGE_MINUTES}min threshold`
-            );
-            continue;
-          }
-        }
+          ageMin = (Date.now() - firstSeenMs) / 60_000;
 
-        // ── Entry filter: co-buyer ceiling ≤ MAX_CO_BUYERS_5MIN ──
-        // Count distinct wallet_tag values with a BUY signal on this mint
-        // in the last 5 minutes. If > threshold, skip — cluster buys
-        // anti-selected fat-tail winners in today's postmortem.
-        {
           const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString();
           const { data: recentBuys } = await supabase
             .from("coin_signals")
@@ -223,16 +211,26 @@ export async function startTradeExecutor(): Promise<void> {
             .eq("coin_address", trade.coin_address)
             .eq("transaction_type", "BUY")
             .gte("signal_time", fiveMinAgo);
-          const distinctTags = new Set(
+          coBuyerCount = new Set(
             (recentBuys ?? []).map((r) => r.wallet_tag)
-          );
-          if (distinctTags.size > MAX_CO_BUYERS_5MIN) {
-            console.log(
-              `  [FILTER] SKIP ${coin} — ${distinctTags.size} co-buyers in last 5min > ${MAX_CO_BUYERS_5MIN}`
-            );
-            continue;
-          }
+          ).size;
         }
+
+        if (ageMin < MIN_TOKEN_AGE_MINUTES) {
+          console.log(
+            `  [FILTER] SKIP ${coin} — age ${ageMin.toFixed(1)}min < ${MIN_TOKEN_AGE_MINUTES}min threshold`
+          );
+          continue;
+        }
+        if (coBuyerCount > MAX_CO_BUYERS_5MIN) {
+          console.log(
+            `  [FILTER] SKIP ${coin} — ${coBuyerCount} co-buyers in last 5min > ${MAX_CO_BUYERS_5MIN}`
+          );
+          continue;
+        }
+        console.log(
+          `  [FILTER] PASS ${coin} — age ${ageMin.toFixed(1)}min, co-buyers ${coBuyerCount}`
+        );
 
         activeBuys.add(trade.coin_address);
         try {
