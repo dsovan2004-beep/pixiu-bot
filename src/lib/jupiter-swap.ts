@@ -372,9 +372,38 @@ export async function buyToken(
         `  [JUPITER] BUY Jito poll inconclusive — verifying via RPC: ${signature.slice(0, 16)}...`
       );
     } else {
-      // Jito submission itself failed — fall back to public RPC submission
-      console.log(`  [JUPITER] BUY Jito submission failed — falling back to public RPC`);
-      signature = await connection.sendRawTransaction(tx.serialize(), {
+      // Jito submission itself failed — re-request swap with "auto"
+      // priority fee (NOT jitoTipLamports), then submit via public RPC.
+      //
+      // Why re-request: the original tx has jitoTipLamports baked in,
+      // which Jupiter builds as a tip instruction to a Jito tip account.
+      // Non-Jito validators don't treat that as priority — they see zero
+      // priority fee and drop the tx in congested slots (Apex Penguin
+      // 2026-04-19: tx broadcast OK, 6x "not found yet", dropped).
+      // "auto" yields a proper setComputeUnitPrice the leader recognizes.
+      console.log(`  [JUPITER] BUY Jito failed — re-requesting swap with auto priority for RPC fallback`);
+      const fallbackSwapRes = await jupiterFetchWithBackoff(
+        JUPITER_SWAP_URL,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            quoteResponse,
+            userPublicKey: walletPubkey,
+            wrapAndUnwrapSol: true,
+            prioritizationFeeLamports: "auto",
+          }),
+        },
+        "buy-swap-fallback"
+      );
+      if (!fallbackSwapRes.ok) {
+        console.error(`  [JUPITER] BUY fallback swap tx failed: ${fallbackSwapRes.status}`);
+        return null;
+      }
+      const { swapTransaction: fallbackSwapTx } = await fallbackSwapRes.json();
+      const fallbackTx = VersionedTransaction.deserialize(Buffer.from(fallbackSwapTx, "base64"));
+      fallbackTx.sign([keypair]);
+      signature = await connection.sendRawTransaction(fallbackTx.serialize(), {
         skipPreflight: true,
         maxRetries: 3,
       });
@@ -656,14 +685,37 @@ export async function sellToken(
             `  [JUPITER] SELL Jito poll inconclusive at ${slippage / 100}% — verifying via RPC: ${signature.slice(0, 16)}...`
           );
         } else {
-          // Jito submission failed — fall back to public RPC
-          console.log(`  [JUPITER] SELL Jito submission failed at ${slippage / 100}% — falling back to public RPC`);
-          signature = await connection.sendRawTransaction(tx.serialize(), {
+          // Jito submission failed — re-request swap with "auto" priority
+          // fee for RPC fallback (non-Jito validators drop txs with only
+          // jitoTipLamports as they see zero priority). Same fix as buyToken.
+          console.log(`  [JUPITER] SELL Jito failed at ${slippage / 100}% — re-requesting swap with auto priority for RPC fallback`);
+          const fallbackSwapRes = await jupiterFetchWithBackoff(
+            JUPITER_SWAP_URL,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                quoteResponse,
+                userPublicKey: walletPubkey,
+                wrapAndUnwrapSol: true,
+                prioritizationFeeLamports: "auto",
+              }),
+            },
+            "sell-swap-fallback"
+          );
+          if (!fallbackSwapRes.ok) {
+            console.error(`  [JUPITER] SELL fallback swap tx failed at ${slippage / 100}%: ${fallbackSwapRes.status}`);
+            continue;
+          }
+          const { swapTransaction: fallbackSwapTx } = await fallbackSwapRes.json();
+          const fallbackTx = VersionedTransaction.deserialize(Buffer.from(fallbackSwapTx, "base64"));
+          fallbackTx.sign([keypair]);
+          signature = await connection.sendRawTransaction(fallbackTx.serialize(), {
             skipPreflight: true,
             maxRetries: 3,
           });
           console.log(
-            `  [JUPITER] SELL sent via RPC at ${slippage / 100}%: ${coinAddress.slice(0, 8)}... → ${signature}`
+            `  [JUPITER] SELL sent via RPC (auto priority) at ${slippage / 100}%: ${coinAddress.slice(0, 8)}... → ${signature}`
           );
         }
 
