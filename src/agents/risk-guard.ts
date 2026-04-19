@@ -10,6 +10,7 @@
  *   5. Grid levels: L1 +15% (50%) | L2 +40% (25%) | L3 +100% (25%)
  */
 
+import { Connection, PublicKey } from "@solana/web3.js";
 import supabase from "../lib/supabase-server";
 import {
   LIVE_BUY_SOL,
@@ -17,6 +18,43 @@ import {
 } from "../config/smart-money";
 import { sellToken, hasTokenBalance, wasLastSellUnsellable, wasSellSimAborted, parseSwapSolDelta } from "../lib/jupiter-swap";
 import { sendAlert } from "../lib/telegram";
+
+// Read-only RPC for holder-distribution checks (SolRugDetector 73% rule).
+const HELIUS_KEY = process.env.HELIUS_API_KEY || "";
+const introspectConn = new Connection(
+  `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`,
+  "confirmed"
+);
+
+// Per-position holder snapshot: tradeId → { entryTop20Addresses, entryTop20SumBalance, lastCheckMs }.
+// Top-20 is the ceiling of getTokenLargestAccounts (RPC-native). We track
+// the SET of addresses at entry + their summed balance, then compare on
+// periodic re-check. Drop in intersection+balance > 73% = holder exodus,
+// the SolRugDetector Pump-and-Dump trigger.
+const HOLDER_CHECK_INTERVAL_MS = 60_000; // 1 per minute per open position
+const HOLDER_DROP_THRESHOLD = 0.73;
+type HolderSnapshot = {
+  topAddresses: Set<string>;
+  sumBalance: number;
+  lastCheckMs: number;
+};
+const holderSnapshots = new Map<string, HolderSnapshot>();
+
+async function snapshotTopHolders(mint: string): Promise<{ addresses: Set<string>; sumBalance: number } | null> {
+  try {
+    const res = await introspectConn.getTokenLargestAccounts(new PublicKey(mint));
+    if (!res.value || res.value.length === 0) return null;
+    // Exclude #1 — typically the bonding curve account (holds unsold
+    // supply pre-graduation) or LP account post-graduation. Either way
+    // not a "holder" in the rug-signal sense.
+    const relevant = res.value.slice(1);
+    const addresses = new Set<string>(relevant.map((a) => a.address.toBase58()));
+    const sumBalance = relevant.reduce((s, a) => s + Number(a.uiAmount || 0), 0);
+    return { addresses, sumBalance };
+  } catch {
+    return null;
+  }
+}
 
 // Poll cadence split by grid level (Sprint 10 P2a, Apr 18).
 // L0 positions have no grid cushion — a fast rug crosses -15% CB
@@ -527,6 +565,54 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
         `  [GUARD] 🚨 ${coinLabel} price=0 detected — treating as rug, exiting now | PnL: ${finalPnl.toFixed(2)}%`
       );
       continue;
+    }
+
+    // 0c. Holder-exodus check — SolRugDetector (ArXiv 2603.24625) τ_down=0.73.
+    // At entry, we snapshot top-20 holder addresses + their summed balance
+    // (excluding #1 which is the bonding curve / LP). On cooldown we re-check.
+    // If >73% of the entry-time holder set has exited OR the summed balance
+    // has dropped >73%, that's a pump-and-dump rug signature. Emergency CB.
+    // Only runs for live trades (no point checking paper positions) and
+    // cooldowns to 60s per position so we don't hammer RPC.
+    if (pos.wallet_tag?.includes("[LIVE]")) {
+      const snap = holderSnapshots.get(pos.id);
+      const nowMs = Date.now();
+      if (!snap) {
+        // First observation — take the snapshot and don't check this cycle.
+        const s = await snapshotTopHolders(pos.coin_address);
+        if (s) {
+          holderSnapshots.set(pos.id, {
+            topAddresses: s.addresses,
+            sumBalance: s.sumBalance,
+            lastCheckMs: nowMs,
+          });
+          console.log(
+            `  [GUARD] [HOLDER] ${coinLabel} entry snapshot — ${s.addresses.size} top holders, sum balance ${s.sumBalance.toFixed(0)}`
+          );
+        }
+      } else if (nowMs - snap.lastCheckMs >= HOLDER_CHECK_INTERVAL_MS) {
+        const current = await snapshotTopHolders(pos.coin_address);
+        if (current) {
+          snap.lastCheckMs = nowMs;
+          // How many entry-time top holders are still in the current top 20?
+          let stillPresent = 0;
+          for (const addr of snap.topAddresses) if (current.addresses.has(addr)) stillPresent++;
+          const holderRetention = snap.topAddresses.size > 0 ? stillPresent / snap.topAddresses.size : 1;
+          const balanceRetention = snap.sumBalance > 0 ? current.sumBalance / snap.sumBalance : 1;
+          console.log(
+            `  [GUARD] [HOLDER] ${coinLabel} retention — holders ${(holderRetention * 100).toFixed(0)}%, balance ${(balanceRetention * 100).toFixed(0)}%`
+          );
+          if (holderRetention < (1 - HOLDER_DROP_THRESHOLD) || balanceRetention < (1 - HOLDER_DROP_THRESHOLD)) {
+            const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
+            console.log(
+              `  [GUARD] 🚨 ${coinLabel} holder exodus >${(HOLDER_DROP_THRESHOLD * 100).toFixed(0)}% (retention holders=${(holderRetention * 100).toFixed(0)}%, balance=${(balanceRetention * 100).toFixed(0)}%) — emergency exit | PnL: ${finalPnl.toFixed(2)}%`
+            );
+            await closeTrade(finalPnl, "holder_rug", currentLevel);
+            holderSnapshots.delete(pos.id);
+            continue;
+          }
+        }
+      }
     }
 
     // 1. Circuit Breaker — ABSOLUTE FIRST CHECK
