@@ -363,29 +363,50 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
           console.log(`  [GUARD] Token balance 0 — marking ${coinLabel} as closed (mark ${closedPnl.toFixed(2)}%)`);
           const ep = exitPrice ?? currentPrice;
 
-          // Phase 3 fix: if real partials previously fired (grid_level > 0),
-          // real_pnl_sol already has the banked L1/L2 gains. The remaining
-          // tokens are now GONE (rugged, dust, or out-of-sync). We must
-          // book the loss on the remaining cost basis so real_pnl_sol
-          // reflects true wallet delta: existing_banked − remaining_cost.
-          // If grid_level = 0 (no partials), real_pnl_sol stays null — the
-          // dashboard already filters null-real rows from stats.
+          // Phase 3 fix v2 (apr 20): two different cases to handle.
+          //
+          // CASE A — partials fired successfully (real_pnl_sol non-null,
+          // grid_level > 0, tokens=0): the storm / sequential grid sells
+          // already dumped the full bag on-chain. The SOL is in the
+          // wallet. Accumulated real_pnl_sol IS the truth. Do NOT
+          // subtract another "remaining cost basis" — those tokens are
+          // not gone-to-zero, they were SOLD.
+          //
+          // CASE B — no partials tracked (real_pnl_sol null) but tokens
+          // are gone: this is a genuine rug. Book -entry_cost as full loss.
+          //
+          // CASE C — grid_level > 0 but real_pnl_sol is null: partials
+          // fired on the dashboard ledger but parseSwapSolDelta failed
+          // to record them (RPC issue). We can't know the received SOL
+          // without manual reconciliation. Leave real_pnl_sol null and
+          // log loudly.
           let realPnlSolUpdate: number | null = null;
-          if (gridLvl > 0) {
-            const { data: row } = await supabase
-              .from("trades")
-              .select("entry_sol_cost, real_pnl_sol")
-              .eq("id", pos.id)
-              .maybeSingle();
-            const entryCost = row?.entry_sol_cost ? Number(row.entry_sol_cost) : null;
-            const existingPnl = row?.real_pnl_sol != null ? Number(row.real_pnl_sol) : 0;
-            if (entryCost !== null) {
-              const remainingCostBasis = (entryCost * remainingPct) / 100;
-              realPnlSolUpdate = existingPnl - remainingCostBasis;
-              console.log(
-                `  [GUARD] 📊 tokens gone after partials — booking loss on remaining ${remainingPct}% (cost ${remainingCostBasis.toFixed(6)}): ${existingPnl >= 0 ? "+" : ""}${existingPnl.toFixed(6)} − ${remainingCostBasis.toFixed(6)} = ${realPnlSolUpdate >= 0 ? "+" : ""}${realPnlSolUpdate.toFixed(6)} SOL`
-              );
-            }
+          const { data: row } = await supabase
+            .from("trades")
+            .select("entry_sol_cost, real_pnl_sol")
+            .eq("id", pos.id)
+            .maybeSingle();
+          const entryCost = row?.entry_sol_cost ? Number(row.entry_sol_cost) : null;
+          const existingPnl = row?.real_pnl_sol != null ? Number(row.real_pnl_sol) : null;
+
+          if (existingPnl !== null) {
+            // CASE A — trust accumulated partials as the truth.
+            realPnlSolUpdate = existingPnl;
+            console.log(
+              `  [GUARD] 📊 tokens gone after partials; trusting accumulated real_pnl_sol = ${existingPnl >= 0 ? "+" : ""}${existingPnl.toFixed(6)} SOL (no extra cost-basis subtraction — SOL is in the wallet)`
+            );
+          } else if (gridLvl === 0 && entryCost !== null) {
+            // CASE B — no partials, tokens gone: full loss.
+            realPnlSolUpdate = -entryCost;
+            console.log(
+              `  [GUARD] 📊 tokens gone without any partial tracking (grid=0) — booking full entry cost as loss: -${entryCost.toFixed(6)} SOL`
+            );
+          } else {
+            // CASE C — partials fired on ledger but none were SOL-delta-
+            // recorded. Manual reconciliation needed.
+            console.log(
+              `  [GUARD] 🚨 ${coinLabel} tokens gone, grid=${gridLvl}, real_pnl_sol null — partials fired but SOL deltas were never recorded. Manual reconcile from on-chain data.`
+            );
           }
 
           // IDEMPOTENT close: only transition 'closing' → 'closed'. If the
