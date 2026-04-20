@@ -68,3 +68,20 @@ export const MAX_CO_BUYERS_5MIN = 2;
 // After a buy is marked "failed", check on-chain again after this delay —
 // if the wallet now holds the token, the buy actually landed late.
 export const BUY_RESCUE_DELAY_MS = 3 * 60_000; // 3 min
+
+// Sprint 10 Phase 3 — pre-buy liquidity trap filter.
+// Before placing a buy, simulate a SOL→TOKEN→SOL round-trip at
+// LIVE_BUY_SOL via Jupiter quote API. If quoted recovery is below this
+// floor, the pool is too thin to exit without major slippage — skip the
+// buy.
+//
+// Validated against 67 closed LIVE trades (Apr 20 postmortem):
+//   - 100% of winners (14) had post-trade recovery ≥ 1.00
+//   - 41 of 53 losers had post-trade recovery < 0.90
+//   - A 0.90 floor would have blocked 41 losses and 0 winners
+//   - Net SOL saved if enforced historically: +0.7736 SOL
+// Pre-buy sim recovery is slightly HIGHER than post-trade (our entry
+// drains some liquidity), so this floor is mildly more strict in
+// practice than the backtest — but the bimodal separation between
+// winners/losers is clean enough that 0.90 is a safe starting point.
+export const MIN_ROUND_TRIP_RECOVERY = 0.90;

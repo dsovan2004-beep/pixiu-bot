@@ -299,6 +299,46 @@ function getKeypair(): Keypair | null {
 }
 
 /**
+ * Sprint 10 Phase 3 — pre-buy liquidity trap filter.
+ *
+ * Quote SOL → TOKEN → SOL round-trip at the intended entry size. Returns
+ * recovery as `solBack / solAmount`. Returns null on any quote failure
+ * (fail-open: transient Jupiter issues should not block entries).
+ *
+ * Uses the same slippage profile as the live trading path (BUY_SLIPPAGE_BPS
+ * inbound, first SELL_SLIPPAGE_BPS bracket outbound) so the recovery
+ * estimate reflects what we'd actually realize on a clean exit. Costs
+ * 2 /quote calls per invocation — well under the 600/min free-tier cap.
+ */
+export async function simulateRoundTripRecovery(
+  coinAddress: string,
+  solAmount: number
+): Promise<number | null> {
+  try {
+    const lamports = Math.floor(solAmount * 1e9);
+    if (lamports <= 0) return null;
+
+    const buyUrl = `${JUPITER_QUOTE_URL}?inputMint=${SOL_MINT}&outputMint=${coinAddress}&amount=${lamports}&slippageBps=${BUY_SLIPPAGE_BPS}`;
+    const buyRes = await jupiterFetchWithBackoff(buyUrl, undefined, "simRT-buy");
+    if (!buyRes.ok) return null;
+    const buyJson: any = await buyRes.json();
+    const tokensOut = Number(buyJson?.outAmount ?? 0);
+    if (!Number.isFinite(tokensOut) || tokensOut <= 0) return null;
+
+    const sellUrl = `${JUPITER_QUOTE_URL}?inputMint=${coinAddress}&outputMint=${SOL_MINT}&amount=${tokensOut}&slippageBps=${SELL_SLIPPAGE_BPS[0]}`;
+    const sellRes = await jupiterFetchWithBackoff(sellUrl, undefined, "simRT-sell");
+    if (!sellRes.ok) return null;
+    const sellJson: any = await sellRes.json();
+    const solBackLamports = Number(sellJson?.outAmount ?? 0);
+    if (!Number.isFinite(solBackLamports) || solBackLamports <= 0) return null;
+
+    return solBackLamports / 1e9 / solAmount;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Buy a token with SOL via Jupiter.
  * @param coinAddress - Token mint address to buy
  * @param amountSol - Amount of SOL to spend

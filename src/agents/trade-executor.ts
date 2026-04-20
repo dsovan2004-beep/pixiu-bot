@@ -9,7 +9,7 @@
 
 import { Connection, PublicKey } from "@solana/web3.js";
 import supabase from "../lib/supabase-server";
-import { buyToken, hasTokenBalance, parseSwapSolDelta } from "../lib/jupiter-swap";
+import { buyToken, hasTokenBalance, parseSwapSolDelta, simulateRoundTripRecovery } from "../lib/jupiter-swap";
 
 // RPC connection for mint-account introspection (freeze-authority check).
 // Separate from Jupiter's connection inside jupiter-swap.ts — reads only.
@@ -24,6 +24,7 @@ import {
   BUY_RESCUE_DELAY_MS,
   MIN_TOKEN_AGE_MINUTES,
   MAX_CO_BUYERS_5MIN,
+  MIN_ROUND_TRIP_RECOVERY,
 } from "../config/smart-money";
 import { sendAlert } from "../lib/telegram";
 
@@ -283,6 +284,36 @@ export async function startTradeExecutor(): Promise<void> {
         console.log(
           `  [FILTER] PASS ${coin} — age ${ageMin.toFixed(1)}min, co-buyers ${coBuyerCount}`
         );
+
+        // ── Filter: pre-buy round-trip recovery (liquidity trap) ──
+        // Quote SOL→TOKEN→SOL at LIVE_BUY_SOL. If recovery < floor,
+        // the pool is too thin to exit cleanly and the trade is a
+        // near-guaranteed loser (KICAU MANIA class). Postmortem on
+        // 67 trades: 0/14 winners below 90%, 41/53 losers below 90%.
+        // Fail-open on Jupiter errors: a null recovery means we
+        // couldn't get a quote, which is different from a bad quote,
+        // so we proceed rather than miss the entry.
+        const rtRecovery = await simulateRoundTripRecovery(trade.coin_address, LIVE_BUY_SOL);
+        if (rtRecovery !== null && rtRecovery < MIN_ROUND_TRIP_RECOVERY) {
+          console.log(
+            `  [FILTER] SKIP ${coin} — liquidity trap: round-trip recovery ${(rtRecovery * 100).toFixed(1)}% < ${(MIN_ROUND_TRIP_RECOVERY * 100).toFixed(0)}% floor`
+          );
+          await supabase
+            .from("trades")
+            .update({ status: "failed", exit_reason: "filter_liquidity" })
+            .eq("id", trade.id)
+            .eq("status", "open");
+          continue;
+        }
+        if (rtRecovery !== null) {
+          console.log(
+            `  [FILTER] PASS ${coin} — round-trip recovery ${(rtRecovery * 100).toFixed(1)}%`
+          );
+        } else {
+          console.log(
+            `  [FILTER] round-trip recovery unavailable for ${coin} (Jupiter quote failed) — proceeding`
+          );
+        }
 
         activeBuys.add(trade.coin_address);
         try {
