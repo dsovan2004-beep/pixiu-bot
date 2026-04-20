@@ -353,6 +353,32 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
           const closedPnl = gridLvl > 0 ? (pos.partial_pnl ?? finalPnl) : pnlPct;
           console.log(`  [GUARD] Token balance 0 — marking ${coinLabel} as closed (mark ${closedPnl.toFixed(2)}%)`);
           const ep = exitPrice ?? currentPrice;
+
+          // Phase 3 fix: if real partials previously fired (grid_level > 0),
+          // real_pnl_sol already has the banked L1/L2 gains. The remaining
+          // tokens are now GONE (rugged, dust, or out-of-sync). We must
+          // book the loss on the remaining cost basis so real_pnl_sol
+          // reflects true wallet delta: existing_banked − remaining_cost.
+          // If grid_level = 0 (no partials), real_pnl_sol stays null — the
+          // dashboard already filters null-real rows from stats.
+          let realPnlSolUpdate: number | null = null;
+          if (gridLvl > 0) {
+            const { data: row } = await supabase
+              .from("trades")
+              .select("entry_sol_cost, real_pnl_sol")
+              .eq("id", pos.id)
+              .maybeSingle();
+            const entryCost = row?.entry_sol_cost ? Number(row.entry_sol_cost) : null;
+            const existingPnl = row?.real_pnl_sol != null ? Number(row.real_pnl_sol) : 0;
+            if (entryCost !== null) {
+              const remainingCostBasis = (entryCost * remainingPct) / 100;
+              realPnlSolUpdate = existingPnl - remainingCostBasis;
+              console.log(
+                `  [GUARD] 📊 tokens gone after partials — booking loss on remaining ${remainingPct}% (cost ${remainingCostBasis.toFixed(6)}): ${existingPnl >= 0 ? "+" : ""}${existingPnl.toFixed(6)} − ${remainingCostBasis.toFixed(6)} = ${realPnlSolUpdate >= 0 ? "+" : ""}${realPnlSolUpdate.toFixed(6)} SOL`
+              );
+            }
+          }
+
           // IDEMPOTENT close: only transition 'closing' → 'closed'. If the
           // row is already closed (by any prior path), update matches 0 rows
           // and we return without error.
@@ -366,6 +392,7 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
               grid_level: gridLvl,
               remaining_pct: 0,
               partial_pnl: closedPnl,
+              ...(realPnlSolUpdate !== null ? { real_pnl_sol: realPnlSolUpdate } : {}),
             })
             .eq("id", pos.id)
             .eq("status", "closing")
@@ -477,6 +504,44 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
             console.log(
               `  [GUARD] 🪦 ${coinLabel} un-sellable (Jupiter 6024) — marking remaining ${remainingPct}% to zero. Final mark ${zeroPnlPct.toFixed(2)}%`
             );
+
+            // Phase 3 fix: if real partials previously fired (grid_level > 0),
+            // real_pnl_sol has banked L1/L2 gains. Remaining is now
+            // unsellable (worthless). Subtract remaining cost basis so
+            // real_pnl_sol reflects true wallet delta. Same pattern as
+            // the rug_or_missing path above.
+            let realPnlSolUpdate: number | null = null;
+            if (gridLvl > 0) {
+              const { data: row } = await supabase
+                .from("trades")
+                .select("entry_sol_cost, real_pnl_sol")
+                .eq("id", pos.id)
+                .maybeSingle();
+              const entryCost = row?.entry_sol_cost ? Number(row.entry_sol_cost) : null;
+              const existingPnl = row?.real_pnl_sol != null ? Number(row.real_pnl_sol) : 0;
+              if (entryCost !== null) {
+                const remainingCostBasis = (entryCost * remainingPct) / 100;
+                realPnlSolUpdate = existingPnl - remainingCostBasis;
+                console.log(
+                  `  [GUARD] 📊 unsellable after partials — booking loss on remaining ${remainingPct}% (cost ${remainingCostBasis.toFixed(6)}): ${existingPnl >= 0 ? "+" : ""}${existingPnl.toFixed(6)} − ${remainingCostBasis.toFixed(6)} = ${realPnlSolUpdate >= 0 ? "+" : ""}${realPnlSolUpdate.toFixed(6)} SOL`
+                );
+              }
+            } else {
+              // No partials fired; the entire position is a loss. Book it.
+              const { data: row } = await supabase
+                .from("trades")
+                .select("entry_sol_cost")
+                .eq("id", pos.id)
+                .maybeSingle();
+              const entryCost = row?.entry_sol_cost ? Number(row.entry_sol_cost) : null;
+              if (entryCost !== null) {
+                realPnlSolUpdate = -entryCost;
+                console.log(
+                  `  [GUARD] 📊 unsellable from L0 — booking full loss: -${entryCost.toFixed(6)} SOL`
+                );
+              }
+            }
+
             const { data: flipped } = await supabase
               .from("trades")
               .update({
@@ -487,6 +552,7 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
                 grid_level: gridLvl,
                 remaining_pct: 0,
                 partial_pnl: zeroPnlPct,
+                ...(realPnlSolUpdate !== null ? { real_pnl_sol: realPnlSolUpdate } : {}),
               })
               .eq("id", pos.id)
               .eq("status", "closing")
@@ -780,10 +846,36 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
 
         // Accumulate real_pnl_sol additively: each partial's (received
         // - proportional cost basis). Background so it doesn't block.
+        //
+        // Phase 3 robustness: parseSwapSolDelta can return null if RPC
+        // hasn't indexed the tx yet. We retry with backoff (1s, 3s, 10s)
+        // so partial gains are never silently lost. Worst case: all
+        // retries fail, we LOUDLY log the sig so it can be reconciled
+        // manually from the on-chain data.
+        const partialSigCaptured = partialSig;
+        const gridLevelCaptured = grid.level;
+        const sellPctCaptured = grid.sellPct;
         (async () => {
           try {
-            const partialReceived = await parseSwapSolDelta(partialSig);
-            if (partialReceived === null) return;
+            let partialReceived: number | null = null;
+            const retryDelays = [1_000, 3_000, 10_000];
+            for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+              if (attempt > 0) {
+                await new Promise((r) => setTimeout(r, retryDelays[attempt - 1]));
+              }
+              partialReceived = await parseSwapSolDelta(partialSigCaptured);
+              if (partialReceived !== null) break;
+            }
+            if (partialReceived === null) {
+              console.error(
+                `  [GUARD] 🚨 L${gridLevelCaptured} REAL PARTIAL LANDED BUT SOL DELTA COULD NOT BE PARSED AFTER RETRIES. Sig: ${partialSigCaptured}. real_pnl_sol NOT UPDATED. Manually reconcile from on-chain tx.`
+              );
+              void sendAlert(
+                "sell_failed",
+                `${coinLabel} L${gridLevelCaptured} partial landed but SOL delta unparseable. Manual reconcile needed. Sig: ${partialSigCaptured.slice(0, 16)}...`
+              );
+              return;
+            }
             const { data: row } = await supabase
               .from("trades")
               .select("entry_sol_cost, real_pnl_sol")
@@ -791,8 +883,13 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
               .maybeSingle();
             const entryCost = row?.entry_sol_cost ? Number(row.entry_sol_cost) : null;
             const existingPnl = row?.real_pnl_sol != null ? Number(row.real_pnl_sol) : 0;
-            if (entryCost === null) return;
-            const costBasisThisPartial = (entryCost * grid.sellPct) / 100;
+            if (entryCost === null) {
+              console.error(
+                `  [GUARD] 🚨 L${gridLevelCaptured} partial landed but entry_sol_cost missing. Sig: ${partialSigCaptured}. real_pnl_sol NOT UPDATED.`
+              );
+              return;
+            }
+            const costBasisThisPartial = (entryCost * sellPctCaptured) / 100;
             const partialPnlSol = partialReceived - costBasisThisPartial;
             const newRealPnl = existingPnl + partialPnlSol;
             await supabase
@@ -800,7 +897,7 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
               .update({ real_pnl_sol: newRealPnl })
               .eq("id", pos.id);
             console.log(
-              `  [GUARD] 📊 L${grid.level} real partial PnL: ${partialPnlSol >= 0 ? "+" : ""}${partialPnlSol.toFixed(6)} SOL (received ${partialReceived.toFixed(6)} - cost basis ${costBasisThisPartial.toFixed(6)}) | cumulative ${newRealPnl >= 0 ? "+" : ""}${newRealPnl.toFixed(6)}`
+              `  [GUARD] 📊 L${gridLevelCaptured} real partial PnL: ${partialPnlSol >= 0 ? "+" : ""}${partialPnlSol.toFixed(6)} SOL (received ${partialReceived.toFixed(6)} - cost basis ${costBasisThisPartial.toFixed(6)}) | cumulative ${newRealPnl >= 0 ? "+" : ""}${newRealPnl.toFixed(6)}`
             );
           } catch (err: any) {
             console.error(`  [GUARD] partial PnL write failed: ${err.message}`);
