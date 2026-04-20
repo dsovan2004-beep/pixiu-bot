@@ -194,6 +194,22 @@ export async function startTradeExecutor(): Promise<void> {
 
         if (totalLossSol >= DAILY_LOSS_LIMIT_SOL) {
           console.log(`  [EXECUTOR] 🛑 LIVE BUY skipped — daily loss limit: ${todayLosses} losses, real SOL lost: ${totalLossSol.toFixed(3)} (max ${DAILY_LOSS_LIMIT_SOL} SOL, resets midnight UTC)`);
+          // Mark the row as failed so it doesn't accumulate in the open
+          // set. Previously we just `continue`d — each subsequent executor
+          // poll would re-evaluate and skip the same row, leaving it at
+          // status='open' indefinitely. Observed in the Apr 21 daily-limit
+          // window: 43+ phantom open rows piled up because the webhook
+          // kept inserting signals (bot_state.is_running=true) while the
+          // per-buy counter blocked every entry. After midnight UTC the
+          // counter resets and those stale signals (hours old, token
+          // likely dead) would start getting bought — the age filter
+          // doesn't save us because `ageMin` is "first signal time",
+          // which only grows with age.
+          await supabase
+            .from("trades")
+            .update({ status: "failed", exit_reason: "filter_daily_limit" })
+            .eq("id", trade.id)
+            .eq("status", "open");
           continue;
         }
 
