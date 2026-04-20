@@ -35,7 +35,33 @@ export function wasLastSellUnsellable(mint: string): boolean {
   return was;
 }
 const BUY_SLIPPAGE_BPS = 1000; // 10% for buys — pump.fun tokens need higher
-const SELL_SLIPPAGE_BPS = [500, 1000, 2000, 3000]; // Auto-escalate: 5% → 10% → 20% → 30% on retry
+const SELL_SLIPPAGE_BPS = [500, 1000, 2000, 3000]; // Grid TP ladder: 5→10→20→30% on retry
+
+// Sprint 10 Phase 6 — rescue-class exits start at aggressive slippage.
+// hehehe (Apr 21 9pm UTC): holder_rug triggered at +87% mark with 67%
+// sim recovery. skipJito submit was fast (~2s), but the 5% slippage
+// first attempt timed out on confirmation. While cycling 5→10→20→30%
+// (each ~60-120s of confirmation wait + retries), price crashed −38%
+// from the trigger point. We NEED the sell to land on first attempt,
+// not cycle through ladder rungs that are likely to expire on a
+// pool already flagged as thin by the trigger itself.
+//
+// Rescue classes (CB, SL, trailing_stop, holder_rug, pool_drain,
+// timeout, whale_exit) all fire when we have strong reason to believe
+// the pool is in trouble. Starting at 20% slippage + retrying at 30%
+// trades 1-3% of theoretical fill for much higher probability of
+// landing on the first attempt. The sim gate at 30% floor still
+// catches genuine catastrophic-drain cases separately.
+const SELL_SLIPPAGE_BPS_RESCUE = [2000, 3000]; // 20% → 30%
+const RESCUE_EXIT_REASONS = new Set([
+  "whale_exit",
+  "circuit_breaker",
+  "stop_loss",
+  "trailing_stop",
+  "timeout",
+  "holder_rug",
+  "pool_drain",
+]);
 
 // Sprint 10 Phase 1 (Apr 18 PM) — Jito tip on every swap.
 // 0.001 SOL flat tip routed to Jito validators via prioritizationFeeLamports.
@@ -751,9 +777,27 @@ export async function sellToken(
       `  [JUPITER] Token balance: ${tokenAmount} | selling ${sellPct}% = ${sellAmount} for ${coinAddress.slice(0, 8)}...`
     );
 
-    // Auto-escalate slippage: try 5% → 10% → 20% → 30%
+    // Rescue mode: for exits where the pool is already flagged as in
+    // trouble (CB/SL/trailing_stop/timeout/holder_rug/pool_drain/whale),
+    // use the shorter, more aggressive slippage ladder and a tighter
+    // confirmation window. The goal is to land the sell on the FIRST
+    // attempt before price drops further, not cycle through levels.
+    const isRescueExit =
+      opts?.exitReason != null && RESCUE_EXIT_REASONS.has(opts.exitReason);
+    const slippageLadder = isRescueExit
+      ? SELL_SLIPPAGE_BPS_RESCUE
+      : SELL_SLIPPAGE_BPS;
+    const confirmTimeoutMs = isRescueExit ? 30_000 : 60_000;
+    const statusRetryCount = isRescueExit ? 3 : 6;
+    if (isRescueExit) {
+      console.log(
+        `  [JUPITER] Rescue-mode slippage ladder for ${coinAddress.slice(0, 8)}... (${opts!.exitReason}): starting at ${slippageLadder[0] / 100}%, confirm timeout ${confirmTimeoutMs / 1000}s`
+      );
+    }
+
+    // Auto-escalate slippage (normal: 5% → 10% → 20% → 30%; rescue: 20% → 30%)
     // On-chain 6001 failures (slippage exceeded) trigger next level
-    for (const slippage of SELL_SLIPPAGE_BPS) {
+    for (const slippage of slippageLadder) {
       try {
         console.log(`  [JUPITER] Trying sell at ${slippage / 100}% slippage...`);
 
@@ -956,19 +1000,30 @@ export async function sellToken(
         if (!confirmed && !onChainError) {
           // Blocking confirmation — must know result before returning.
           // Skip if onChainError already set (Jito sig confirmed with err).
-          console.log(`  [JUPITER] SELL waiting for confirmation (up to 60s)...`);
+          // Rescue exits use a shorter 30s wait + 3 retries (total ~60s) to
+          // bail out and retry at 30% slippage faster instead of burning
+          // 120s per ladder rung while the price keeps crashing.
+          console.log(`  [JUPITER] SELL waiting for confirmation (up to ${confirmTimeoutMs / 1000}s)...`);
 
         try {
-          const conf = await connection.confirmTransaction(signature, "confirmed");
-          if (conf.value.err) {
+          // Wrap confirmTransaction in Promise.race with our own timeout —
+          // web3.js's internal timeout is blockhash-based and can hang
+          // significantly longer than the confirm strategy name suggests.
+          const conf: any = await Promise.race([
+            connection.confirmTransaction(signature, "confirmed"),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("confirm-timeout")), confirmTimeoutMs)
+            ),
+          ]);
+          if (conf?.value?.err) {
             onChainError = conf.value.err;
           } else {
             confirmed = true;
           }
         } catch {
           // Timeout — poll status with retries
-          console.log(`  [JUPITER] SELL confirmation timeout — polling tx status (6 retries, 10s intervals)...`);
-          for (let attempt = 1; attempt <= 6; attempt++) {
+          console.log(`  [JUPITER] SELL confirmation timeout — polling tx status (${statusRetryCount} retries, 10s intervals)...`);
+          for (let attempt = 1; attempt <= statusRetryCount; attempt++) {
             await new Promise((r) => setTimeout(r, 10_000));
             try {
               const status = await connection.getSignatureStatus(signature);
@@ -981,9 +1036,9 @@ export async function sellToken(
                 }
                 break;
               }
-              console.log(`  [JUPITER] SELL status check ${attempt}/6: ${cs || "not found yet"}`);
+              console.log(`  [JUPITER] SELL status check ${attempt}/${statusRetryCount}: ${cs || "not found yet"}`);
             } catch {
-              console.log(`  [JUPITER] SELL status check ${attempt}/6: RPC error, retrying...`);
+              console.log(`  [JUPITER] SELL status check ${attempt}/${statusRetryCount}: RPC error, retrying...`);
             }
           }
         }
@@ -1014,14 +1069,15 @@ export async function sellToken(
         }
 
         // Unknown status after all retries — tx likely expired, retry at next slippage
-        console.error(`  [JUPITER] SELL status unknown after 60s — tx likely expired, retrying at higher slippage...`);
+        console.error(`  [JUPITER] SELL status unknown after ${(confirmTimeoutMs + statusRetryCount * 10_000) / 1000}s — tx likely expired, retrying at higher slippage...`);
         continue; // Try next slippage level with fresh tx
       } catch (err: any) {
         console.error(`  [JUPITER] SELL attempt at ${slippage / 100}% failed: ${err.message}`);
       }
     }
 
-    console.error(`  [JUPITER] SELL failed all slippage levels (5%→10%→20%→30%) — manual intervention needed: ${coinAddress}`);
+    const ladderStr = slippageLadder.map((s) => `${s / 100}%`).join("→");
+    console.error(`  [JUPITER] SELL failed all slippage levels (${ladderStr}) — manual intervention needed: ${coinAddress}`);
     return null;
   } catch (err: any) {
     console.error(`  [JUPITER] SELL failed: ${err.message}`);
