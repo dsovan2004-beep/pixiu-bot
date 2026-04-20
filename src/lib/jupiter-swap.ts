@@ -694,15 +694,30 @@ export async function hasTokenBalance(coinAddress: string): Promise<boolean> {
  * sells only that % of the CURRENT wallet balance. Used for real L1/L2
  * grid partials (sell 50% or 25% of current holdings, not the full bag).
  *
+ * Sprint 10 Phase 5 (Apr 21 PM): `opts.skipJito` (default false) bypasses
+ * the Jito bundle submit entirely and sends the tx directly via public
+ * RPC with auto priority fees. Guard-initiated exits (L1/L2/L3, SL, CB,
+ * trailing, timeout, unsellable recovery) should always pass
+ * `skipJito: true` because:
+ *   - Memecoin exits are time-critical. Losing 60-90s to a Jito bundle
+ *     poll (and another 60s to the re-quote fallback) routinely costs
+ *     20-50pp on the fill during volatile pumps (McDino +39% → -12%,
+ *     AI Coach Rudi +17% → timeout, KICAU +24% → liquidity-drain fills).
+ *   - Sandwich protection on SELLS is worth ~1-3% slippage; losing 60s
+ *     on a volatile exit is worth ~20pp. Net win by 10-20x.
+ * BUYS still route through Jito (in buyToken) because entry sandwich is
+ * a real cost and buy timing is less pump-sensitive.
+ *
  * @param coinAddress - Token mint address to sell
  * @param opts.entrySolCost - SOL spent on entry (for recovery math)
  * @param opts.exitReason - Why we're selling (determines sim-gate behavior)
  * @param opts.sellPercent - Percent of current balance to sell (1-100, default 100)
+ * @param opts.skipJito - Bypass Jito bundle, go direct RPC with auto priority
  * @returns Transaction signature or null on failure / sim abort
  */
 export async function sellToken(
   coinAddress: string,
-  opts?: { entrySolCost?: number; exitReason?: string; sellPercent?: number }
+  opts?: { entrySolCost?: number; exitReason?: string; sellPercent?: number; skipJito?: boolean }
 ): Promise<string | null> {
   try {
     const keypair = getKeypair();
@@ -751,7 +766,12 @@ export async function sellToken(
         }
         const quoteResponse = await quoteRes.json();
 
-        // 2. Get swap transaction
+        // 2. Get swap transaction.
+        // skipJito=true (guard exits): request auto-priority fees from
+        // the start — no Jito tip, no bundle submit, no 60s poll.
+        // skipJito=false (default, rescue scripts / buys): request with
+        // Jito tip for MEV protection, submit via bundle + poll.
+        const useJito = !opts?.skipJito;
         const swapRes = await jupiterFetchWithBackoff(
           JUPITER_SWAP_URL,
           {
@@ -761,10 +781,12 @@ export async function sellToken(
               quoteResponse,
               userPublicKey: walletPubkey,
               wrapAndUnwrapSol: true,
-              prioritizationFeeLamports: { jitoTipLamports: JITO_TIP_LAMPORTS },
+              prioritizationFeeLamports: useJito
+                ? { jitoTipLamports: JITO_TIP_LAMPORTS }
+                : "auto",
             }),
           },
-          "sell-swap"
+          useJito ? "sell-swap" : "sell-swap-direct"
         );
         if (!swapRes.ok) {
           console.error(`  [JUPITER] Sell swap tx failed: ${swapRes.status}`);
@@ -829,13 +851,28 @@ export async function sellToken(
           return null;
         }
 
-        // 3b. Sign and send via Jito bundle (fallback to public RPC)
+        // 3b. Sign
         tx.sign([keypair]);
 
         let signature: string = "";
         let confirmed = false;
         let onChainError: any = null;
 
+        if (!useJito) {
+          // skipJito fast path: send directly via public RPC. Tx was
+          // requested with "auto" priority fees so validators will
+          // include it without needing the Jito bundle route. Saves
+          // ~60s of bundle poll + ~60s of re-quote fallback that the
+          // Jito-first path eats on memecoin exits. The standard
+          // confirmation-wait block below handles the landing check.
+          signature = await connection.sendRawTransaction(tx.serialize(), {
+            skipPreflight: true,
+            maxRetries: 3,
+          });
+          console.log(
+            `  [JUPITER] SELL sent direct RPC (skipJito, auto priority) at ${slippage / 100}%: ${coinAddress.slice(0, 8)}... → ${signature}`
+          );
+        } else {
         const jitoResult = await submitViaJito(
           tx,
           `SELL ${coinAddress.slice(0, 8)} ${slippage / 100}%`
@@ -914,6 +951,7 @@ export async function sellToken(
             );
           }
         }
+        }  // end `else` of `if (!useJito)`
 
         if (!confirmed && !onChainError) {
           // Blocking confirmation — must know result before returning.

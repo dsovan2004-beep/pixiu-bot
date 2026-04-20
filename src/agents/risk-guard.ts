@@ -487,10 +487,14 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
         console.log(`  [GUARD] [LIVE SELL] ${coinLabel} grid_level=${gridLvl} remaining=${remainingPct}% — selling via Jupiter`);
         // Pass entry cost + exit reason so jupiter-swap can run the
         // pre-flight recovery gate on rescue exits (Sprint 10 Phase 1).
+        // skipJito=true: guard exits go direct RPC (auto priority) to
+        // avoid the 60-90s Jito bundle poll that eats 20-50pp of fill
+        // on memecoin exits during volatile pumps (Sprint 10 Phase 5).
         const entryCostForSim = pos.entry_sol_cost != null ? Number(pos.entry_sol_cost) : undefined;
         const sig = await sellToken(pos.coin_address, {
           entrySolCost: entryCostForSim,
           exitReason,
+          skipJito: true,
         });
         if (sig) {
           console.log(`  [GUARD] 🔴 LIVE SELL executed: ${sig} (${exitReason})`);
@@ -1009,6 +1013,11 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
           sellPercent: sellPctOfCurrent,
           // No entrySolCost/exitReason — grid is voluntary take-profit,
           // never hits the sim-abort floor.
+          // skipJito=true: grid partials are the most time-critical
+          // exits in the book (take-profit on pumps reverses fast).
+          // 60-90s Jito poll cost is worth ~20-50pp of fill; MEV
+          // sandwich on a sell is worth ~1-3%. Net win (Phase 5).
+          skipJito: true,
         });
         if (!partialSig) {
           console.log(
