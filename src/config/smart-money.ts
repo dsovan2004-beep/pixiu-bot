@@ -44,10 +44,13 @@ export const LIVE_BUY_SOL = 0.05;
 // Tightened Apr 18 PM — wallet down to ~0.82 SOL, 2.0 cap was wider than
 // the bag. 0.25 SOL caps overnight bleed at ~5 losing trades worth.
 // Apr 19 PM: temporary bump to 0.50 for Phase 1 sim-gate validation
-// (commit 9327b3e). Apr 20: reverted to 0.25 per BACKLOG P0 — the
-// bump had exceeded its stated 1-session window and sanity-check was
-// failing against the 0.25 target.
-export const DAILY_LOSS_LIMIT_SOL = 0.25;
+// (commit 9327b3e). Apr 20 AM: reverted to 0.25 per BACKLOG P0.
+// Apr 20 PM: user-requested bump back to 0.50. Current loss 0.257 SOL
+// tripped the 0.25 cap ~2.5h before midnight UTC rollover; user wants
+// trading to resume with the newly-shipped fixes (atomic claim, Jito
+// rotation, liquidity monitor) live. 0.50 gives ~0.24 SOL headroom
+// for the rest of today before re-halting. Revisit after midnight.
+export const DAILY_LOSS_LIMIT_SOL = 0.50;
 
 // Sprint 10 Phase 2 — entry filter: token age at entry.
 // Postmortem 2026-04-19 showed <5min-old tokens had 31.8% WR / -0.20 SOL,
