@@ -312,6 +312,47 @@ export async function parseSwapSolDelta(
   }
 }
 
+/**
+ * Sprint 10 Phase 4 — liquidity drainage monitor during hold.
+ *
+ * Fetches our current token balance on-chain and asks Jupiter to quote
+ * a sell of the FULL bag (at the same slippage bracket we use for live
+ * sells). Returns recovery as `solBack / entrySolCost`. A value < ~0.4
+ * means the pool has drained since entry — we should exit before it
+ * gets worse even if the DexScreener mark still reads positive.
+ *
+ * Openhuman (Apr 21) is the case that motivated this: at entry the
+ * pre-buy round-trip showed ~97% recovery. Eleven minutes later, at L1
+ * grid trigger, Jupiter returned 6024 (pool drained) for every slippage
+ * level. Bot had no way to see the drainage until it tried to sell.
+ *
+ * Returns null on any quote / balance failure (fail-open — transient
+ * Jupiter or Helius hiccups must not force an exit).
+ */
+export async function simulateSellRecovery(
+  coinAddress: string,
+  entrySolCost: number
+): Promise<number | null> {
+  try {
+    if (entrySolCost <= 0) return null;
+    const keypair = getKeypair();
+    if (!keypair) return null;
+    const connection = getConnection();
+    const balance = await getTokenBalance(connection, keypair.publicKey, coinAddress);
+    if (balance <= 0) return null;
+
+    const url = `${JUPITER_QUOTE_URL}?inputMint=${coinAddress}&outputMint=${SOL_MINT}&amount=${balance}&slippageBps=${SELL_SLIPPAGE_BPS[0]}`;
+    const res = await jupiterFetchWithBackoff(url, undefined, "simSell-liquidity");
+    if (!res.ok) return null;
+    const json: any = await res.json();
+    const solBackLamports = Number(json?.outAmount ?? 0);
+    if (!Number.isFinite(solBackLamports) || solBackLamports <= 0) return null;
+    return solBackLamports / 1e9 / entrySolCost;
+  } catch {
+    return null;
+  }
+}
+
 function getConnection(): Connection {
   if (isDevnet()) {
     return new Connection("https://api.devnet.solana.com", "confirmed");

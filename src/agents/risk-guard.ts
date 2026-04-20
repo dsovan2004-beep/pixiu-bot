@@ -16,7 +16,7 @@ import {
   LIVE_BUY_SOL,
   DAILY_LOSS_LIMIT_SOL,
 } from "../config/smart-money";
-import { sellToken, hasTokenBalance, wasLastSellUnsellable, wasSellSimAborted, parseSwapSolDelta } from "../lib/jupiter-swap";
+import { sellToken, hasTokenBalance, wasLastSellUnsellable, wasSellSimAborted, parseSwapSolDelta, simulateSellRecovery } from "../lib/jupiter-swap";
 import { sendAlert } from "../lib/telegram";
 
 // Read-only RPC for holder-distribution checks (SolRugDetector 73% rule).
@@ -33,6 +33,20 @@ const introspectConn = new Connection(
 // the SolRugDetector Pump-and-Dump trigger.
 const HOLDER_CHECK_INTERVAL_MS = 60_000; // 1 per minute per open position
 const HOLDER_DROP_THRESHOLD = 0.73;
+
+// Sprint 10 Phase 4 — liquidity drainage monitor during hold.
+// Openhuman (Apr 21) root-caused: pool went from ~97% round-trip
+// recovery at entry to fully drained (Jupiter 6024 across all 4
+// slippage levels) ~11 minutes later. Bot had no way to see the
+// drainage until it tried to sell at L1 and ate a -100% real loss.
+// Fix: periodic simulateSellRecovery() on the current bag. If quoted
+// recovery drops below the floor, exit now before it hits zero.
+// Threshold 0.40 is conservative — only triggers on real drainage, not
+// pool noise. Interval 60s per position keeps Helius/Jupiter load
+// bounded to ~1 quote call per open position per minute.
+const LIQUIDITY_CHECK_INTERVAL_MS = 60_000;
+const LIQUIDITY_DROP_THRESHOLD = 0.40;
+const liquiditySnapshots = new Map<string, { lastCheckMs: number }>();
 type HolderSnapshot = {
   topAddresses: Set<string>;
   sumBalance: number;
@@ -776,6 +790,40 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
             );
             await closeTrade(finalPnl, "holder_rug", currentLevel);
             holderSnapshots.delete(pos.id);
+            continue;
+          }
+        }
+      }
+    }
+
+    // 0d. Liquidity drainage monitor — runs in parallel with the holder
+    // exodus check but catches a different class of rug: whale pulling LP
+    // without their address appearing in a top-20 holder diff. Fetches
+    // current token balance + Jupiter quote for a full-bag sell at 5%
+    // slippage. If the quoted SOL out divided by entry cost drops below
+    // LIQUIDITY_DROP_THRESHOLD, the pool is effectively drained — exit
+    // now even if the mark (DexScreener mid) still reads positive.
+    //
+    // Per-position 60s cooldown. Fail-open on any quote / balance null
+    // result (transient Jupiter / Helius errors must not force exits).
+    // Only runs for [LIVE]-tagged positions with entry_sol_cost set.
+    if (pos.wallet_tag?.includes("[LIVE]") && pos.entry_sol_cost != null) {
+      const liqSnap = liquiditySnapshots.get(pos.id);
+      const nowMs = Date.now();
+      if (!liqSnap || nowMs - liqSnap.lastCheckMs >= LIQUIDITY_CHECK_INTERVAL_MS) {
+        const recovery = await simulateSellRecovery(pos.coin_address, Number(pos.entry_sol_cost));
+        liquiditySnapshots.set(pos.id, { lastCheckMs: nowMs });
+        if (recovery !== null) {
+          console.log(
+            `  [GUARD] [LIQUIDITY] ${coinLabel} sim sell recovery ${(recovery * 100).toFixed(1)}% of entry`
+          );
+          if (recovery < LIQUIDITY_DROP_THRESHOLD) {
+            const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
+            console.log(
+              `  [GUARD] 🩸 ${coinLabel} liquidity drained — quoted full-bag sell recovers ${(recovery * 100).toFixed(1)}% of entry (< ${(LIQUIDITY_DROP_THRESHOLD * 100).toFixed(0)}% floor). Emergency exit before it hits zero.`
+            );
+            await closeTrade(finalPnl, "pool_drain", currentLevel);
+            liquiditySnapshots.delete(pos.id);
             continue;
           }
         }
