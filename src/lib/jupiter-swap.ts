@@ -550,14 +550,19 @@ export async function hasTokenBalance(coinAddress: string): Promise<boolean> {
  * the sell aborts with a sim-abort flag — the pool is likely drained and
  * crystallizing the dust doesn't help. Grid take_profit always executes.
  *
+ * Sprint 10 Phase 3 (Apr 19 PM): `opts.sellPercent` (0-100, default 100)
+ * sells only that % of the CURRENT wallet balance. Used for real L1/L2
+ * grid partials (sell 50% or 25% of current holdings, not the full bag).
+ *
  * @param coinAddress - Token mint address to sell
  * @param opts.entrySolCost - SOL spent on entry (for recovery math)
  * @param opts.exitReason - Why we're selling (determines sim-gate behavior)
+ * @param opts.sellPercent - Percent of current balance to sell (1-100, default 100)
  * @returns Transaction signature or null on failure / sim abort
  */
 export async function sellToken(
   coinAddress: string,
-  opts?: { entrySolCost?: number; exitReason?: string }
+  opts?: { entrySolCost?: number; exitReason?: string; sellPercent?: number }
 ): Promise<string | null> {
   try {
     const keypair = getKeypair();
@@ -578,7 +583,18 @@ export async function sellToken(
       return null;
     }
 
-    console.log(`  [JUPITER] Token balance: ${tokenAmount} for ${coinAddress.slice(0, 8)}...`);
+    // Phase 3: compute portion to sell. Default 100% for full exits;
+    // L1/L2 grid partials pass sellPercent to sell a slice of current balance.
+    const sellPct = Math.max(1, Math.min(100, opts?.sellPercent ?? 100));
+    const sellAmount = Math.floor((tokenAmount * sellPct) / 100);
+    if (sellAmount <= 0) {
+      console.log(`  [JUPITER] Computed sellAmount=0 from balance ${tokenAmount} × ${sellPct}% — skipping`);
+      return null;
+    }
+
+    console.log(
+      `  [JUPITER] Token balance: ${tokenAmount} | selling ${sellPct}% = ${sellAmount} for ${coinAddress.slice(0, 8)}...`
+    );
 
     // Auto-escalate slippage: try 5% → 10% → 20% → 30%
     // On-chain 6001 failures (slippage exceeded) trigger next level
@@ -587,7 +603,7 @@ export async function sellToken(
         console.log(`  [JUPITER] Trying sell at ${slippage / 100}% slippage...`);
 
         // 1. Get quote
-        const quoteUrl = `${JUPITER_QUOTE_URL}?inputMint=${coinAddress}&outputMint=${SOL_MINT}&amount=${tokenAmount}&slippageBps=${slippage}`;
+        const quoteUrl = `${JUPITER_QUOTE_URL}?inputMint=${coinAddress}&outputMint=${SOL_MINT}&amount=${sellAmount}&slippageBps=${slippage}`;
         const quoteRes = await jupiterFetchWithBackoff(quoteUrl, undefined, "sell-quote");
         if (!quoteRes.ok) {
           console.error(`  [JUPITER] Sell quote failed: ${quoteRes.status}`);

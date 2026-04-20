@@ -394,18 +394,34 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
         if (sig) {
           console.log(`  [GUARD] 🔴 LIVE SELL executed: ${sig} (${exitReason})`);
 
-          // Compute + store REAL PnL from on-chain tx delta. This is the
-          // single source of truth for trade outcomes.
+          // Compute + store REAL PnL from on-chain tx delta.
+          //
+          // Phase 3: real_pnl_sol may already contain accumulated PnL
+          // from L1/L2 grid partials. At final close we ADD this sell's
+          // contribution (received SOL - proportional cost basis) to
+          // the existing value, never overwrite.
+          //
+          // Cost basis for this final sell = entryCost × remainingPct / 100
+          // (we only sold that fraction of the original position just now).
+          // If no partials fired: existing=0, remainingPct=100 → formula
+          // reduces to solReceived - entryCost (the old behavior).
+          //
+          // Captured at call-time since remainingPct is mutated after
+          // closeTrade in the grid loop on some paths.
+          const remainingPctAtClose = remainingPct;
           (async () => {
             const solReceived = await parseSwapSolDelta(sig);
             if (solReceived === null) return;
             const { data: row } = await supabase
               .from("trades")
-              .select("entry_sol_cost")
+              .select("entry_sol_cost, real_pnl_sol")
               .eq("id", pos.id)
               .maybeSingle();
             const entryCost = row?.entry_sol_cost ? Number(row.entry_sol_cost) : null;
-            const realPnlSol = entryCost !== null ? solReceived - entryCost : null;
+            const existingPnl = row?.real_pnl_sol != null ? Number(row.real_pnl_sol) : 0;
+            const finalSellCostBasis = entryCost !== null ? (entryCost * remainingPctAtClose) / 100 : null;
+            const finalSellPnl = finalSellCostBasis !== null ? solReceived - finalSellCostBasis : null;
+            const realPnlSol = finalSellPnl !== null ? existingPnl + finalSellPnl : null;
             try {
               await supabase
                 .from("trades")
@@ -415,7 +431,9 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
                 })
                 .eq("id", pos.id);
               if (realPnlSol !== null) {
-                console.log(`  [GUARD] 📊 real PnL: ${realPnlSol >= 0 ? "+" : ""}${realPnlSol.toFixed(6)} SOL (entry ${entryCost!.toFixed(6)} → received ${solReceived.toFixed(6)})`);
+                console.log(
+                  `  [GUARD] 📊 real PnL: ${realPnlSol >= 0 ? "+" : ""}${realPnlSol.toFixed(6)} SOL (final sell ${solReceived.toFixed(6)} − cost basis ${finalSellCostBasis!.toFixed(6)} = ${finalSellPnl! >= 0 ? "+" : ""}${finalSellPnl!.toFixed(6)}; prior partials: ${existingPnl >= 0 ? "+" : ""}${existingPnl.toFixed(6)})`
+                );
               } else {
                 console.log(`  [GUARD] 📊 sell_tx_sig recorded, real_pnl_sol skipped (no entry_sol_cost)`);
               }
@@ -713,14 +731,88 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
       continue;
     }
 
-    // 5. Grid Levels (L1 & L2 sell as before; L3 activates trailing mode)
+    // 5. Grid Levels — REAL partial sells (Phase 3, Apr 19 PM).
+    //
+    // Before today these were virtual-only: we updated grid_level and
+    // remaining_pct in the DB but no tokens were actually sold. Full
+    // position rode until a final exit event (CB/SL/TO/trailing_stop)
+    // dumped everything. That meant L1/L2 "banked" gains were fiction,
+    // and positions that hit +40% then crashed booked the whole crash.
+    //
+    // Now: each grid threshold crosses triggers a real sellToken call
+    // for the proportional slice of current wallet balance. SOL received
+    // accumulates into real_pnl_sol. L3 still activates trailing mode
+    // (no sell — remaining 25% rides peak).
     let newLevel = currentLevel;
     let updated = false;
+    const isLiveTradeForGrid = pos.wallet_tag?.includes("[LIVE]");
 
     for (const grid of GRID_LEVELS) {
       if (grid.level <= currentLevel) continue;
       if (pnlPct < grid.pct) break;
 
+      // Fraction of CURRENT wallet balance to sell = grid.sellPct /
+      // remainingPct × 100. If remainingPct=100%, L1 sellPct=50 → 50% of
+      // current. After L1, remainingPct=50%; L2 sellPct=25 → 50% of
+      // what's left (= 25% of original). Math stays consistent as grid
+      // levels cascade in a single poll cycle.
+      const sellPctOfCurrent = (grid.sellPct / remainingPct) * 100;
+
+      if (isLiveTradeForGrid) {
+        console.log(
+          `  [GUARD] [GRID L${grid.level}] ${coinLabel} triggered at +${pnlPct.toFixed(1)}% — selling ${sellPctOfCurrent.toFixed(1)}% of current balance via Jupiter`
+        );
+        const partialSig = await sellToken(pos.coin_address, {
+          sellPercent: sellPctOfCurrent,
+          // No entrySolCost/exitReason — grid is voluntary take-profit,
+          // never hits the sim-abort floor.
+        });
+        if (!partialSig) {
+          console.log(
+            `  [GUARD] [GRID L${grid.level}] ${coinLabel} PARTIAL SELL FAILED — not advancing grid level, will retry next poll`
+          );
+          break; // don't advance grid_level; next poll retries
+        }
+
+        console.log(
+          `  [GUARD] [GRID L${grid.level}] ${coinLabel} partial sold: ${partialSig}`
+        );
+
+        // Accumulate real_pnl_sol additively: each partial's (received
+        // - proportional cost basis). Background so it doesn't block.
+        (async () => {
+          try {
+            const partialReceived = await parseSwapSolDelta(partialSig);
+            if (partialReceived === null) return;
+            const { data: row } = await supabase
+              .from("trades")
+              .select("entry_sol_cost, real_pnl_sol")
+              .eq("id", pos.id)
+              .maybeSingle();
+            const entryCost = row?.entry_sol_cost ? Number(row.entry_sol_cost) : null;
+            const existingPnl = row?.real_pnl_sol != null ? Number(row.real_pnl_sol) : 0;
+            if (entryCost === null) return;
+            const costBasisThisPartial = (entryCost * grid.sellPct) / 100;
+            const partialPnlSol = partialReceived - costBasisThisPartial;
+            const newRealPnl = existingPnl + partialPnlSol;
+            await supabase
+              .from("trades")
+              .update({ real_pnl_sol: newRealPnl })
+              .eq("id", pos.id);
+            console.log(
+              `  [GUARD] 📊 L${grid.level} real partial PnL: ${partialPnlSol >= 0 ? "+" : ""}${partialPnlSol.toFixed(6)} SOL (received ${partialReceived.toFixed(6)} - cost basis ${costBasisThisPartial.toFixed(6)}) | cumulative ${newRealPnl >= 0 ? "+" : ""}${newRealPnl.toFixed(6)}`
+            );
+          } catch (err: any) {
+            console.error(`  [GUARD] partial PnL write failed: ${err.message}`);
+          }
+        })().catch(() => {});
+      } else {
+        console.log(
+          `  [GUARD] [GRID L${grid.level}] ${coinLabel} → virtual (not [LIVE]) at +${grid.pct}%`
+        );
+      }
+
+      // Advance virtual state (same as before)
       const portionPnl = (grid.pct * grid.sellPct) / 100;
       partialPnl += portionPnl;
       remainingPct -= grid.sellPct;
@@ -728,7 +820,7 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
       updated = true;
 
       console.log(
-        `  [GUARD] [GRID L${grid.level}] ${coinLabel} → sold ${grid.sellPct}% at +${grid.pct}% | ${remainingPct}% remaining`
+        `  [GUARD] [GRID L${grid.level}] ${coinLabel} now at ${remainingPct}% remaining (partial_pnl mark +${partialPnl.toFixed(2)}%)`
       );
     }
 
