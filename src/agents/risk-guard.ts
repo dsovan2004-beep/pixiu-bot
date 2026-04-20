@@ -289,14 +289,23 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
     // Skip if this position is already being closed
     if (closingPositions.has(pos.id)) continue;
 
-    // Skip pre-confirmation positions in live mode
-    // If live mode + no [LIVE] tag + less than 2min old → buy is still confirming
-    // Avoids running grid/SL on positions that may never actually land on-chain
-    if (liveMode && !pos.wallet_tag?.includes("[LIVE]")) {
-      const ageMs = Date.now() - new Date(pos.entry_time).getTime();
-      if (ageMs < 120_000) {
-        continue; // Buy still confirming, don't track yet
-      }
+    // Skip phantom pre-confirm rows: webhook inserted status=open but
+    // executor hasn't confirmed the buy yet. A row is "confirmed" when
+    // EITHER it has the [LIVE] tag OR entry_sol_cost is populated (the
+    // executor writes both after parseSwapSolDelta resolves, so during
+    // the brief window between those two writes entry_sol_cost is the
+    // stronger signal that the buy landed).
+    //
+    // Previously the skip was bounded by age < 120s. After 120s, guard
+    // would process phantoms — hitting the virtual-grid branch on price
+    // pumps and writing fake grid_level / remaining_pct / partial_pnl
+    // to the DB. If the buy then rescued (tokens late-land), the
+    // re-opened row would start at grid_level=2 / remaining=25 and
+    // skip L1+L2 — silent 75% mis-sizing on a real position. It also
+    // let CB/SL fire on phantoms, flipping status=open→closed with
+    // fake exit metadata. Caught in the SMB phantom pump-dump, Apr 20.
+    if (!pos.wallet_tag?.includes("[LIVE]") && pos.entry_sol_cost == null) {
+      continue;
     }
 
     const { price: currentPrice, source } = await getPrice(pos.coin_address);
