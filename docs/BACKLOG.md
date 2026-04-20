@@ -251,19 +251,15 @@ or rolling back:
 
 Target: ≥ 30 more trades. Re-run `live-stats.ts` at 48h.
 
-### P0 — Phantom positions from webhook + stopped bot
+### ~~P0 — Phantom positions from webhook + stopped bot~~ (RESOLVED)
 
-When `is_running=false` (daily-limit halt, manual stop, etc), the
-webhook still inserts `trades` rows on smart-money signals. Executor
-skips the buy; row sits in 'open' state with no wallet balance. Guard
-eventually CB-closes the phantom with `real_pnl_sol=null`.
+~~When `is_running=false` (daily-limit halt, manual stop, etc), the
+webhook still inserts `trades` rows on smart-money signals.~~
 
-Harmless today (dashboard filters out null-real rows from stats), but
-clutters the `trades` table and triggers guard/Jupiter calls for rows
-that aren't real positions.
-
-**Fix:** webhook should check `bot_state.is_running` before inserting.
-Requires adding that field to the webhook Edge query.
+Resolved in commit `8772d39` — webhook `evaluateAndEnter()` now has
+`webhookIsBotRunning()` as guard #1. If the dashboard says STOPPED,
+the webhook returns early before any insert. Kept this line in
+backlog as a historical marker; safe to delete next pass.
 
 ### P1 — L0 whale_exit safety net underperforming
 

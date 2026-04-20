@@ -1,11 +1,14 @@
 /**
  * PixiuBot Agent 1 — Wallet Watcher
  *
- * Polls coin_signals table every 3s for new inserts.
- * Publishes events to the shared pixiubot:signals broadcast channel.
+ * Polls coin_signals table every 3s and logs new inserts. Pure
+ * observability — the webhook and risk-guard read coin_signals
+ * directly, so there's no downstream consumer of watcher output.
  *
- * Previously used Supabase Realtime but it silently drops connections.
- * Polling is more reliable for production with real money.
+ * Previously used Supabase Realtime broadcast to a `pixiubot:signals`
+ * channel, but the former subscribers (signal-validator, price-scout)
+ * were deleted in Sprint 7 Day 3 (commit 7dbe342). The broadcast was
+ * dead code for several weeks and was removed in this pass.
  */
 
 import supabase from "../lib/supabase-server";
@@ -34,10 +37,6 @@ export async function startWalletWatcher(): Promise<void> {
 
   const trackedCount = walletCount || 0;
 
-  // Create broadcast channel for publishing signals
-  const signalChannel = supabase.channel("pixiubot:signals");
-  await signalChannel.subscribe();
-
   // Track last seen signal to avoid duplicates
   let lastSeenTime = new Date().toISOString();
 
@@ -62,20 +61,6 @@ export async function startWalletWatcher(): Promise<void> {
         const coin = row.coin_name || row.coin_address?.slice(0, 8) + "...";
 
         console.log(`  [WATCHER] ${tag} ${type} ${coin}`);
-
-        // Broadcast to pixiubot:signals channel
-        signalChannel.send({
-          type: "broadcast",
-          event: "signal",
-          payload: {
-            coin_address: row.coin_address,
-            coin_name: row.coin_name,
-            wallet_tag: row.wallet_tag,
-            transaction_type: row.transaction_type,
-            signal_time: row.signal_time,
-            rug_check_passed: row.rug_check_passed,
-          },
-        });
       }
     } catch (err: any) {
       console.error("  [WATCHER] Poll error:", err.message);

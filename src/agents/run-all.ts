@@ -1,8 +1,8 @@
 /**
- * PixiuBot — Sprint 3 Swarm Runner
+ * PixiuBot — Swarm Runner
  * Usage: npx tsx src/agents/run-all.ts
  *
- * Starts all 5 agents in parallel. Runs alongside the Next.js webhook.
+ * Starts all 4 agents in parallel. Runs alongside the Next.js webhook.
  */
 
 import supabase from "../lib/supabase-server";
@@ -13,13 +13,12 @@ import { startTierManager } from "./tier-manager";
 
 async function main(): Promise<void> {
   console.log("═══════════════════════════════════════════════════════════");
-  console.log("  PIXIU BOT — Sprint 3 Agent Swarm");
+  console.log("  PIXIU BOT — Agent Swarm");
   console.log("═══════════════════════════════════════════════════════════");
-  console.log("  Agent 1: Wallet Watcher   — coin_signals → pixiubot:signals");
-  console.log("  Agent 2: Trade Executor   — trades polling (3s)");
-  console.log("  Agent 3: Risk Guard       — trades polling (5s)");
+  console.log("  Agent 1: Wallet Watcher   — polls coin_signals (3s)");
+  console.log("  Agent 2: Trade Executor   — polls trades for buys (3s)");
+  console.log("  Agent 3: Risk Guard       — polls open positions (L0 2s / L1+ 5s)");
   console.log("  Agent 4: Tier Manager     — auto-demote/promote T1↔T2");
-  console.log("  Bus:     Supabase Realtime broadcast channels");
   console.log("  Trading: 24/7 | Rug Storm Protection: ON");
   console.log("  Mode:    LIVE TRADING — real Jupiter swaps ON");
   console.log(`  Started: ${new Date().toISOString()}`);
