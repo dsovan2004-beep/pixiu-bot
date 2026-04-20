@@ -230,6 +230,15 @@ async function getPrice(
 // Track positions already being closed to prevent duplicate exits
 const closingPositions = new Set<string>();
 
+// Phase 3 concurrency guard: prevents parallel grid-sell attempts on the
+// same position. setInterval fires checkPositions every 2-5s regardless
+// of whether the prior run finished. Without this lock, multiple poll
+// iterations read stale grid_level from DB (before the partial sell's
+// update commits) and all try to fire L1 simultaneously → Jupiter API
+// rate-limit storm (HTTP 429 on every request). Lock entry → drop out
+// of current poll's grid loop until the active sell finishes.
+const gridSellingPositions = new Set<string>();
+
 // ─── Position Check Loop ────────────────────────────────
 
 async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
@@ -813,6 +822,19 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
     let updated = false;
     const isLiveTradeForGrid = pos.wallet_tag?.includes("[LIVE]");
 
+    // Concurrency guard: if a grid-sell is already running on this
+    // position from a prior poll iteration, skip the grid loop
+    // entirely. Stale DB reads across parallel polls would otherwise
+    // fire duplicate L1 sells → Jupiter 429 storm.
+    if (isLiveTradeForGrid && gridSellingPositions.has(pos.id)) {
+      // fall through to trailing/close logic; skip grid evaluation
+    } else {
+      const releaseLock = isLiveTradeForGrid
+        ? () => gridSellingPositions.delete(pos.id)
+        : () => {};
+      if (isLiveTradeForGrid) gridSellingPositions.add(pos.id);
+      try {
+
     for (const grid of GRID_LEVELS) {
       if (grid.level <= currentLevel) continue;
       if (pnlPct < grid.pct) break;
@@ -919,6 +941,11 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
       console.log(
         `  [GUARD] [GRID L${grid.level}] ${coinLabel} now at ${remainingPct}% remaining (partial_pnl mark +${partialPnl.toFixed(2)}%)`
       );
+    }
+
+      } finally {
+        releaseLock();
+      }
     }
 
     // 5a. L3 activation: instead of selling the last 25% at +100%, flip to
