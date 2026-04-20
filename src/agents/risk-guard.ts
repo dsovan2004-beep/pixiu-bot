@@ -913,6 +913,40 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
           `  [GUARD] [GRID L${grid.level}] ${coinLabel} partial sold: ${partialSig}`
         );
 
+        // PERSIST GRID STATE IMMEDIATELY, synchronously, before the
+        // background real_pnl_sol writer fires. If the process dies (or
+        // is Ctrl+C'd) between partial-land and the end-of-function DB
+        // write at the bottom of the for-loop, the grid state MUST
+        // already be on disk — otherwise the next run reads grid_level=0
+        // / remaining_pct=100 and the guard re-fires the same partial on
+        // real money. That was the KICAU MANIA double-L1 bug (Apr 20):
+        // pre-restart L1 sold 50% of bag, background real_pnl_sol write
+        // landed (-0.002754), sync grid-state write at line 1032 was
+        // never reached. Restart saw L0 100%, fired L1 again → duplicate
+        // sell + cost-basis double-count (reported -0.033 real, actual
+        // -0.007).
+        const newPartialPnlAfter = partialPnl + (grid.pct * grid.sellPct) / 100;
+        const newRemainingPctAfter = remainingPct - grid.sellPct;
+        try {
+          await supabase
+            .from("trades")
+            .update({
+              grid_level: grid.level,
+              remaining_pct: newRemainingPctAfter,
+              partial_pnl: newPartialPnlAfter,
+            })
+            .eq("id", pos.id);
+        } catch (err: any) {
+          // A failure to persist grid state here is serious — the
+          // sell landed but the DB doesn't know. Log loudly so the
+          // operator can reconcile. Don't throw (would skip lock
+          // release); let the loop continue and the post-loop write
+          // try again.
+          console.error(
+            `  [GUARD] 🚨 L${grid.level} ${coinLabel} grid-state write failed: ${err.message}. Sig ${partialSig}. Will retry at end-of-loop.`
+          );
+        }
+
         // Accumulate real_pnl_sol additively: each partial's (received
         // - proportional cost basis). Background so it doesn't block.
         //
