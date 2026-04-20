@@ -857,7 +857,24 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
         });
         if (!partialSig) {
           console.log(
-            `  [GUARD] [GRID L${grid.level}] ${coinLabel} PARTIAL SELL FAILED — not advancing grid level, will retry next poll`
+            `  [GUARD] [GRID L${grid.level}] ${coinLabel} PARTIAL SELL FAILED — checking if tokens are gone`
+          );
+          // Detect the "balance already 0" case — means prior partials
+          // already sold everything (typically from the pre-mutex 429
+          // storm). If no tokens in wallet, short-circuit to closeTrade
+          // which marks the trade closed with take_profit (grid>0) and
+          // reconciles real_pnl_sol against accumulated partials. Avoids
+          // infinite retry loop.
+          const held = await hasTokenBalance(pos.coin_address);
+          if (!held) {
+            console.log(
+              `  [GUARD] [GRID L${grid.level}] ${coinLabel} wallet has 0 tokens — short-circuiting to closeTrade (take_profit) to reconcile state`
+            );
+            await closeTrade(partialPnl, "take_profit", grid.level);
+            break;
+          }
+          console.log(
+            `  [GUARD] [GRID L${grid.level}] ${coinLabel} tokens still held — Jupiter issue, will retry next poll`
           );
           break; // don't advance grid_level; next poll retries
         }
