@@ -162,7 +162,18 @@ const GRID_LEVELS = [
   { level: 2, pct: 40, sellPct: 25 },
 ];
 const L3_THRESHOLD_PCT = 100;       // pnl % where trailing mode activates
-const TRAILING_STOP_PCT = 20;       // exit when price drops this % from peak
+// Apr 21 PM: tightened 20 → 10 after hehehe round-trip catastrophe.
+// +100% pumps on pump.fun tokens reverse in 60-180s. A 20% trail meant
+// we waited for a ~20pp peak drop before even triggering sellToken —
+// then sellToken's confirmation + ladder (even with rescue-mode fix)
+// needs another 60-120s. By the time we actually land, the bag is
+// often at +30-50% mark instead of the +80-90% we could have captured
+// firing earlier. -10% trail means trailing triggers roughly when the
+// reversal starts, not after it's well underway. Tradeoff: on sustained
+// uptrends (Soltards-class +285%), we exit slightly earlier, but still
+// catch the bulk of the move since peak updates ratchet upward with
+// every new high.
+const TRAILING_STOP_PCT = 10;       // exit when price drops this % from peak
 const STOP_LOSS_PCT = 10;
 // Circuit breaker thresholds split by grid level (Sprint 9 P2a, Apr 18).
 // Real-PnL analysis showed circuit_breaker had 26% real WR / -0.96 SOL on
