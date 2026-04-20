@@ -50,7 +50,33 @@ const JITO_TIP_LAMPORTS = 1_000_000; // 0.001 SOL
 // sendBundle atomically lands the tx with the tip; getBundleStatuses
 // polls landing. Falls back to public RPC on any Jito failure — we
 // never want a Jito outage to block a sell.
-const JITO_BUNDLE_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles";
+//
+// Apr 21 2026: Jito removed the API key gate — block-engine access is
+// ungated for everyone. The 429s we were eating (observed on ~40-60%
+// of sells under the McDino slippage ladder) are free-tier per-endpoint
+// rate limits, not auth. Fix: rotate across regional endpoints so a
+// 429 on one region doesn't block the submit; on the first 429 we pick
+// a different region and try once more before letting the caller fall
+// through to public RPC. getBundleStatuses polls the SAME endpoint that
+// accepted the bundle (bundleIds are per-region).
+const JITO_BUNDLE_ENDPOINTS = [
+  "https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles",
+  "https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles",
+  "https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles",
+  "https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles",
+  "https://mainnet.block-engine.jito.wtf/api/v1/bundles",
+];
+let jitoEndpointCursor = 0;
+function nextJitoEndpoint(): string {
+  const url = JITO_BUNDLE_ENDPOINTS[jitoEndpointCursor % JITO_BUNDLE_ENDPOINTS.length];
+  jitoEndpointCursor++;
+  return url;
+}
+function jitoRegionLabel(url: string): string {
+  const m = url.match(/^https:\/\/([^.]+)\./);
+  if (!m) return "?";
+  return m[1] === "mainnet" ? "global" : m[1];
+}
 const JITO_POLL_INTERVAL_MS = 2_000;
 const JITO_POLL_TIMEOUT_MS = 60_000;
 
@@ -102,68 +128,101 @@ async function submitViaJito(
   const signature = bs58.encode(sigBytes);
 
   const serialized = Buffer.from(tx.serialize()).toString("base64");
-  try {
-    const res = await fetch(JITO_BUNDLE_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "sendBundle",
-        params: [[serialized], { encoding: "base64" }],
-      }),
-    });
-    if (!res.ok) {
-      console.error(`  [JITO] ${label}: sendBundle HTTP ${res.status}`);
-      return null;
-    }
-    const json: any = await res.json();
-    if (json.error) {
-      console.error(`  [JITO] ${label}: sendBundle error ${JSON.stringify(json.error)}`);
-      return null;
-    }
-    const bundleId = json.result as string;
-    console.log(`  [JITO] Bundle submitted: ${label} bundleId=${bundleId} sig=${signature.slice(0, 16)}...`);
 
-    // Poll status
-    const deadline = Date.now() + JITO_POLL_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, JITO_POLL_INTERVAL_MS));
-      try {
-        const sres = await fetch(JITO_BUNDLE_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method: "getBundleStatuses",
-            params: [[bundleId]],
-          }),
-        });
-        if (!sres.ok) continue;
-        const sjson: any = await sres.json();
-        const statuses = sjson.result?.value ?? [];
-        const entry = statuses[0];
-        if (!entry) continue; // not found yet
-        const cs = entry.confirmation_status;
-        if (cs === "confirmed" || cs === "finalized") {
-          if (entry.err) {
-            console.error(`  [JITO] Bundle failed on-chain: ${label} err=${JSON.stringify(entry.err)}`);
-            return { signature, landed: false };
+  // Submit phase: try primary endpoint; on 429, rotate to a different
+  // region and retry once. Second 429 → return null (caller falls
+  // through to public RPC). Non-429 non-ok, error response, or crash
+  // → return null immediately.
+  let endpoint = nextJitoEndpoint();
+  let region = jitoRegionLabel(endpoint);
+  let bundleId: string | null = null;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "sendBundle",
+          params: [[serialized], { encoding: "base64" }],
+        }),
+      });
+      if (res.status === 429) {
+        console.log(`  [JITO] ${label}: sendBundle HTTP 429 via ${region}`);
+        if (attempt === 0) {
+          // Rotate to a different region for one retry before giving up.
+          // If the round-robin cursor happens to hand us the same region,
+          // bump once (array has 5 entries so we only loop once max).
+          const prev = endpoint;
+          endpoint = nextJitoEndpoint();
+          if (endpoint === prev && JITO_BUNDLE_ENDPOINTS.length > 1) {
+            endpoint = nextJitoEndpoint();
           }
-          console.log(`  [JITO] Bundle landed: ${label} ${cs} sig=${signature.slice(0, 16)}...`);
-          return { signature, landed: true };
+          region = jitoRegionLabel(endpoint);
+          console.log(`  [JITO] ${label}: retrying on ${region}`);
+          continue;
         }
-      } catch {
-        // transient poll failure — keep trying until deadline
+        return null;
       }
+      if (!res.ok) {
+        console.error(`  [JITO] ${label}: sendBundle HTTP ${res.status} via ${region}`);
+        return null;
+      }
+      const json: any = await res.json();
+      if (json.error) {
+        console.error(`  [JITO] ${label}: sendBundle error ${JSON.stringify(json.error)} via ${region}`);
+        return null;
+      }
+      bundleId = json.result as string;
+      console.log(`  [JITO] Bundle submitted via ${region}: ${label} bundleId=${bundleId} sig=${signature.slice(0, 16)}...`);
+      break;
+    } catch (err: any) {
+      console.error(`  [JITO] ${label}: submission crashed via ${region} ${err.message}`);
+      return null;
     }
-    console.log(`  [JITO] Bundle poll timeout after ${JITO_POLL_TIMEOUT_MS / 1000}s: ${label} — falling back to RPC check`);
-    return { signature, landed: false };
-  } catch (err: any) {
-    console.error(`  [JITO] ${label}: submission crashed ${err.message}`);
-    return null;
   }
+
+  if (!bundleId) return null;
+
+  // Poll phase: use the same endpoint that accepted the bundle —
+  // Jito bundleIds are per-region and getBundleStatuses must hit the
+  // origin block engine. Behavior and timeouts unchanged from before.
+  const deadline = Date.now() + JITO_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, JITO_POLL_INTERVAL_MS));
+    try {
+      const sres = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getBundleStatuses",
+          params: [[bundleId]],
+        }),
+      });
+      if (!sres.ok) continue;
+      const sjson: any = await sres.json();
+      const statuses = sjson.result?.value ?? [];
+      const entry = statuses[0];
+      if (!entry) continue; // not found yet
+      const cs = entry.confirmation_status;
+      if (cs === "confirmed" || cs === "finalized") {
+        if (entry.err) {
+          console.error(`  [JITO] Bundle failed on-chain via ${region}: ${label} err=${JSON.stringify(entry.err)}`);
+          return { signature, landed: false };
+        }
+        console.log(`  [JITO] Bundle landed via ${region}: ${label} ${cs} sig=${signature.slice(0, 16)}...`);
+        return { signature, landed: true };
+      }
+    } catch {
+      // transient poll failure — keep trying until deadline
+    }
+  }
+  console.log(`  [JITO] Bundle poll timeout after ${JITO_POLL_TIMEOUT_MS / 1000}s via ${region}: ${label} — falling back to RPC check`);
+  return { signature, landed: false };
 }
 
 function isDevnet(): boolean {
