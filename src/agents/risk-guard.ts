@@ -921,8 +921,41 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
       const sellPctOfCurrent = (grid.sellPct / remainingPct) * 100;
 
       if (isLiveTradeForGrid) {
+        // Atomic DB claim BEFORE sellToken. Guards against the same-
+        // session stale-read race: the two setIntervals (L0 2s / L1+ 5s)
+        // can each read pos.grid_level=0 from DB before the first
+        // partial's sync write commits. The in-memory gridSellingPositions
+        // lock blocks CONCURRENT grid loops, but once poll A releases
+        // (after its grid loop break), poll B — which had been running
+        // its non-grid checks (CB/whale/SL/TO) in parallel with its own
+        // stale pos — reaches the grid gate, sees the lock released,
+        // and fires L1 again with its stale currentLevel=0.
+        //
+        // The .lt("grid_level", grid.level) clause means Postgres only
+        // applies the update if the current value is less than our
+        // intended level. If A already wrote grid_level=1, our claim
+        // for L1 fails (0 rows), we abort before wasting a Jupiter sell.
+        //
+        // Caught in 'I saw this and created this' (Apr 20 overnight):
+        // mark said +36% winner, book said -14% loser because L1 fired
+        // twice and the second one ran the 50% cost-basis math against
+        // a sell that was actually 25% of the original bag.
+        const { data: claimed } = await supabase
+          .from("trades")
+          .update({ grid_level: grid.level })
+          .eq("id", pos.id)
+          .lt("grid_level", grid.level)
+          .select("id")
+          .maybeSingle();
+        if (!claimed) {
+          console.log(
+            `  [GUARD] [GRID L${grid.level}] ${coinLabel} skip — DB grid_level already >= ${grid.level} (parallel poll claimed). Breaking loop.`
+          );
+          break;
+        }
+
         console.log(
-          `  [GUARD] [GRID L${grid.level}] ${coinLabel} triggered at +${pnlPct.toFixed(1)}% — selling ${sellPctOfCurrent.toFixed(1)}% of current balance via Jupiter`
+          `  [GUARD] [GRID L${grid.level}] ${coinLabel} triggered at +${pnlPct.toFixed(1)}% — selling ${sellPctOfCurrent.toFixed(1)}% of current balance via Jupiter (slot claimed)`
         );
         const partialSig = await sellToken(pos.coin_address, {
           sellPercent: sellPctOfCurrent,
@@ -948,8 +981,16 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
             break;
           }
           console.log(
-            `  [GUARD] [GRID L${grid.level}] ${coinLabel} tokens still held — Jupiter issue, will retry next poll`
+            `  [GUARD] [GRID L${grid.level}] ${coinLabel} tokens still held — Jupiter issue, reverting grid_level claim, will retry next poll`
           );
+          // Revert the atomic claim so the next poll can retry this level.
+          // Gated on grid_level=grid.level so we don't clobber a parallel
+          // successful advance (shouldn't happen given the lock, but defensive).
+          await supabase
+            .from("trades")
+            .update({ grid_level: currentLevel })
+            .eq("id", pos.id)
+            .eq("grid_level", grid.level);
           break; // don't advance grid_level; next poll retries
         }
 
@@ -957,25 +998,18 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
           `  [GUARD] [GRID L${grid.level}] ${coinLabel} partial sold: ${partialSig}`
         );
 
-        // PERSIST GRID STATE IMMEDIATELY, synchronously, before the
-        // background real_pnl_sol writer fires. If the process dies (or
-        // is Ctrl+C'd) between partial-land and the end-of-function DB
-        // write at the bottom of the for-loop, the grid state MUST
-        // already be on disk — otherwise the next run reads grid_level=0
-        // / remaining_pct=100 and the guard re-fires the same partial on
-        // real money. That was the KICAU MANIA double-L1 bug (Apr 20):
-        // pre-restart L1 sold 50% of bag, background real_pnl_sol write
-        // landed (-0.002754), sync grid-state write at line 1032 was
-        // never reached. Restart saw L0 100%, fired L1 again → duplicate
-        // sell + cost-basis double-count (reported -0.033 real, actual
-        // -0.007).
+        // PERSIST remaining_pct + partial_pnl immediately after the sell
+        // lands. grid_level was ALREADY committed by the atomic claim
+        // above, which serves double duty: (a) prevents the same-session
+        // stale-read duplicate-L1 race, and (b) closes the original
+        // KICAU-class restart race (sync write before background
+        // real_pnl_sol writer).
         const newPartialPnlAfter = partialPnl + (grid.pct * grid.sellPct) / 100;
         const newRemainingPctAfter = remainingPct - grid.sellPct;
         try {
           await supabase
             .from("trades")
             .update({
-              grid_level: grid.level,
               remaining_pct: newRemainingPctAfter,
               partial_pnl: newPartialPnlAfter,
             })
