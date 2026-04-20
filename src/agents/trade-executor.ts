@@ -231,9 +231,9 @@ export async function startTradeExecutor(): Promise<void> {
         // a freeze authority set, creator can freeze any holder's
         // account at will — classic rug vector. Legit pump.fun tokens
         // have freeze_authority = null (revoked at mint). Only 2 of 117
-        // confirmed rugs in the paper used this mechanism, so this
-        // filter catches a small but clean class with near-zero false
-        // positives.
+        // confirmed rugs in the SolRugDetector study used this mechanism,
+        // so this filter catches a small but clean class with near-zero
+        // false positives.
         try {
           const info = await introspectConn.getParsedAccountInfo(
             new PublicKey(trade.coin_address)

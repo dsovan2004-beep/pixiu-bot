@@ -717,8 +717,9 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
     // (excluding #1 which is the bonding curve / LP). On cooldown we re-check.
     // If >73% of the entry-time holder set has exited OR the summed balance
     // has dropped >73%, that's a pump-and-dump rug signature. Emergency CB.
-    // Only runs for live trades (no point checking paper positions) and
-    // cooldowns to 60s per position so we don't hammer RPC.
+    // Only runs for [LIVE]-tagged positions (pre-confirm phantoms are
+    // already filtered out upstream) and cooldowns to 60s per position
+    // so we don't hammer RPC.
     if (pos.wallet_tag?.includes("[LIVE]")) {
       const snap = holderSnapshots.get(pos.id);
       const nowMs = Date.now();
