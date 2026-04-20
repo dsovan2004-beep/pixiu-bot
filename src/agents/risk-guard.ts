@@ -500,6 +500,28 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
                 console.log(
                   `  [GUARD] 📊 real PnL: ${realPnlSol >= 0 ? "+" : ""}${realPnlSol.toFixed(6)} SOL (final sell ${solReceived.toFixed(6)} − cost basis ${finalSellCostBasis!.toFixed(6)} = ${finalSellPnl! >= 0 ? "+" : ""}${finalSellPnl!.toFixed(6)}; prior partials: ${existingPnl >= 0 ? "+" : ""}${existingPnl.toFixed(6)})`
                 );
+
+                // Mark vs real divergence alert. finalPnl is the mark-
+                // based percentage passed into closeTrade (partialPnl +
+                // (pnlPct * remainingPct)/100). Convert to SOL via
+                // entry_sol_cost and compare to on-chain real_pnl_sol.
+                // If they differ by > 25% of entry cost, something is
+                // off (liquidity drain, pool imbalance, AMM divergence
+                // from DexScreener mid) — surface it in Telegram for
+                // real-time pattern catching instead of log review.
+                if (entryCost !== null && entryCost > 0) {
+                  const markEquivSol = (finalPnl / 100) * entryCost;
+                  const divergenceSol = Math.abs(realPnlSol - markEquivSol);
+                  const divergencePct = divergenceSol / entryCost;
+                  if (divergencePct > 0.25) {
+                    const markSign = markEquivSol >= 0 ? "+" : "";
+                    const realSign = realPnlSol >= 0 ? "+" : "";
+                    void sendAlert(
+                      "divergence_warning",
+                      `${coinLabel} mark/real divergence ${(divergencePct * 100).toFixed(1)}% of entry — mark ${markSign}${markEquivSol.toFixed(4)} SOL vs real ${realSign}${realPnlSol.toFixed(4)} SOL (${exitReason})`
+                    );
+                  }
+                }
               } else {
                 console.log(`  [GUARD] 📊 sell_tx_sig recorded, real_pnl_sol skipped (no entry_sol_cost)`);
               }

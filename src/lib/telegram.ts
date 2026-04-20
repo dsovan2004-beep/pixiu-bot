@@ -28,6 +28,7 @@ export type AlertKind =
   | "buy_rescued"
   | "sell_failed"
   | "stuck_sell"
+  | "divergence_warning"
   | "info";
 
 const EMOJI: Record<AlertKind, string> = {
@@ -40,6 +41,7 @@ const EMOJI: Record<AlertKind, string> = {
   buy_rescued: "🛟",
   sell_failed: "🩸",
   stuck_sell: "🪤",
+  divergence_warning: "📐",
   info: "ℹ️",
 };
 
