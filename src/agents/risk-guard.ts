@@ -404,6 +404,27 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
             console.log(
               `  [GUARD] 📊 tokens gone after partials; trusting accumulated real_pnl_sol = ${existingPnl >= 0 ? "+" : ""}${existingPnl.toFixed(6)} SOL (no extra cost-basis subtraction — SOL is in the wallet)`
             );
+
+            // Divergence alert for CASE A — the sibling of the alert on
+            // the normal Jupiter-sell close path (~line 510). Mark here
+            // is `closedPnl` (the blended partial_pnl % from prior
+            // partials); compare to accumulated real SOL. If they drift
+            // > 25% of entry cost, something anomalous happened
+            // mid-trade — likely a liquidity-trap partial that locked
+            // mark gains but bled real SOL.
+            if (entryCost !== null && entryCost > 0) {
+              const markEquivSol = (closedPnl / 100) * entryCost;
+              const divergenceSol = Math.abs(existingPnl - markEquivSol);
+              const divergencePct = divergenceSol / entryCost;
+              if (divergencePct > 0.25) {
+                const markSign = markEquivSol >= 0 ? "+" : "";
+                const realSign = existingPnl >= 0 ? "+" : "";
+                void sendAlert(
+                  "divergence_warning",
+                  `${coinLabel} (zero-balance close) mark/real divergence ${(divergencePct * 100).toFixed(1)}% of entry — mark ${markSign}${markEquivSol.toFixed(4)} SOL vs real ${realSign}${existingPnl.toFixed(4)} SOL`
+                );
+              }
+            }
           } else if (gridLvl === 0 && entryCost !== null) {
             // CASE B — no partials, tokens gone: full loss.
             realPnlSolUpdate = -entryCost;
