@@ -70,7 +70,14 @@ const RESCUE_EXIT_REASONS = new Set([
 // BonkBot) ships tips; running without one means our txs get front-run and
 // back-run during drainage windows — which is exactly what happened on
 // BASED/Nintondo/Dicknald (mark diverged from real fill by 40-95pp).
-const JITO_TIP_LAMPORTS = 1_000_000; // 0.001 SOL
+// Apr 22 bump 0.001 → 0.002 SOL. Overnight run showed 100% of buys
+// falling back to RPC via 429 storms across global/ny/frankfurt/
+// amsterdam/tokyo. Tip was too low to compete with dominant pump.fun
+// bots and bundles were getting dropped. 0.002 matches the median tip
+// of the top bundlers (block-engine sampling), which should restore
+// inclusion rate and eliminate the 60-180s Jito-to-RPC fallback
+// timeout that ate ItsAngelCirce entirely.
+const JITO_TIP_LAMPORTS = 2_000_000; // 0.002 SOL
 
 // Jito block engine bundle endpoint (public, no auth required).
 // sendBundle atomically lands the tx with the tip; getBundleStatuses
