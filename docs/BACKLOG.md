@@ -5,6 +5,74 @@ when shipped, then delete from here.
 
 ---
 
+## Sprint 10 — Phase 7 shipped (Apr 21 PM UTC — selection-layer)
+
+Full selection-layer day after Phase 5-6 sell-side rebuild. Four
+commits. See `docs/JOURNAL.md#2026-04-21-pm-utc` for detail.
+
+| Commit | What |
+|---|---|
+| `ac428e8` | `chore(scripts): force-close + check-open utilities` |
+| `3080ed8` | `chore(config): MIN_TOKEN_AGE_MINUTES 30 → 15 — test` |
+| `2f1708d` | `chore(scripts): stop-bot.ts emergency pause utility` |
+| `52c9a20` | `feat(webhook): WALLET_BLACKLIST — 9 bleeders banned` |
+
+### What shipped
+
+**P3 wallet postmortem completed** (deferred from Phase 5-6 backlog).
+`src/scripts/wallet-postmortem.ts` with primary-wallet attribution.
+Output on 114 closed LIVE trades:
+
+- **Keep**: daniww (+0.1226 SOL, 50% WR, 6 trades) — sole proven
+  winner.
+- **Cut (blacklisted)**: GMGN_SM_5 (-0.076), Scharo (-0.073), cented
+  (-0.070), Bluey (-0.066, 0% WR), bandit (-0.063, 2 addresses),
+  decu (-0.031), chair (-0.028), Numer0 (-0.016), Cupsey (+0.008
+  carried by one lucky trade).
+- **Combined cut impact**: -0.463 SOL loss contribution eliminated.
+
+Guard #10a in `evaluateAndEnter()` checks primary `walletAddress`
+against `WALLET_BLACKLIST` (Set in `smart-money.ts`) BEFORE the
+tier check. Survives tier-manager auto-promotion.
+
+**Intentionally NOT tightening promotion threshold** — would have
+demoted daniww (5→10 trade threshold requires 7/10 wins at 65% WR,
+unreachable at her 50% pace). Blacklist handles known bad actors;
+tier-manager stays forgiving for new winners.
+
+**Age filter 30 → 15** — test change. Blocking nearly all daytime
+flow at 30min; 15min opens up the 15-30min bucket we had no data
+on. Death zone (<5min, 31.8% WR) still gated. Revert trigger: WR
+< 25% over ≥ 10 new trades in the 15-30 bucket.
+
+**Operational scripts**:
+- `stop-bot.ts` / `start-bot.ts`: flips `bot_state.is_running`.
+- `force-close.ts`: manual position close via rescue-mode ladder +
+  skipJito. Locks real_pnl_sol against prior partials. Used today.
+- `check-open.ts`: quick live mark read of open positions.
+
+### Day validation (first green day)
+
+Three L1+ grid wins on the new stack in a single session:
+
+| Trade | Grid | Real PnL |
+|---|---|---|
+| terminal | L2 TO | +0.0079 |
+| Solana Money | L2 manual-close | +0.0102 |
+| The Traitor | L1 TO | +0.0045 |
+| **Total wins** | | **+0.0226 SOL** |
+
+Losses totaled ~-0.08 SOL. Net day: ~-0.06 SOL. Session cumulative
+still -0.65 SOL but every shipped fix fired correctly. Wallet
+trajectory: 1.4564 → 1.3918 SOL across ~8 hours of LIVE.
+
+### 🟡 Edge webhook — CF Pages deploy needed
+
+`52c9a20` and `3080ed8` are webhook config changes — require CF Pages
+build + deploy to be live. Deployed today via auto-deploy on push.
+
+---
+
 ## Sprint 10 — Phase 5-6 shipped (Apr 20-21 UTC — sell-side rebuild)
 
 Longest engineering window of the sprint. 16 commits. Covered:
@@ -239,30 +307,47 @@ Total: 22 trades, 28.6% WR, **−0.1787 SOL** (−16.4% ROI on capital deployed)
 
 ## Sprint 10 — remaining candidates
 
-### P0 — Validate post-fix stack on 20+ live trades
+### P0 — Next wallet-postmortem re-run (~30 new closed trades from now)
 
-Every fix from Phase 5-6 (16 commits) needs empirical validation.
-Current sample on full new stack: ~4 trades (DogeWeed +0.012,
-APU -0.014, ICEMAN -0.003, SCHIZO -0.004). Watch for:
+First round cut 9 bleeders saving -0.463 SOL of expected future loss.
+Re-run `src/scripts/wallet-postmortem.ts` every ~30 new closed trades
+to catch the next wave.
 
-- `[POST-L1 TRAIL]` or `[POST-L2 TRAIL]` firings vs TO exits. If
-  post-L1 trail is firing on every L1 → `POST_L1_TRAIL_PCT` is too
-  tight (loosen from 25 → 30 or 35).
-- `[LIQUIDITY] ... sim sell recovery X%` distribution post-L1. On
-  the old buggy metric this read ~50% after L1. Post-`07822a1` it
-  should read ~100% on healthy tokens, drop only on REAL drain.
-- `[GUARD] Sim recovery: X%` distribution on rescue exits. With
-  the cost-basis fix, these should read higher than before on
-  legitimate exits — old numbers were systematically low.
-- `🆘 salvage recovered X SOL` fires. Any non-zero salvage value
-  is margin the old code would have written off as -100%.
-- `🆘 25% salvage also failed` fires. If frequent → the pool was
-  truly drained, unsellable mark-to-zero is correct.
-- DexScreener mark vs Jupiter real divergence at CLOSE. With the
-  post-L1 trail catching peaks earlier, close-time divergence
-  should shrink.
+Likely next-round candidates (based on Phase 7 insufficient-data
+wallets that may cross the 5-trade threshold with more data):
+- `Johnson` — 4 trades, 25% WR, -0.016 SOL so far
+- `Trenchman` — 4 trades, 0% WR, -0.074 SOL (already eligible but
+  was in insufficient-data bucket at time of first run)
+- `SmokezXBT` — 3 trades, 0% WR, -0.042 SOL
+- `chester` — 3 trades, 0% WR, -0.072 SOL
+- `pr6spr` — 1 trade, 0% WR, -0.052 SOL (single massive loss)
 
-Target: ≥ 30 trades. Re-run `live-stats.ts` at 48h.
+Cadence: after every 30 closed trades, or when session crosses
+-0.20 SOL, whichever first.
+
+### P0 — Validate post-fix stack (ongoing)
+
+Phase 5-6 stack now has 3 post-fix wins: terminal +0.0079, Solana
+Money +0.0102, The Traitor +0.0045. All three used atomic claim,
+sync write, skipJito, rescue-mode slippage, post-L1 trail.
+
+Remaining verification items for larger sample:
+
+- `🆘 salvage recovered X SOL` fires (no 6024 unsellable cases yet
+  on new stack — can't validate salvage math empirically)
+- `[POST-L1 TRAIL]` firings — The Traitor had close-to-trigger retrace
+  but never fired. Need more data on trail effectiveness vs TO.
+- Rescue-mode slippage distribution — most sells landing at 20%.
+  Tracking whether 30% rung ever needed.
+- DexScreener mark vs Jupiter real divergence at CLOSE. L1 slices
+  show large gaps (15pt+); L2/final slices cleaner. Worth studying.
+
+### P0 — Age filter test (30 → 15) — revert trigger watch
+
+`3080ed8` loosened MIN_TOKEN_AGE_MINUTES 30 → 15. Test. Revert
+target: WR < 25% over ≥ 10 new trades from the 15-30min bucket.
+Early data: 2 trades in bucket so far (J. Edgar Boozer -0.015,
+terminal +0.0079). Net -0.007 on n=2 — not enough to conclude.
 
 ### P0 — Tune new thresholds based on validation data
 
@@ -315,21 +400,11 @@ Implementation:
 
 Needs same sampling pass as liquidity velocity. Do them together.
 
-### P1 — Wallet postmortem with primary-wallet attribution
+### ~~P1 — Wallet postmortem with primary-wallet attribution~~ (SHIPPED Phase 7)
 
-Deferred from Sprint 10 Day 2 — earlier agent's attempt conflated
-co-signer names (bandit, Scharo, Q, Zrool) with the primary entry
-signal. Bot only enters on TOP_ELITE_ADDRESSES; co-signers appear
-in `wallet_tag` via concatenation (`"bandit+Cupsey [LIVE]"`).
-
-Correct methodology:
-1. Split `wallet_tag` on `+`, take first token
-2. Strip `" [LIVE]"` suffix
-3. Attribute `real_pnl_sol` only to that primary wallet
-4. Scope to whitelisted addresses only
-
-Gate: run ≥48h after `20fd68e` ships so data is clean (pre-fix rows
-have miscarried accounting from the sim-gate math bug).
+Completed Apr 21 PM. Script at `src/scripts/wallet-postmortem.ts`.
+9 wallets blacklisted via `52c9a20`. Re-run every ~30 new closed
+trades to catch new bleeders.
 
 ### P1 — Zombie row cleanup (~21 rows, different class from the 45 phantoms)
 

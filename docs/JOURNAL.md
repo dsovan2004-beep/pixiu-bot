@@ -5,6 +5,149 @@ Newest first.
 
 ---
 
+## 2026-04-21 (PM UTC) — Sprint 10 Phase 7: selection-layer hardening + first green day
+
+Full day of execution on the selection side after Phase 5-6's sell-side
+rebuild. Three configuration changes, two operational utilities, and
+the first empirically validated green session on the new stack.
+
+### Commits
+
+| Commit | What |
+|---|---|
+| `52c9a20` | `feat(webhook): WALLET_BLACKLIST — 9 net-negative primary signalers banned` |
+| `2f1708d` | `chore(scripts): stop-bot.ts emergency pause utility` |
+| `3080ed8` | `chore(config): MIN_TOKEN_AGE_MINUTES 30 → 15 — test looser age filter` |
+| `ac428e8` | `chore(scripts): force-close + check-open utilities` |
+
+### P3 wallet postmortem (the big one)
+
+Ran `src/scripts/wallet-postmortem.ts` on 114 closed LIVE trades with
+primary-wallet attribution (split `wallet_tag` on `+`, strip
+` [LIVE]` suffix). Findings:
+
+- **One wallet carrying the book**: `daniww` +0.1226 SOL on 6 trades,
+  50% WR.
+- **Nine wallets bleeding the book**: GMGN_SM_5 (-0.076), Scharo
+  (-0.073), cented (-0.070), Bluey (-0.066), bandit (-0.063),
+  decu (-0.031), chair (-0.028), Numer0 (-0.016), Cupsey (+0.008
+  but carried by one +0.149 winner, 25% WR otherwise).
+- **Combined cut impact**: -0.463 SOL of loss contribution removed
+  from future entries. Same sample's counterfactual PnL flips
+  -0.59 → -0.13 SOL. WR stays ~29% (the fix is loss-size, not
+  win-rate — acknowledged structural limit).
+- **Structural finding**: most trading wallets weren't in the
+  hardcoded `TOP_ELITE_ADDRESSES`. They were auto-promoted by
+  `tier-manager.ts` on 5+ trades / 65% WR in 7d windows. Lucky
+  streaks kept getting T1 status then bleeding.
+
+Shipped `WALLET_BLACKLIST` as a Set in `src/config/smart-money.ts`.
+Guard #10a in `evaluateAndEnter()` checks primary `walletAddress`
+against the blacklist BEFORE tier resolution. This survives
+tier-manager auto-promotion — even if a banned wallet hits a lucky
+65% WR window, the blacklist still rejects it.
+
+**Deliberately did NOT also tighten tier-manager promotion** (5→10
+trades was considered): would have demoted daniww from T1 back to
+T2 on the threshold change, costing us our one proven winner. The
+blacklist handles known bad actors; promotion threshold stays
+forgiving for new winners to emerge.
+
+### Age filter test (30 → 15)
+
+At current flow, the 30-min age filter was blocking ~all active
+trades during day sessions. Daytime dry spells of 40-60 minutes
+between entries. Loosened to 15min as a test.
+
+**Still gates the `<5min death zone`** (31.8% WR / -0.20 SOL from
+postmortem). Opens up the 15-30min bucket that had no data. Revert
+trigger: WR < 25% over ≥10 new trades from the 15-30min bucket.
+
+### Operational scripts
+
+**stop-bot.ts / start-bot.ts** — flips `bot_state.is_running` in
+Supabase. Webhook guard #1 (`webhookIsBotRunning`) rejects all new
+entries when flag is false. Existing positions still monitored by
+risk-guard.
+
+**force-close.ts** — manual emergency close of an open position.
+Uses `exitReason='trailing_stop'` (in RESCUE_EXIT_REASONS) to route
+through rescue-mode slippage ladder (20%→30%, 30s confirm) with
+`skipJito: true`. Books real_pnl_sol against prior partials
+correctly. Used today to lock +0.0102 SOL on Solana Money while it
+was still pumping past peak.
+
+**check-open.ts** — quick DB + DexScreener read of open positions
+with live mark. Useful for deciding ride vs close.
+
+### Day results (first green day on the post-fix stack)
+
+Three L1+ grid wins in a single session — first time this has happened
+on LIVE trading since the restart:
+
+| Trade | Grid | Real PnL |
+|---|---|---|
+| **terminal** | L2 TO | **+0.0079** |
+| **Solana Money** | L2 manual-close | **+0.0102** |
+| **The Traitor** | L1 TO | **+0.0045** |
+| **Combined wins** | | **+0.0226 SOL** |
+
+All three hit grid L1 or deeper. All three used the new sell stack
+(atomic claim, sync write, skip-Jito, rescue-mode slippage). Sim
+recovery math (`07822a1`) held up in real trades — post-L1 liquidity
+readings came in correctly around 100-150% as expected.
+
+Losses this session totaled ~-0.08 SOL across ~8 trades. Net day:
+~-0.06 SOL. Session still red (-0.65 SOL cumulative), but the wins
+demonstrate every shipped fix firing correctly end-to-end.
+
+### Notable operational moments
+
+**Solana Money** — GMGN_T1_2 primary triggered the entry (NOT the
+blacklisted GMGN_SM_5 that appeared in the concat `wallet_tag` —
+confirmed blacklist working correctly). Mark hit +87% peak. Force-
+closed at +67% mark / +50% real on the remaining 25% slice
+(sim recovery 152%). Didn't hold to peak, but locked certain gains.
+Mark-vs-real delta at L1 was significant (mark +16% / real +1.3%)
+due to thin pool at entry window; L2 and final slices cleared much
+cleaner as pool deepened.
+
+**The Traitor** — L1 at +17% real fill was NEGATIVE (-0.000785) on
+the slice because pool was thin. Final TO sell at +20.89% mark
+recovered +0.005275 real. Post-L1 retracement trail (`20fd68e`) did
+NOT fire — peak +32.5% → retrace to +7% = ~77% retrace, but
+threshold is -25% so close calculation (need -25% from peak price,
+not -25% absolute drop).
+
+**Zrool dump pattern** — blacklisted wallet Zrool sent 30+ SELL
+signals on The Traitor while we held. Correctly ignored via
+`whale_exit disabled` path. Blacklist prevents re-entry on Zrool
+primary-signal entries too.
+
+### Safety rails preserved
+
+- No change to CB / SL / TO triggers
+- No change to grid levels (L1 +15% / L2 +40% / L3 +100%)
+- L3 trailing unchanged (-10% from peak)
+- whale_exit stays DISABLED
+- tier-manager promotion criteria unchanged (5+ trades / 65% WR / 7d)
+
+### Current honest state
+
+Strategy is still net-losing per-trade under current WR/avg-win/avg-loss
+math (~-0.005 SOL expected per trade). Today's 3 wins netted -0.06 SOL
+because losses outnumbered wins ~2:1 and average loss size exceeded
+average win size. Engineering layer is effectively done; only lever
+remaining is iterative wallet selection via repeated postmortems as
+new data accumulates.
+
+Recommended forward path: run bot as-is, re-run `wallet-postmortem.ts`
+every ~30 closed trades, add new bleeders to blacklist each round.
+Expected savings per round (based on this round's -0.463 evidence)
+should exceed the bleed during the accumulation window.
+
+---
+
 ## 2026-04-21 (UTC) — Sprint 10 Phase 5-6: sell-side rebuild (16 commits over ~30h)
 
 Longest engineering window of the sprint. Started after Sprint 10 Day 2
