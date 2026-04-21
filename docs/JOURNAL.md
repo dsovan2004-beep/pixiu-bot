@@ -5,6 +5,181 @@ Newest first.
 
 ---
 
+## 2026-04-21 (UTC) — Sprint 10 Phase 5-6: sell-side rebuild (16 commits over ~30h)
+
+Longest engineering window of the sprint. Started after Sprint 10 Day 2
+PM closed net-negative and daily-limit halted. Three user-visible
+failure classes drove the work:
+
+1. **Openhuman-class**: -100%+ real losses on benign Token-2022 mints.
+   Postmortem (`investigate-openhuman.ts`) showed the mints had no
+   transfer fees — just metadata-only extensions. Real cause was pool
+   drainage between entry and exit making Jupiter's quoted min-out
+   unreachable at full-balance sell size. Old code bailed at first
+   6024 assuming transfer-tax.
+
+2. **SCHIZO-class**: L1 fires at mark +17%, peak +17.6%, mark drifts
+   back to +11.6% over 8min, TO forces exit at mark-real divergence
+   (real -20% when mark was +11.6%). Net -0.004 SOL on what "looked
+   like" a winner. Between L1 and SL there's a 27pt no-man's-land
+   with no retracement protection.
+
+3. **Phantom accounting**: >100% losses appearing in dashboard because
+   sell-failed rows were writing `real_pnl_sol = -entryCost` blindly
+   even when L1 partials had already banked SOL (clobbering the
+   credit).
+
+### Commits (chronological, oldest first)
+
+| Commit | What |
+|---|---|
+| `b261115` | `chore(config): revert daily loss limit 0.50 → 0.25` (cleanup) |
+| `0a7c356` | `chore: remove dead broadcast channel, stale 'Sprint 3' banner` |
+| `d2e3d54` | `feat(risk-guard): extend divergence alert to CASE A` (tokens-gone close path) |
+| `7568c14` | `chore(scripts): add reconcile-rollback utility` |
+| `34507ab` | `fix(risk-guard): atomic DB claim on grid_level` — closes same-session duplicate-partial race |
+| `0a98636` | `fix(executor): mark daily-limit-skipped trades as failed` (stops phantom accumulation) |
+| `a75eca0` | `feat(jupiter-swap): rotate Jito bundle submits across regional endpoints` (retry on 429) |
+| `c8fcd6a` | `chore(scripts): daily-limit phantom cleanup + rollback utilities` (45 phantoms cleaned) |
+| `e8f8257` | `feat(risk-guard): continuous liquidity drainage monitor during hold` (Openhuman class) |
+| `82c1379` | `chore(config): bump DAILY_LOSS_LIMIT_SOL 0.25 → 0.50` (user-requested resume) |
+| `748dd8e` | `fix(sells): skip Jito on all guard-initiated exits` — direct RPC with auto priority |
+| `ae0ae6d` | `fix(sells): rescue-mode slippage + confirm timeout` — capture trailing peaks |
+| `523e31d` | `chore(risk-guard): tighten trailing stop 20% → 10% from peak` |
+| `6d17fdd` | `fix(sells): 6024 ladder-retry + partial-size salvage` — recover some SOL on drained pools |
+| `07822a1` | `fix(sim-gate): recovery calc must use proportional cost basis` — pre-flight gate was miscalibrated at L1+ |
+| `20fd68e` | `feat(risk-guard): post-L1 retracement trail` — cover the L1→TO no-man's-land |
+
+### Material behavior changes
+
+**Grid race durability (`34507ab`, `12b5842` earlier):** Atomic DB
+claim on `grid_level` gated by `.lt("grid_level", grid.level)` prevents
+parallel poll cycles from double-firing L1/L2. Sync DB write happens
+immediately after `sellToken` returns, not in a background task —
+eliminates rollback-on-restart class.
+
+**Jito regional rotation (`a75eca0`):** `JITO_BUNDLE_ENDPOINTS` array
+[ny, frankfurt, amsterdam, tokyo, global] rotates round-robin with
+`nextJitoEndpoint()`. On 429 the caller retries with the next region.
+Replaced the single-endpoint 429 dead-end.
+
+**Skip-Jito on guard-initiated sells (`748dd8e`):** All exits
+(CB/SL/TO/trailing/grid/whale/unsellable/rescue) now pass
+`skipJito: true` to `sellToken`. Direct RPC with auto priority fees,
+no Jito bundle poll. Rationale: memecoin exit timing beats MEV
+protection — a 60-90s Jito poll routinely costs 20-50pp of fill on
+volatile pumps. Buys still route through Jito (entry sandwich is a
+real cost, entry timing is less pump-sensitive).
+
+**Rescue-mode slippage ladder (`ae0ae6d`):** New `SELL_SLIPPAGE_BPS_RESCUE
+= [2000, 3000]` used for `RESCUE_EXIT_REASONS` (CB, SL, trailing_stop,
+whale_exit, holder_rug, pool_drain, timeout). 30s confirm timeout
+and 3-retry status poll (vs 60s / 6 retries for normal grid).
+Original 5%→10%→20%→30% ladder wasted 60-120s per rung on thin pools
+during rug events.
+
+**Trailing stop tightened to -10% (`523e31d`):** Was -20%. Winners
+caught by the old rule exited at +30-50% mark instead of +80-90%.
+The -10% trail triggers roughly when the reversal starts, not after
+it's well underway.
+
+**Liquidity drainage monitor (`e8f8257` + `07822a1` math fix):**
+Periodic `simulateSellRecovery()` (60s cadence per position). If
+quoted recovery on the remaining slice drops below 40% of its
+proportional cost basis, emergency exit via `pool_drain`. Original
+implementation at `e8f8257` divided by full entry cost, so the metric
+mechanically halved after L1 (50% sold) and quartered after L2 (75%
+sold) regardless of pool health. Post-`07822a1`, a healthy token at
+any grid level quotes ~1.0; the 40% floor now means real drainage
+across all levels.
+
+**Sim-gate math fix (`07822a1`):** Same bug lived in the pre-flight
+sell sim-gate inside `sellToken`. At L2 (remaining_pct=25), a
+routine -10% dip on the remaining slice would produce recovery
+22.5%, below the 30% floor — SL/CB/trailing would ABORT legitimate
+rescue exits. Silently ate position value on downsides. Both call
+sites now use `costBasis = entry × (remaining/100) × (sellPercent/100)`.
+
+**6024 ladder retry + partial-size salvage (`6d17fdd`):** Old code
+bailed at first 6024 assuming transfer-tax. Investigation showed
+Openhuman + John Apple had no transfer-fee extensions — just
+metadata. 6024 now retries through the slippage ladder like 6001;
+only marks unsellable after every rung fails. Risk-guard then tries
+one 25%-chunk salvage at rescue slippage before mark-to-zero. Thin
+pools often take smaller orders even when full-size 6024s. Unified
+L0 and L1+ accounting paths so salvage credit doesn't get clobbered.
+
+**Post-L1 retracement trail (`20fd68e`):** New `POST_L1_TRAIL_PCT = 25`
+with `POST_L1_MIN_PEAK_PCT = 5` guard. At grid levels 1 and 2, track
+peak-since-activation. If retracement from peak > 25% AND peak was
+≥ +5% above entry, exit via `trailing_stop`. Covers SCHIZO-class:
+peak +17.6% → floor +13.2% → exits ~4-5min before TO. Estimated
+SCHIZO counterfactual: +0.003 SOL instead of -0.004 SOL.
+
+**Phantom accounting unified (`6d17fdd`):** Old L0 branch in the
+unsellable path wrote `real_pnl_sol = -entryCost` blindly. New
+unified path: `existingPnl - remainingCostBasis` where
+`remainingCostBasis = entryCost × remainingPct / 100`. Works for
+L0 (full loss = `-entryCost`), L1+ with partials already banked,
+and post-salvage where `remainingPct` has been reduced.
+
+**Dashboard exit-reason mappings (`6d17fdd`):** Added PD (pool_drain,
+amber), HR (holder_rug, red), XS (unsellable_6024, red). Previously
+all rendered as "-".
+
+### Filter changes
+
+None this sprint. Entry filters stayed at MIN_TOKEN_AGE_MINUTES=30,
+MAX_CO_BUYERS_5MIN=2, MIN_ROUND_TRIP_RECOVERY=0.90. All work was on
+the exit side.
+
+### Day-end results (Apr 20-21)
+
+101 closed LIVE trades cumulative, **-0.5635 SOL** session, 26.7% WR
+(27W / 74L), avg win +36.52%, avg loss -28.04%.
+
+Evidence the post-fix stack is working:
+- **DogeWeedWojakNoScopeDuckSnoop** (first confirmed post-fix winner):
+  L1 banked +0.003513, TO exit via rescue-mode 20% slip at +22.49%
+  pnlPct → final +0.008453 → **net +0.0120 SOL** (+23.93%).
+- **APU**: late-rescue re-opened the trade after buy marked failed
+  (`🛟 [RESCUE] APU found on-chain — buy landed late, re-opening trade`),
+  CB at -18.8% fired rescue mode, sim 73.73%, clean fill. Net -0.014
+  SOL bounded loss.
+- **ICEMAN**: buy via RPC after Jito timeout, L1 locked +0.003, SL
+  rescue 20% slip fill. Net -0.003 SOL bounded.
+- **SCHIZO SIGNALS**: L1 banked +0.001, then the bug surfaced — real
+  -0.004 net on a +17% mark peak. **This trade exposed the sim-gate
+  math bug and drove `07822a1` + `20fd68e`.** Would close flat to
+  slightly positive under the post-commit rules.
+
+Clean fails (no phantom): AMERIC4N P5YCHO (buy timed out twice, rescue
+found no tokens, no DB row left open).
+
+### Safety rails preserved
+
+- No change to CB / SL / TO triggers
+- L3 trailing unchanged (-10% from peak)
+- whale_exit stays DISABLED
+- Entry filters untouched
+- `DAILY_LOSS_LIMIT_SOL` at 0.50 — still above the earlier 0.25 target,
+  revert is pending user decision
+
+### Open questions (tracked in BACKLOG)
+
+- Does the new post-L1 trail threshold (25%) leave enough room for L2
+  runs? Needs 10+ L1-ing trades to validate.
+- Drain monitor floor of 40% is now on correct math — is 40% still
+  the right number, or should it tighten to 60% now that the metric
+  is trustworthy?
+- Divergence alert threshold 25% missed SCHIZO at 23.9%; consider
+  0.20.
+- P3 wallet postmortem with primary-wallet attribution still pending —
+  earlier agent's analysis conflated co-signers. Needs re-run on
+  clean post-fix data (wait 48h for accumulation).
+
+---
+
 ## 2026-04-19 (PM UTC) — Sprint 10 Phase 1: execution hardening (Jito + sim gate)
 
 Three surgical commits targeting the real leak surfaced by Sprint 10

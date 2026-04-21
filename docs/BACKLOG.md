@@ -5,6 +5,62 @@ when shipped, then delete from here.
 
 ---
 
+## Sprint 10 — Phase 5-6 shipped (Apr 20-21 UTC — sell-side rebuild)
+
+Longest engineering window of the sprint. 16 commits. Covered:
+**(a)** grid race durability (atomic claim + sync write), **(b)** Jito
+regional rotation, **(c)** skip-Jito on guard-initiated sells,
+**(d)** rescue-mode slippage ladder, **(e)** drainage monitor during
+hold, **(f)** 6024 retry + partial-size salvage, **(g)** sim-gate math
+fix (silently blocked legitimate CB/SL exits at L2+), **(h)** post-L1
+retracement trail (SCHIZO-class coverage), **(i)** unified phantom
+accounting so partial credit isn't clobbered, **(j)** dashboard
+exit-reason mappings.
+
+See `docs/JOURNAL.md#2026-04-21` for the full writeup. Commit list:
+
+| Commit | What |
+|---|---|
+| `20fd68e` | `feat(risk-guard): post-L1 retracement trail` — SCHIZO-class coverage |
+| `07822a1` | `fix(sim-gate): proportional cost basis` — was aborting L2+ SL/CB |
+| `6d17fdd` | `fix(sells): 6024 ladder-retry + partial-size salvage + unified accounting` |
+| `523e31d` | `chore(risk-guard): tighten trailing stop 20% → 10%` |
+| `ae0ae6d` | `fix(sells): rescue-mode slippage [20,30]% + 30s confirm timeout` |
+| `748dd8e` | `fix(sells): skip Jito on all guard-initiated exits` |
+| `82c1379` | `chore(config): DAILY_LOSS_LIMIT_SOL 0.25 → 0.50` (resume) |
+| `e8f8257` | `feat(risk-guard): continuous liquidity drainage monitor` (Openhuman class) |
+| `c8fcd6a` | `chore(scripts): daily-limit phantom cleanup + rollback` (45 phantoms) |
+| `a75eca0` | `feat(jupiter-swap): rotate Jito bundle endpoints + 429 retry` |
+| `0a98636` | `fix(executor): mark daily-limit-skipped as failed` |
+| `34507ab` | `fix(risk-guard): atomic DB claim on grid_level` |
+| `7568c14` | `chore(scripts): reconcile-rollback utility` |
+| `d2e3d54` | `feat(risk-guard): divergence alert CASE A extension` |
+| `0a7c356` | `chore: remove dead broadcast channel + stale banner` |
+| `b261115` | `chore(config): revert daily loss 0.50 → 0.25` (superseded) |
+
+### Evidence post-fix stack works
+
+- **DogeWeedWojakNoScopeDuckSnoop**: first confirmed winner on new
+  stack. L1 +0.0035 + TO rescue-mode final +0.0085 = **+0.0120 SOL net**.
+- **APU late-rescue**: buy marked failed → found on-chain → rescue
+  re-opened → CB fired with sim 73.73% → clean fill, bounded -0.014.
+- **ICEMAN**: L1 locked +0.003, SL rescue-mode 20% slip, bounded -0.003.
+- **AMERIC4N P5YCHO**: clean fail, no phantom row.
+- **SCHIZO SIGNALS**: exposed the sim-gate math bug that drove `07822a1`
+  and the L1→TO gap that drove `20fd68e`. Would close flat-to-positive
+  under post-commit rules.
+
+### Day 2 PM stats still apply (nothing closed on full new stack yet)
+
+101 closed LIVE trades cumulative, -0.5635 SOL session, 26.7% WR.
+
+### 🟡 Requires node-agent restart to activate
+
+All changes in `src/lib/*` and `src/agents/*` need the node swarm
+(`npx tsx src/agents/run-all.ts`) to restart. Edge webhook unchanged.
+
+---
+
 ## Sprint 10 — Day 2 Phase 2+3 shipped (Apr 19 PM UTC — filters, holder monitor, timeout)
 
 Continued from AM execution hardening. This half of the day shipped:
@@ -183,11 +239,53 @@ Total: 22 trades, 28.6% WR, **−0.1787 SOL** (−16.4% ROI on capital deployed)
 
 ## Sprint 10 — remaining candidates
 
-### P0 — **REVERT DAILY_LOSS_LIMIT_SOL 0.50 → 0.25 (again)**
+### P0 — Validate post-fix stack on 20+ live trades
 
-Bumped TWICE today (`8084cec` → reverted by `09fc37a` → re-bumped
-by `9327b3e`). Leave at 0.50 only through tonight's run; revert
-tomorrow AM regardless of outcome. Pattern is getting repeat-y.
+Every fix from Phase 5-6 (16 commits) needs empirical validation.
+Current sample on full new stack: ~4 trades (DogeWeed +0.012,
+APU -0.014, ICEMAN -0.003, SCHIZO -0.004). Watch for:
+
+- `[POST-L1 TRAIL]` or `[POST-L2 TRAIL]` firings vs TO exits. If
+  post-L1 trail is firing on every L1 → `POST_L1_TRAIL_PCT` is too
+  tight (loosen from 25 → 30 or 35).
+- `[LIQUIDITY] ... sim sell recovery X%` distribution post-L1. On
+  the old buggy metric this read ~50% after L1. Post-`07822a1` it
+  should read ~100% on healthy tokens, drop only on REAL drain.
+- `[GUARD] Sim recovery: X%` distribution on rescue exits. With
+  the cost-basis fix, these should read higher than before on
+  legitimate exits — old numbers were systematically low.
+- `🆘 salvage recovered X SOL` fires. Any non-zero salvage value
+  is margin the old code would have written off as -100%.
+- `🆘 25% salvage also failed` fires. If frequent → the pool was
+  truly drained, unsellable mark-to-zero is correct.
+- DexScreener mark vs Jupiter real divergence at CLOSE. With the
+  post-L1 trail catching peaks earlier, close-time divergence
+  should shrink.
+
+Target: ≥ 30 trades. Re-run `live-stats.ts` at 48h.
+
+### P0 — Tune new thresholds based on validation data
+
+After the 48h window, reassess:
+
+- **`POST_L1_TRAIL_PCT`** (currently 25%). Looser = more L2 runs
+  captured, tighter = less give-back at close. Candidate tunes: 20,
+  25, 30.
+- **`LIQUIDITY_DROP_THRESHOLD`** (currently 0.40). Now on correct
+  math. With the denominator fixed, 40% is strict — a healthy token
+  post-L1 should quote ~1.0. Consider bumping to 0.60 for earlier
+  drain detection. Risk: transient Jupiter quote noise could cause
+  false pool_drain exits.
+- **Divergence alert threshold** (currently 0.25). SCHIZO was 23.9%
+  — just below. Dropping to 0.20 surfaces this class in Telegram.
+  Pure telemetry change, no trading behavior impact.
+
+### P0 — REVERT DAILY_LOSS_LIMIT_SOL 0.50 → 0.25
+
+Bumped TWICE (`82c1379` Apr 20 after `b261115` revert). Left at 0.50
+to let the new sell-side stack run after midnight UTC rollover. Revert
+target: after 20+ trades on new stack OR at next UTC rollover if the
+session crosses 0.30 SOL loss. User-decision gate.
 
 ### P0 — Phase 3: liquidity velocity metric (strongest ArXiv predictor)
 
@@ -217,75 +315,56 @@ Implementation:
 
 Needs same sampling pass as liquidity velocity. Do them together.
 
-### P0 — Validate Phase 1+2 on 20+ post-filter trades
+### P1 — Wallet postmortem with primary-wallet attribution
 
-Current post-filter sample: 2 trades (Shrek2 −$0.21, Potoooooooo
-−$0.50). Way too small. Watch for:
-- `[FILTER] PASS` rate vs `SKIP` rate
-- `[GUARD] [HOLDER]` retention distribution — validate the 73%
-  threshold isn't too loose (no rug fires on healthy positions)
-- `[FILTER] SKIP ... freeze authority present` — expect very rare
-- `[GUARD] Sim recovery: X%` distribution on filter-era sells
-- Mark-vs-real divergence post-filters — does filtering reduce?
-- Real WR on filter-era trades — target >30% (current 20%)
+Deferred from Sprint 10 Day 2 — earlier agent's attempt conflated
+co-signer names (bandit, Scharo, Q, Zrool) with the primary entry
+signal. Bot only enters on TOP_ELITE_ADDRESSES; co-signers appear
+in `wallet_tag` via concatenation (`"bandit+Cupsey [LIVE]"`).
 
-Need log/DB distribution of:
-- `[GUARD] Sim recovery: X%` on every sell (gated or not). Expected
-  healthy range 0.70–1.50; abort band <0.30.
-- `[JITO] Bundle landed` vs `[JITO] Bundle failed → RPC fallback`
-  ratio. If >30% fall through to RPC consistently, get a Jito API
-  key (rate-limit hypothesis).
-- Mark-vs-real divergence on rescue exits. If still >20pp after
-  Jito+sim, the tip is too low and/or Jito isn't routing; consider
-  bumping 0.001 → 0.002 SOL.
-- Any false sim-abort (pool NOT drained but gate fired). Tells us
-  the 0.30 floor is too tight.
+Correct methodology:
+1. Split `wallet_tag` on `+`, take first token
+2. Strip `" [LIVE]"` suffix
+3. Attribute `real_pnl_sol` only to that primary wallet
+4. Scope to whitelisted addresses only
 
-### P0 — Measure old thresholds (48h observation)
+Gate: run ≥48h after `20fd68e` ships so data is clean (pre-fix rows
+have miscarried accounting from the sim-gate math bug).
 
-Behavioral fixes shipped this session need data before declaring good
-or rolling back:
-- Real WR on L1+ CB at −15% (new trigger; 0/2 at −25% pre-fix)
-- Real WR on L0 whale_exit after `6b3c2eb` gate
-- Trailing_stop conversion rate unchanged (expect ~70%)
+### P1 — Zombie row cleanup (~21 rows, different class from the 45 phantoms)
 
-Target: ≥ 30 more trades. Re-run `live-stats.ts` at 48h.
+Existing: 45 `filter_daily_limit_retro` phantoms cleaned by
+`c8fcd6a` (Apr 20). Distinct from the pre-atomic-claim zombies
+where `grid_level > 0 AND remaining_pct = 100 AND sell_tx_sig IS NULL`
+— rows where L1 was claimed but the sell never landed before
+`34507ab` made claims atomic.
 
-### ~~P0 — Phantom positions from webhook + stopped bot~~ (RESOLVED)
+Verification query first:
+```sql
+SELECT count(*) FROM trades
+WHERE grid_level > 0 AND remaining_pct = 100 AND sell_tx_sig IS NULL;
+```
 
-~~When `is_running=false` (daily-limit halt, manual stop, etc), the
-webhook still inserts `trades` rows on smart-money signals.~~
+If count matches ~21, write a targeted cleanup that:
+- Backs up the rows to JSON (same pattern as `c8fcd6a`)
+- Resets `grid_level = 0` and `remaining_pct = 100` if status='open'
+- Flags status='closed' with `exit_reason='zombie_cleanup'` if orphaned
 
-Resolved in commit `8772d39` — webhook `evaluateAndEnter()` now has
-`webhookIsBotRunning()` as guard #1. If the dashboard says STOPPED,
-the webhook returns early before any insert. Kept this line in
-backlog as a historical marker; safe to delete next pass.
+### ~~P1 — L0 whale_exit safety net underperforming~~ (DEFERRED)
 
-### P1 — L0 whale_exit safety net underperforming
+whale_exit remains DISABLED per Sprint 10 Day 1 Dicknald postmortem
+(`06f0c09`). Structural latency — we see whale sells AFTER they land
+on-chain, by which time pool is already drained. Re-enable requires
+a predictive signal (mempool-level or pattern-based), not a config
+flip. Code preserved but path is off.
 
-5 L0 WE trades on Sprint 10 Day 1: 1W (Chud +22%), 4L (−68%, −26%,
-−21%, −8%). Net −0.0725 SOL.
-Hypothesis: by the time the bot's Jupiter sell lands, the whale dump
-is already priced in.
-Options (DON'T ship yet, need 15+ sample):
-- require 2+ whales selling within N seconds
-- only fire if mark already dropped >X% during the window
-- disable WE entirely on L0, rely on SL + CB
+### ~~P1 — Stop loss on L1+ positions bleeding banked profit~~ (SUPERSEDED)
 
-### P1 — Stop loss on L1+ positions is bleeding banked profit
-
-3 SL exits Sprint 10 Day 1 on L1/L2 positions, all losers. Same
-dynamic as the CB-on-L1+ issue we fixed. SL −10% threshold AFTER a
-grid partial triggered = giving back the bank.
-
-**Proposal:** scale SL threshold by grid_level:
-- L0: −10% (current)
-- L1: −7% (after +15% lock)
-- L2: −5% (after +40% lock)
-- L3: trailing-stop only, no SL
-
-Don't ship until ≥ 30 SL-exit trades at current baseline for A/B
-comparison.
+Largely addressed by the post-L1 retracement trail (`20fd68e`). SL
+-10% still fires on L1+ but the trail catches peak retracements
+before SL triggers. Grid-scaled SL (L1: -7%, L2: -5%) remains a
+candidate if the 25% retrace trail proves insufficient — validate on
+48h sample first.
 
 ### P2 — Consider lowering L3 trailing activation +100% → +50%
 
