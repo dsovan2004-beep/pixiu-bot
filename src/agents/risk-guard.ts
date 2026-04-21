@@ -173,7 +173,24 @@ const L3_THRESHOLD_PCT = 100;       // pnl % where trailing mode activates
 // uptrends (Soltards-class +285%), we exit slightly earlier, but still
 // catch the bulk of the move since peak updates ratchet upward with
 // every new high.
-const TRAILING_STOP_PCT = 10;       // exit when price drops this % from peak
+const TRAILING_STOP_PCT = 10;       // exit when price drops this % from peak (L3 mode)
+
+// Sprint 10 Phase 6 — POST-L1 RETRACEMENT TRAIL.
+// SCHIZO SIGNALS (Apr 21) killer pattern: L1 fired at mark +17%, peak
+// settled at +17.6%, mark drifted back to +11.6% over 8min. TO eventually
+// forced exit into mark-real divergence (mark +11.6%, Jupiter quote -20%)
+// → net -0.004 SOL on a trade that banked +0.001 at L1.
+// No rule existed to cover the "peak is gone but SL hasn't hit" window.
+// Between L1 (+17%) and SL (-10%) there's a 27pt no-man's-land where we
+// just waited for TO and paid the mark-real divergence tax at exit.
+//
+// Fix: post-L1 (levels 1 and 2), track peak-since-activation. If current
+// retracement from peak exceeds POST_L1_TRAIL_PCT AND peak was at least
+// POST_L1_MIN_PEAK_PCT above entry (so we don't trail on flat positions),
+// exit via trailing_stop. Tighter than L3's -10% because we already have
+// L1/L2 profit locked — goal is to protect the bank, not ride moonshots.
+const POST_L1_TRAIL_PCT = 25;       // exit if mark drops 25%+ from peak post-L1
+const POST_L1_MIN_PEAK_PCT = 5;     // don't trail if peak never broke +5% mark
 const STOP_LOSS_PCT = 10;
 // Circuit breaker thresholds split by grid level (Sprint 9 P2a, Apr 18).
 // Real-PnL analysis showed circuit_breaker had 26% real WR / -0.96 SOL on
@@ -1252,6 +1269,35 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
         console.log(
           `  [GUARD] [TRAILING EXIT] ${coinLabel} sold at +${pnlPct.toFixed(1)}% from ${dropPct.toFixed(1)}% peak drop | PnL: +${finalPnl.toFixed(2)}%`
         );
+        continue;
+      }
+    }
+
+    // 5c. Post-L1 retracement trail (Sprint 10 Phase 6, Apr 21).
+    //     Protects L1/L2 partials from the mark-real divergence tax at
+    //     TO close. Activates at L1 or L2 (NOT L3 — that has its own
+    //     tighter -10% trail above). Ratchets a peak on the current
+    //     price; exits if current retracement from peak exceeds
+    //     POST_L1_TRAIL_PCT AND the peak cleared POST_L1_MIN_PEAK_PCT
+    //     above entry (avoids trailing on flat positions).
+    //
+    //     Reuses the trailingPeaks Map; L3 activation clears and resets
+    //     it with the +100% peak, so no state overlap between modes.
+    if ((newLevel === 1 || newLevel === 2) && remainingPct > 0 && !priceFetchFailed && entryPrice > 0) {
+      let peakL1 = trailingPeaks.get(pos.id);
+      if (peakL1 === undefined || currentPrice > peakL1) {
+        peakL1 = currentPrice;
+        trailingPeaks.set(pos.id, peakL1);
+      }
+      const peakPnlPct = ((peakL1 - entryPrice) / entryPrice) * 100;
+      const retracePct = ((currentPrice - peakL1) / peakL1) * 100;
+      if (peakPnlPct >= POST_L1_MIN_PEAK_PCT && retracePct <= -POST_L1_TRAIL_PCT) {
+        const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
+        console.log(
+          `  [GUARD] [POST-L${newLevel} TRAIL] ${coinLabel} peak +${peakPnlPct.toFixed(1)}% → now +${pnlPct.toFixed(1)}% (retrace ${retracePct.toFixed(1)}% exceeds -${POST_L1_TRAIL_PCT}%) — exit before TO divergence tax`
+        );
+        await closeTrade(finalPnl, "trailing_stop", newLevel);
+        trailingPeaks.delete(pos.id);
         continue;
       }
     }
