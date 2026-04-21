@@ -13,6 +13,7 @@ import {
   RECENTLY_TRADED_COOLDOWN_MS,
   RECENT_NAME_COOLDOWN_MS,
   POSITION_SIZE_PCT,
+  WALLET_BLACKLIST,
 } from "@/config/smart-money";
 import { isPriceTooHigh, isOffensiveName, checkTokenSafety } from "@/lib/price-guards";
 
@@ -423,6 +424,18 @@ async function evaluateAndEnter(
 
   const allTags = new Set((recentSignals || []).map((s) => s.wallet_tag));
   allTags.add(walletTag); // Include current signal
+
+  // Guard #10a — WALLET_BLACKLIST (Apr 21 postmortem).
+  // Permanently banned primary signalers regardless of current tier.
+  // Runs BEFORE the tier check so blacklisted wallets cannot slip
+  // through via tier-manager auto-promotion. Only the PRIMARY address
+  // (the one that fired this webhook invocation) is checked — co-
+  // signers appearing in allTags are noise that doesn't drive entry.
+  // See src/config/smart-money.ts WALLET_BLACKLIST for rationale.
+  if (WALLET_BLACKLIST.has(walletAddress)) {
+    console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — wallet blacklisted (${walletTag})`);
+    return { entered: false, reason: `wallet blacklisted: ${walletTag}` };
+  }
 
   // DB-backed T1 check — tier=1 can trigger solo, tier=2 needs T1 confirmation
   // Replaces hardcoded TOP_ELITE_ADDRESSES so demotions in DB take effect instantly

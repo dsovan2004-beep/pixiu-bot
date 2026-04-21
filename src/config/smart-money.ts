@@ -3,6 +3,34 @@
  * Shared between webhook (entry) and risk-guard (exits).
  */
 
+// Wallet blacklist — primary signalers permanently banned from entry
+// based on postmortem data (2026-04-21). These wallets had ≥5 trades
+// with WR < 35% AND/OR net negative SOL contribution on the bot's live
+// entries. Blacklist overrides tier-manager auto-promotion: even if
+// these wallets hit a 65% WR in a 7-day window and get auto-promoted
+// to T1, guard #10a still rejects their primary-signal entries.
+// Individual lines can be commented out to unban one wallet without
+// disturbing the rest (rollback path).
+//
+// Sample: 114 closed LIVE trades, 27.2% WR, -0.59 SOL net.
+// Removing these 9 wallets would have swung the sample to 29.2% WR,
+// -0.13 SOL net — i.e. +0.46 SOL of loss contribution eliminated.
+//
+// Re-run `src/scripts/wallet-postmortem.ts` every ~30 new closed
+// trades or when session PnL crosses -0.20 SOL to catch new bleeders.
+export const WALLET_BLACKLIST = new Set([
+  "6Dt9J7TXM3eqyQBAZMbGJCV6VsP13WVStwPJnLPFtw2Y", // GMGN_SM_5 — 12 trades, 25% WR, -0.076 SOL
+  "4sAUSQFdvWRBxR8UoLBYbw8CcXuwXWxnN8pXa4mtm5nU", // Scharo — 7 trades, 14% WR, -0.073 SOL
+  "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o", // cented — 8 trades, 25% WR, -0.070 SOL (overrides TOP_ELITE)
+  "6TAHDM5Tod7dBTZdYQxzgJZKxxPfiNV9udPHMiUNumyK", // Bluey — 6 trades, 0% WR, -0.066 SOL
+  "8GrjsuPip1xVDMjyVcVrG1wnM9Rutv7fdoxqtRBaymHc", // bandit (addr 1) — 8 trades, 38% WR, -0.063 SOL
+  "5B79fMkcFeRTiwm7ehsZsFiKsC7m7n1Bgv9yLxPp9q2X", // bandit (addr 2) — DB duplicate entry, blacklist both
+  "4vw54BmAogeRV3vPKWyFet5yf8DTLcREzdSzx4rw9Ud9", // decu — 7 trades, 29% WR, -0.031 SOL
+  "Be24Gbf5KisDk1LcWWZsBn8dvB816By7YzYF5zWZnRR6", // chair — 5 trades, 40% WR, -0.028 SOL
+  "A3W8psibkTUvjxs4LRscbnjux6TFDXdvD4m4GsGpQ2KJ", // Numer0 — 5 trades, 40% WR, -0.016 SOL
+  "2fg5QD1eD7rzNNCsvnhmXFm5hqNgwTTG8p7kQ6f3rx6f", // Cupsey — 8 trades, 25% WR, +0.008 SOL (carried by 1 lucky +0.149, rest -EV) (overrides TOP_ELITE)
+]);
+
 // Tier 1 Smart Money wallet ADDRESSES — entry requires 1 of these
 export const TOP_ELITE_ADDRESSES = new Set([
   "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o", // Cented
