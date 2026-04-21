@@ -796,7 +796,10 @@ export async function sellToken(
     }
 
     // Auto-escalate slippage (normal: 5% → 10% → 20% → 30%; rescue: 20% → 30%)
-    // On-chain 6001 failures (slippage exceeded) trigger next level
+    // On-chain 6001 failures (slippage exceeded) trigger next level.
+    // 6024 (min-out violation) also retries through the ladder — if
+    // every level fails with 6024, we mark unsellable after the loop.
+    let sawUnsellable6024 = false;
     for (const slippage of slippageLadder) {
       try {
         console.log(`  [JUPITER] Trying sell at ${slippage / 100}% slippage...`);
@@ -1051,17 +1054,22 @@ export async function sellToken(
 
         if (onChainError) {
           const errStr = JSON.stringify(onChainError);
-          // 6024 = Token-2022 transfer fee / minimum-out violation.
-          // Higher slippage does not help — the token has a built-in
-          // transfer tax. Bail immediately so the guard can handle it.
-          if (errStr.includes("6024")) {
-            console.error(`  [JUPITER] Token has transfer fee (6024) — sell impossible, skipping retries: ${coinAddress}`);
-            unsellableMints.add(coinAddress); // P0b: signal caller to mark-to-zero instead of retry
-            return null;
-          }
-          const is6001 = errStr.includes("6001");
-          if (is6001) {
-            console.log(`  [JUPITER] SELL failed (6001 slippage exceeded) at ${slippage / 100}% — retrying at higher slippage...`);
+          // Jupiter aggregator error codes (v6):
+          //   6001 = slippage tolerance exceeded
+          //   6024 = minimum-out violation (pool drained below quote OR
+          //          token has a transfer fee)
+          //
+          // The old code bailed immediately on 6024 assuming transfer-
+          // tax. But Openhuman + John Apple (Apr 21) both 6024'd on
+          // benign metadata-only Token-2022 mints — the real cause was
+          // pool drainage making minimum-out unreachable at the quoted
+          // slippage. Higher slippage (and smaller sell size, handled
+          // in risk-guard) can recover these. Retry through the rest of
+          // the ladder; only mark unsellable if every level fails.
+          if (errStr.includes("6001") || errStr.includes("6024")) {
+            const code = errStr.includes("6001") ? "6001 slippage" : "6024 min-out";
+            if (errStr.includes("6024")) sawUnsellable6024 = true;
+            console.log(`  [JUPITER] SELL failed (${code}) at ${slippage / 100}% — retrying at higher slippage...`);
             continue; // Try next slippage level
           }
           console.error(`  [JUPITER] SELL tx FAILED on-chain: ${signature} — ${errStr}`);
@@ -1078,6 +1086,10 @@ export async function sellToken(
 
     const ladderStr = slippageLadder.map((s) => `${s / 100}%`).join("→");
     console.error(`  [JUPITER] SELL failed all slippage levels (${ladderStr}) — manual intervention needed: ${coinAddress}`);
+    // If every rung hit 6024, signal the guard to mark-to-zero after
+    // it has exhausted its partial-size fallback. Prevents the position
+    // from bouncing between 'closing' and 'open' in an infinite loop.
+    if (sawUnsellable6024) unsellableMints.add(coinAddress);
     return null;
   } catch (err: any) {
     console.error(`  [JUPITER] SELL failed: ${err.message}`);

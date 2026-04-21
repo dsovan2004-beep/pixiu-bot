@@ -610,47 +610,83 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
             return;
           }
           if (wasLastSellUnsellable(pos.coin_address)) {
-            // (a) mark-to-zero close
-            const zeroPnlPct = (pos.partial_pnl ?? 0) + (-100 * remainingPct) / 100;
+            // Partial-size salvage (Apr 21): Openhuman + John Apple both
+            // hit full-ladder 6024 because the pool had drained below
+            // Jupiter's quoted min-out at our full-balance size. Thin
+            // pools frequently take SMALLER orders even when full-size
+            // 6024's. Try one last-ditch 25% chunk at rescue slippage;
+            // any recovered SOL books to real_pnl_sol and reduces the
+            // remainder that gets marked to zero.
             console.log(
-              `  [GUARD] 🪦 ${coinLabel} un-sellable (Jupiter 6024) — marking remaining ${remainingPct}% to zero. Final mark ${zeroPnlPct.toFixed(2)}%`
+              `  [GUARD] 🆘 ${coinLabel} full-size 6024 — trying 25% partial-size salvage at max slippage...`
             );
-
-            // Phase 3 fix: if real partials previously fired (grid_level > 0),
-            // real_pnl_sol has banked L1/L2 gains. Remaining is now
-            // unsellable (worthless). Subtract remaining cost basis so
-            // real_pnl_sol reflects true wallet delta. Same pattern as
-            // the rug_or_missing path above.
-            let realPnlSolUpdate: number | null = null;
-            if (gridLvl > 0) {
-              const { data: row } = await supabase
+            const salvageSig = await sellToken(pos.coin_address, {
+              entrySolCost: entryCostForSim,
+              exitReason,
+              skipJito: true,
+              sellPercent: 25,
+            });
+            if (salvageSig) {
+              const rescuedSol = await parseSwapSolDelta(salvageSig);
+              const { data: salvRow } = await supabase
                 .from("trades")
                 .select("entry_sol_cost, real_pnl_sol")
                 .eq("id", pos.id)
                 .maybeSingle();
-              const entryCost = row?.entry_sol_cost ? Number(row.entry_sol_cost) : null;
-              const existingPnl = row?.real_pnl_sol != null ? Number(row.real_pnl_sol) : 0;
-              if (entryCost !== null) {
-                const remainingCostBasis = (entryCost * remainingPct) / 100;
-                realPnlSolUpdate = existingPnl - remainingCostBasis;
+              const salvEntryCost = salvRow?.entry_sol_cost ? Number(salvRow.entry_sol_cost) : null;
+              const salvExisting = salvRow?.real_pnl_sol != null ? Number(salvRow.real_pnl_sol) : 0;
+              if (rescuedSol !== null && salvEntryCost !== null) {
+                // 25% of the CURRENT remainder was sold. Cost basis:
+                //   entryCost × (remainingPct/100) × 0.25
+                const salvCostBasis = salvEntryCost * (remainingPct / 100) * 0.25;
+                const salvPnl = rescuedSol - salvCostBasis;
+                const newRealPnl = salvExisting + salvPnl;
+                const newRemainingPct = remainingPct * 0.75;
                 console.log(
-                  `  [GUARD] 📊 unsellable after partials — booking loss on remaining ${remainingPct}% (cost ${remainingCostBasis.toFixed(6)}): ${existingPnl >= 0 ? "+" : ""}${existingPnl.toFixed(6)} − ${remainingCostBasis.toFixed(6)} = ${realPnlSolUpdate >= 0 ? "+" : ""}${realPnlSolUpdate.toFixed(6)} SOL`
+                  `  [GUARD] 🆘 salvage recovered ${rescuedSol.toFixed(6)} SOL on 25% slice (cost ${salvCostBasis.toFixed(6)}): ${salvPnl >= 0 ? "+" : ""}${salvPnl.toFixed(6)}. Remaining ${newRemainingPct.toFixed(1)}% → mark-to-zero.`
                 );
+                await supabase
+                  .from("trades")
+                  .update({
+                    real_pnl_sol: newRealPnl,
+                    remaining_pct: newRemainingPct,
+                    sell_tx_sig: salvageSig,
+                  })
+                  .eq("id", pos.id);
+                remainingPct = newRemainingPct;
               }
             } else {
-              // No partials fired; the entire position is a loss. Book it.
-              const { data: row } = await supabase
-                .from("trades")
-                .select("entry_sol_cost")
-                .eq("id", pos.id)
-                .maybeSingle();
-              const entryCost = row?.entry_sol_cost ? Number(row.entry_sol_cost) : null;
-              if (entryCost !== null) {
-                realPnlSolUpdate = -entryCost;
-                console.log(
-                  `  [GUARD] 📊 unsellable from L0 — booking full loss: -${entryCost.toFixed(6)} SOL`
-                );
-              }
+              console.log(
+                `  [GUARD] 🆘 ${coinLabel} 25% salvage also failed — mark-to-zero full remaining`
+              );
+            }
+
+            // (a) mark-to-zero close (on remaining, possibly reduced by salvage)
+            const zeroPnlPct = (pos.partial_pnl ?? 0) + (-100 * remainingPct) / 100;
+            console.log(
+              `  [GUARD] 🪦 ${coinLabel} un-sellable (Jupiter 6024) — marking remaining ${remainingPct.toFixed(1)}% to zero. Final mark ${zeroPnlPct.toFixed(2)}%`
+            );
+
+            // Unified accounting (Apr 21): book the loss on the
+            // unsellable remainder regardless of gridLvl. existingPnl
+            // covers both prior L1/L2 partials AND any salvage recovery
+            // from the block above. Cost basis = entryCost × remainingPct / 100.
+            // Old L0 branch blindly wrote -entryCost which would clobber
+            // salvage credit.
+            let realPnlSolUpdate: number | null = null;
+            const { data: row } = await supabase
+              .from("trades")
+              .select("entry_sol_cost, real_pnl_sol")
+              .eq("id", pos.id)
+              .maybeSingle();
+            const entryCost = row?.entry_sol_cost ? Number(row.entry_sol_cost) : null;
+            const existingPnl = row?.real_pnl_sol != null ? Number(row.real_pnl_sol) : 0;
+            if (entryCost !== null) {
+              const remainingCostBasis = (entryCost * remainingPct) / 100;
+              realPnlSolUpdate = existingPnl - remainingCostBasis;
+              console.log(
+                `  [GUARD] 📊 unsellable L${gridLvl} — booking loss on remaining ${remainingPct.toFixed(1)}% (cost ${remainingCostBasis.toFixed(6)}): ${existingPnl >= 0 ? "+" : ""}${existingPnl.toFixed(6)} − ${remainingCostBasis.toFixed(6)} = ${realPnlSolUpdate >= 0 ? "+" : ""}${realPnlSolUpdate.toFixed(6)} SOL`
+              );
             }
 
             const { data: flipped } = await supabase

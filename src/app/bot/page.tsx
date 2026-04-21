@@ -603,9 +603,13 @@ export default function BotPage() {
                             className={
                               t.exit_reason === "take_profit"
                                 ? "text-green-500"
-                                : t.exit_reason === "stop_loss"
+                                : t.exit_reason === "stop_loss" ||
+                                    t.exit_reason === "unsellable_6024" ||
+                                    t.exit_reason === "holder_rug"
                                   ? "text-red-500"
-                                  : "text-zinc-500"
+                                  : t.exit_reason === "pool_drain"
+                                    ? "text-amber-500"
+                                    : "text-zinc-500"
                             }
                           >
                             {t.exit_reason === "take_profit"
@@ -620,7 +624,13 @@ export default function BotPage() {
                                       ? "WE"
                                       : t.exit_reason === "circuit_breaker"
                                         ? "CB"
-                                        : "-"}
+                                        : t.exit_reason === "pool_drain"
+                                          ? "PD"
+                                          : t.exit_reason === "holder_rug"
+                                            ? "HR"
+                                            : t.exit_reason === "unsellable_6024"
+                                              ? "XS"
+                                              : "-"}
                           </span>
                         </td>
                         <td className="py-2 px-3 text-zinc-600">
