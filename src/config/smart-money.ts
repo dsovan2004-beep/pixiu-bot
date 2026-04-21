@@ -84,7 +84,13 @@ export const DAILY_LOSS_LIMIT_SOL = 0.50;
 // Postmortem 2026-04-19 showed <5min-old tokens had 31.8% WR / -0.20 SOL,
 // while >6h-old had 50% WR / +0.075 SOL. Skipping freshest tokens should
 // tilt the distribution away from the biggest loss bucket.
-export const MIN_TOKEN_AGE_MINUTES = 30;
+//
+// Apr 21 PM test: loosened 30 → 15. The 30-min threshold was blocking
+// ~all daytime flow including daniww's signals. 15 is a compromise —
+// still past the sub-5min "death zone" but captures the 15-30min
+// bucket we had no data on. Revert to 30 if the loosened window
+// produces WR < 25% over ≥10 new trades.
+export const MIN_TOKEN_AGE_MINUTES = 15;
 
 // Sprint 10 Phase 2 — entry filter: co-buyer ceiling.
 // Postmortem 2026-04-19 fat-tail isolation: both big winners (agent +238%,
