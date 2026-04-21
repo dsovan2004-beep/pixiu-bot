@@ -342,10 +342,20 @@ export async function parseSwapSolDelta(
  * Sprint 10 Phase 4 — liquidity drainage monitor during hold.
  *
  * Fetches our current token balance on-chain and asks Jupiter to quote
- * a sell of the FULL bag (at the same slippage bracket we use for live
- * sells). Returns recovery as `solBack / entrySolCost`. A value < ~0.4
- * means the pool has drained since entry — we should exit before it
- * gets worse even if the DexScreener mark still reads positive.
+ * a sell of the current bag (at the same slippage bracket we use for
+ * live sells). Returns recovery as
+ *   solBack / (entrySolCost × remainingPct / 100)
+ * — i.e. "what fraction of the REMAINING slice's cost basis would the
+ * pool return if we sold right now". A value < ~0.4 means the pool has
+ * drained since entry — we should exit before it gets worse even if
+ * the DexScreener mark still reads positive.
+ *
+ * Apr 21 bug fix: originally divided by the full entrySolCost, so the
+ * metric mechanically halved after L1 (50% sold) and quartered after
+ * L2 (75% sold) regardless of pool health. Post-L1, a healthy token
+ * with flat mark would show ~50% "recovery" and trip a 40% floor on
+ * even small pool dips. Now properly scaled by remainingPct so a
+ * healthy token always quotes ~1.0 regardless of grid level.
  *
  * Openhuman (Apr 21) is the case that motivated this: at entry the
  * pre-buy round-trip showed ~97% recovery. Eleven minutes later, at L1
@@ -357,10 +367,12 @@ export async function parseSwapSolDelta(
  */
 export async function simulateSellRecovery(
   coinAddress: string,
-  entrySolCost: number
+  entrySolCost: number,
+  remainingPct: number = 100
 ): Promise<number | null> {
   try {
     if (entrySolCost <= 0) return null;
+    if (remainingPct <= 0) return null;
     const keypair = getKeypair();
     if (!keypair) return null;
     const connection = getConnection();
@@ -373,7 +385,8 @@ export async function simulateSellRecovery(
     const json: any = await res.json();
     const solBackLamports = Number(json?.outAmount ?? 0);
     if (!Number.isFinite(solBackLamports) || solBackLamports <= 0) return null;
-    return solBackLamports / 1e9 / entrySolCost;
+    const proportionalCostBasis = entrySolCost * (remainingPct / 100);
+    return solBackLamports / 1e9 / proportionalCostBasis;
   } catch {
     return null;
   }
@@ -743,7 +756,7 @@ export async function hasTokenBalance(coinAddress: string): Promise<boolean> {
  */
 export async function sellToken(
   coinAddress: string,
-  opts?: { entrySolCost?: number; exitReason?: string; sellPercent?: number; skipJito?: boolean }
+  opts?: { entrySolCost?: number; exitReason?: string; sellPercent?: number; skipJito?: boolean; remainingPct?: number }
 ): Promise<string | null> {
   try {
     const keypair = getKeypair();
@@ -865,11 +878,28 @@ export async function sellToken(
         // (Jupiter already simulated against pool depth). Use it as
         // the primary recovery signal; the on-chain simulate call
         // below is a tx-will-execute sanity check.
+        //
+        // Apr 21 bug fix: recovery MUST divide by the proportional
+        // cost basis of the SLICE we're selling, not the full entry.
+        // Old formula broke post-grid exits: at L2 (remaining_pct=25)
+        // selling 100% of remaining at mark -10% produced
+        //   recovery = 0.225 × entry / entry = 22.5%
+        // which was below the 30% floor — SL/CB/trailing would be
+        // aborted on a legitimate exit. Correct formula:
+        //   costBasis = entry × (remainingPct/100) × (sellPercent/100)
+        //   recovery = expectedSolOut / costBasis
+        // With remainingPct=100 + sellPercent=100 (L0 full exit) this
+        // reduces to the old formula — backward compatible.
         const quoteOutLamports = Number(quoteResponse?.outAmount ?? 0);
         const expectedSolOut = quoteOutLamports / 1e9;
-        const recovery =
+        const remainingPctForCostBasis = opts?.remainingPct ?? 100;
+        const sliceCostBasis =
           opts?.entrySolCost && opts.entrySolCost > 0
-            ? expectedSolOut / opts.entrySolCost
+            ? opts.entrySolCost * (remainingPctForCostBasis / 100) * (sellPct / 100)
+            : null;
+        const recovery =
+          sliceCostBasis && sliceCostBasis > 0
+            ? expectedSolOut / sliceCostBasis
             : null;
 
         if (recovery !== null) {

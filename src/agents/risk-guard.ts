@@ -506,6 +506,7 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
           entrySolCost: entryCostForSim,
           exitReason,
           skipJito: true,
+          remainingPct, // Apr 21: sim-gate needs proportional cost basis
         });
         if (sig) {
           console.log(`  [GUARD] 🔴 LIVE SELL executed: ${sig} (${exitReason})`);
@@ -625,6 +626,7 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
               exitReason,
               skipJito: true,
               sellPercent: 25,
+              remainingPct, // Apr 21: sim-gate needs proportional cost basis
             });
             if (salvageSig) {
               const rescuedSol = await parseSwapSolDelta(salvageSig);
@@ -862,7 +864,7 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
       const liqSnap = liquiditySnapshots.get(pos.id);
       const nowMs = Date.now();
       if (!liqSnap || nowMs - liqSnap.lastCheckMs >= LIQUIDITY_CHECK_INTERVAL_MS) {
-        const recovery = await simulateSellRecovery(pos.coin_address, Number(pos.entry_sol_cost));
+        const recovery = await simulateSellRecovery(pos.coin_address, Number(pos.entry_sol_cost), remainingPct);
         liquiditySnapshots.set(pos.id, { lastCheckMs: nowMs });
         if (recovery !== null) {
           console.log(
