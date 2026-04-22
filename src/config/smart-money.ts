@@ -81,7 +81,15 @@ export const POSITION_SIZE_PCT = 0.01; // 1% of bankroll
 // across losing LIVE trades since midnight UTC. pnl_pct reflects the blended
 // outcome across grid partials, so locked L1/L2 profits correctly reduce
 // the contribution to the daily loss total.
-export const LIVE_BUY_SOL = 0.05;
+// Apr 22 PM: halved 0.05 → 0.025. Session bleed at 0.05 size was
+// unsustainable (-0.73 SOL across ~50 trades, 27% WR). Until we can
+// prove post-fix expectancy is positive over 30+ trades, cut the
+// per-trade loss magnitude in half. Expectancy (WR × avg_win − LR × avg_loss)
+// scales linearly with size, so halving size halves both winning upside
+// AND losing downside — but protects bankroll while the new L2 protection
+// stack, drain-threshold recal, and blacklist expansions get validated.
+// Revert to 0.05 only after 30 trades show net-positive expectancy.
+export const LIVE_BUY_SOL = 0.025;
 // Tightened Apr 18 PM — wallet down to ~0.82 SOL, 2.0 cap was wider than
 // the bag. 0.25 SOL caps overnight bleed at ~5 losing trades worth.
 // Apr 19 PM: temporary bump to 0.50 for Phase 1 sim-gate validation
