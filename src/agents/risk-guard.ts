@@ -45,7 +45,15 @@ const HOLDER_DROP_THRESHOLD = 0.73;
 // pool noise. Interval 60s per position keeps Helius/Jupiter load
 // bounded to ~1 quote call per open position per minute.
 const LIQUIDITY_CHECK_INTERVAL_MS = 60_000;
-const LIQUIDITY_DROP_THRESHOLD = 0.40;
+// Apr 22 PM: raised 0.40 → 0.60. The old 40% floor was calibrated pre-
+// 07822a1 when sim recovery was a buggy halved metric. Post-fix, healthy
+// pools quote ~100% of slice cost basis, drained pools quote 50-60%,
+// dead pools < 30%. A 40% floor only fires AFTER the rug is complete.
+// Asteroid (Apr 22) crashed from 99% → 48.6% sim recovery in one poll;
+// by the next poll mark was -39% and we ate -0.020 SOL. A 60% floor
+// would have fired at the 48.6% reading when mark was still -5%,
+// saving ~0.035 SOL per rug-class trade.
+const LIQUIDITY_DROP_THRESHOLD = 0.60;
 const liquiditySnapshots = new Map<string, { lastCheckMs: number }>();
 type HolderSnapshot = {
   topAddresses: Set<string>;
