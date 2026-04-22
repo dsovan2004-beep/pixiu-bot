@@ -205,6 +205,23 @@ const POST_L1_MIN_PEAK_PCT = 5;     // don't trail if peak never broke +5% mark
 const POST_L2_SIM_RECOVERY_FLOOR = 0.85; // L2-level sim recovery auto-close. Catches pool drainage
                                           // directly (not mark-based). Buy The Gloves had recovery
                                           // collapse 105% → 57% between polls; this floor fires first.
+// Apr 22 PM — GRID_SIM_RECOVERY_FLOOR. Guard L1/L2 partial-sell triggers
+// against PHANTOM PEAKS: DexScreener mark shows +15% (L1) or +40% (L2)
+// but the pool can't honor it at our sell size. Ben Pasterneck (Apr 22)
+// fired L1 at +31.4% mark; the 50% partial actually executed at -36%
+// real vs cost basis because snipers + other copy-traders had already
+// drained the pool. The mark peak existed in mid-price only, not at our
+// 0.025 SOL slice size.
+//
+// Floor of 1.0 = only fire partial if Jupiter sim quote says we'd
+// receive ≥ cost basis (real breakeven+) on the partial. If sim < 1.0,
+// the mark gain is phantom — skip the partial, release DB grid_level
+// claim, let position continue to CB/SL/TO/liquidity-drain exit paths.
+//
+// Trade-off: we lose the "lock phantom profit" case when pools are
+// temporarily mispriced in our favor (rare). Gain: we stop booking
+// -36% real on slices that mark says are +31% winners.
+const GRID_SIM_RECOVERY_FLOOR = 1.0;
 const STOP_LOSS_PCT = 10;
 // Circuit breaker thresholds split by grid level (Sprint 9 P2a, Apr 18).
 // Real-PnL analysis showed circuit_breaker had 26% real WR / -0.96 SOL on
@@ -1121,6 +1138,35 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
             `  [GUARD] [GRID L${grid.level}] ${coinLabel} skip — DB grid_level already >= ${grid.level} (parallel poll claimed). Breaking loop.`
           );
           break;
+        }
+
+        // PHANTOM PEAK GATE — only fire grid partial if Jupiter sim says
+        // real breakeven+ is actually available. If mark shows +15%/+40%
+        // but sim shows we'd receive < cost basis on the slice, the mark
+        // gain is phantom (pool drained by snipers/copy-traders before
+        // we could exit). Skip the partial, release the DB claim, let
+        // CB/SL/TO/liquidity-drain handle the exit. Ben Pasterneck (Apr
+        // 22) fired L1 at +31.4% mark but executed at -36% real on the
+        // 50% slice; this gate would have prevented that phantom lock-in.
+        if (pos.entry_sol_cost != null) {
+          const gridRecovery = await simulateSellRecovery(
+            pos.coin_address,
+            Number(pos.entry_sol_cost),
+            remainingPct
+          );
+          if (gridRecovery !== null && gridRecovery < GRID_SIM_RECOVERY_FLOOR) {
+            console.log(
+              `  [GUARD] [GRID L${grid.level}] ${coinLabel} 🧿 PHANTOM PEAK — mark +${pnlPct.toFixed(1)}% but sim recovery ${(gridRecovery * 100).toFixed(1)}% < ${(GRID_SIM_RECOVERY_FLOOR * 100).toFixed(0)}% floor. Pool can't honor mark at our size. Skipping partial, reverting DB claim.`
+            );
+            await supabase
+              .from("trades")
+              .update({ grid_level: currentLevel })
+              .eq("id", pos.id);
+            break;
+          }
+          console.log(
+            `  [GUARD] [GRID L${grid.level}] ${coinLabel} sim recovery ${gridRecovery === null ? "NULL" : (gridRecovery * 100).toFixed(1) + "%"} — proceeding with partial`
+          );
         }
 
         console.log(
