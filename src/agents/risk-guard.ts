@@ -189,8 +189,14 @@ const TRAILING_STOP_PCT = 10;       // exit when price drops this % from peak (L
 // POST_L1_MIN_PEAK_PCT above entry (so we don't trail on flat positions),
 // exit via trailing_stop. Tighter than L3's -10% because we already have
 // L1/L2 profit locked — goal is to protect the bank, not ride moonshots.
-const POST_L1_TRAIL_PCT = 25;       // exit if mark drops 25%+ from peak post-L1
+const POST_L1_TRAIL_PCT = 25;       // L1 → L2 walks need room for volatility
+const POST_L2_TRAIL_PCT = 12;       // Apr 22: tighter trail post-L2. L2→L3 is rare moonshot path;
+                                     // Buy The Gloves (Apr 22) L2 at +49% → drained to -44% real on slice.
+                                     // 12% retrace floor would have caught it near +43% mark before pool drain.
 const POST_L1_MIN_PEAK_PCT = 5;     // don't trail if peak never broke +5% mark
+const POST_L2_SIM_RECOVERY_FLOOR = 0.85; // L2-level sim recovery auto-close. Catches pool drainage
+                                          // directly (not mark-based). Buy The Gloves had recovery
+                                          // collapse 105% → 57% between polls; this floor fires first.
 const STOP_LOSS_PCT = 10;
 // Circuit breaker thresholds split by grid level (Sprint 9 P2a, Apr 18).
 // Real-PnL analysis showed circuit_breaker had 26% real WR / -0.96 SOL on
@@ -1301,16 +1307,12 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
       }
     }
 
-    // 5c. Post-L1 retracement trail (Sprint 10 Phase 6, Apr 21).
+    // 5c. Post-L1 / Post-L2 retracement trail (Apr 21 + Apr 22 tightened).
     //     Protects L1/L2 partials from the mark-real divergence tax at
-    //     TO close. Activates at L1 or L2 (NOT L3 — that has its own
-    //     tighter -10% trail above). Ratchets a peak on the current
-    //     price; exits if current retracement from peak exceeds
-    //     POST_L1_TRAIL_PCT AND the peak cleared POST_L1_MIN_PEAK_PCT
-    //     above entry (avoids trailing on flat positions).
-    //
-    //     Reuses the trailingPeaks Map; L3 activation clears and resets
-    //     it with the +100% peak, so no state overlap between modes.
+    //     TO close. Level-specific threshold:
+    //       L1: 25% retrace (L1→L2 walks need volatility room)
+    //       L2: 12% retrace (L2→L3 is moonshot-rare, protect gains fast)
+    //     L3 has its own -10% trail (5b above), no overlap.
     if ((newLevel === 1 || newLevel === 2) && remainingPct > 0 && !priceFetchFailed && entryPrice > 0) {
       let peakL1 = trailingPeaks.get(pos.id);
       if (peakL1 === undefined || currentPrice > peakL1) {
@@ -1319,14 +1321,49 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
       }
       const peakPnlPct = ((peakL1 - entryPrice) / entryPrice) * 100;
       const retracePct = ((currentPrice - peakL1) / peakL1) * 100;
-      if (peakPnlPct >= POST_L1_MIN_PEAK_PCT && retracePct <= -POST_L1_TRAIL_PCT) {
+      const trailPct = newLevel === 2 ? POST_L2_TRAIL_PCT : POST_L1_TRAIL_PCT;
+      if (peakPnlPct >= POST_L1_MIN_PEAK_PCT && retracePct <= -trailPct) {
         const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
         console.log(
-          `  [GUARD] [POST-L${newLevel} TRAIL] ${coinLabel} peak +${peakPnlPct.toFixed(1)}% → now +${pnlPct.toFixed(1)}% (retrace ${retracePct.toFixed(1)}% exceeds -${POST_L1_TRAIL_PCT}%) — exit before TO divergence tax`
+          `  [GUARD] [POST-L${newLevel} TRAIL] ${coinLabel} peak +${peakPnlPct.toFixed(1)}% → now +${pnlPct.toFixed(1)}% (retrace ${retracePct.toFixed(1)}% exceeds -${trailPct}%) — exit before TO divergence tax`
         );
         await closeTrade(finalPnl, "trailing_stop", newLevel);
         trailingPeaks.delete(pos.id);
         continue;
+      }
+    }
+
+    // 5d. Post-L2 sim-recovery safety net (Apr 22, Buy The Gloves class).
+    //     Even if mark is still green, if Jupiter's actual sell quote on
+    //     the remaining slice drops below POST_L2_SIM_RECOVERY_FLOOR,
+    //     pool is draining. Exit NOW on sim signal, not mark. Catches
+    //     the exact scenario where liquidity collapsed 105% → 57%
+    //     between polls on Buy The Gloves and we ate -44% real on the
+    //     slice despite +29% mark.
+    //
+    //     Only at L2 (where the slice is small enough the floor makes
+    //     sense). L1 still uses the 40% drain monitor (earlier block).
+    if (newLevel === 2 && remainingPct > 0 && pos.wallet_tag?.includes("[LIVE]") && pos.entry_sol_cost != null) {
+      const liqSnap = liquiditySnapshots.get(pos.id);
+      const nowMs = Date.now();
+      if (!liqSnap || nowMs - liqSnap.lastCheckMs >= LIQUIDITY_CHECK_INTERVAL_MS) {
+        const l2Recovery = await simulateSellRecovery(pos.coin_address, Number(pos.entry_sol_cost), remainingPct);
+        liquiditySnapshots.set(pos.id, { lastCheckMs: nowMs });
+        if (l2Recovery !== null) {
+          console.log(
+            `  [GUARD] [L2 SIM-NET] ${coinLabel} sim recovery ${(l2Recovery * 100).toFixed(1)}% on remaining ${remainingPct}% slice`
+          );
+          if (l2Recovery < POST_L2_SIM_RECOVERY_FLOOR) {
+            const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
+            console.log(
+              `  [GUARD] 🩸 ${coinLabel} POST-L2 sim recovery ${(l2Recovery * 100).toFixed(1)}% < ${(POST_L2_SIM_RECOVERY_FLOOR * 100).toFixed(0)}% floor — pool drain, exit now (mark +${pnlPct.toFixed(1)}%)`
+            );
+            await closeTrade(finalPnl, "pool_drain", newLevel);
+            liquiditySnapshots.delete(pos.id);
+            trailingPeaks.delete(pos.id);
+            continue;
+          }
+        }
       }
     }
 
