@@ -28,12 +28,12 @@ export const WALLET_BLACKLIST = new Set([
   "4vw54BmAogeRV3vPKWyFet5yf8DTLcREzdSzx4rw9Ud9", // decu — 7 trades, 29% WR, -0.031 SOL
   "Be24Gbf5KisDk1LcWWZsBn8dvB816By7YzYF5zWZnRR6", // chair — 5 trades, 40% WR, -0.028 SOL
   "A3W8psibkTUvjxs4LRscbnjux6TFDXdvD4m4GsGpQ2KJ", // Numer0 — 5 trades, 40% WR, -0.016 SOL
-  // UNBLACKLISTED Apr 22 PM: Cupsey — 8 trades, 25% WR, +0.008 SOL NET.
-  // Was added in first postmortem round under old rule (WR<35% = cut).
-  // New rule (net-positive = KEEP) correctly classifies him as a winner:
-  // one +0.149 fat-tail trade (Claude Spritzer) pays for 6 losing trades.
-  // That IS the memecoin strategy — asymmetric wins on coin-flip WR.
-  // "2fg5QD1eD7rzNNCsvnhmXFm5hqNgwTTG8p7kQ6f3rx6f", // Cupsey
+  // RE-BLACKLISTED Apr 22 (3h after unblacklist): Cupsey post-unblacklist
+  // went 0/3 (Heroic Warrior -0.003, boobcoin #1 -0.008, boobcoin #2 -0.003
+  // = -0.014 SOL). Lifetime now 11 trades, NET NEGATIVE. The +0.149 Claude
+  // Spritzer win was survivorship, not reproducible edge. Re-blacklisting
+  // per the current rule (net-negative = CUT).
+  "2fg5QD1eD7rzNNCsvnhmXFm5hqNgwTTG8p7kQ6f3rx6f", // Cupsey
   "EQaxqKT3N981QBmdSUGNzAGK5S26zUwAdRHhBCgn87zD", // jamessmith — 6 trades, 50% WR, -0.015 SOL. CLEAR DUMP PATTERN: signals BUY → sells → copy-traders bagholder. Observed Apr 22: Surprised Pikachu -0.015, CloudCoin -0.006 both within minutes of his SELL.
   // ─── Apr 22 PM postmortem (140-trade sample, reconciled): ───
   "Hw5UKBU5k3YudnGwaykj5E8cYUidNMPuEewRRar5Xoc7", // Trenchman — 5 trades, 0% WR, -0.092 SOL (worst remaining)
