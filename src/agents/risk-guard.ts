@@ -245,6 +245,15 @@ const WHALE_EXIT_ENABLED = false;
 // instead of absolute peak — minor degradation, no DB migration needed).
 const trailingPeaks = new Map<string, number>();
 
+// Apr 22: L2 activation timestamps for the 3-min hold cap.
+// When grid_level transitions to 2 on a trade, record Date.now(). If
+// still at L2 after POST_L2_MAX_HOLD_MS without L3 activating, force
+// close. Captures the "L2 spike → 2-3 min drift → lose gains" pattern.
+// In-memory only — on swarm restart, trail + sim-floor + TO still catch
+// stale L2 positions.
+const l2ActivationTimes = new Map<string, number>();
+const POST_L2_MAX_HOLD_MS = 3 * 60_000; // 3 min
+
 // ─── Price ──────────────────────────────────────────────
 
 async function getPrice(
@@ -1155,6 +1164,15 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
           `  [GUARD] [GRID L${grid.level}] ${coinLabel} partial sold: ${partialSig}`
         );
 
+        // Apr 22: record L2 activation time for the 3-min hold cap.
+        // When L2 fires, we start the clock. If position still at L2
+        // after POST_L2_MAX_HOLD_MS, the time-limit check below force-
+        // closes it (captures the "L2 spike → drift → lose gains"
+        // pattern where L3 doesn't activate in time).
+        if (grid.level === 2) {
+          l2ActivationTimes.set(pos.id, Date.now());
+        }
+
         // PERSIST remaining_pct + partial_pnl immediately after the sell
         // lands. grid_level was ALREADY committed by the atomic claim
         // above, which serves double duty: (a) prevents the same-session
@@ -1330,6 +1348,32 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
         await closeTrade(finalPnl, "trailing_stop", newLevel);
         trailingPeaks.delete(pos.id);
         continue;
+      }
+    }
+
+    // 5d.1. Post-L2 time cap (Apr 22, user-reported pattern).
+    //     "L2 spike takes 2-3 min for L3 to trigger, then L2 goes down
+    //     and we lose money." Hard cap on L2 holds. If 3 min pass since
+    //     L2 fire and mark hasn't pushed past +80% (halfway to L3),
+    //     force-close. Captures the drift scenario where the pump
+    //     stalled out. L2-zone gains get locked before they evaporate.
+    //
+    //     Moonshot protection: if mark > +80%, we're clearly still in
+    //     a strong move → let trail or L3 catch it.
+    if (newLevel === 2 && remainingPct > 0 && !priceFetchFailed) {
+      const l2ActiveAt = l2ActivationTimes.get(pos.id);
+      if (l2ActiveAt !== undefined) {
+        const elapsedMs = Date.now() - l2ActiveAt;
+        if (elapsedMs >= POST_L2_MAX_HOLD_MS && pnlPct < 80) {
+          const finalPnl = partialPnl + (pnlPct * remainingPct) / 100;
+          console.log(
+            `  [GUARD] [POST-L2 TIME CAP] ${coinLabel} ${(elapsedMs / 60000).toFixed(1)}min since L2 fired, mark +${pnlPct.toFixed(1)}% (< +80% moonshot threshold) — force close before L2 gains drift away`
+          );
+          await closeTrade(finalPnl, "trailing_stop", newLevel);
+          l2ActivationTimes.delete(pos.id);
+          trailingPeaks.delete(pos.id);
+          continue;
+        }
       }
     }
 
