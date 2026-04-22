@@ -133,13 +133,13 @@ const DASHBOARD_URL = "https://pixiu-bot.pages.dev";
   console.log("\n▸ Config thresholds");
 
   check(
-    `LIVE_BUY_SOL = 0.05`,
-    Math.abs(LIVE_BUY_SOL - 0.05) < 1e-9,
+    `LIVE_BUY_SOL = 0.025`,
+    Math.abs(LIVE_BUY_SOL - 0.025) < 1e-9,
     `got ${LIVE_BUY_SOL}`
   );
   check(
-    `DAILY_LOSS_LIMIT_SOL = 0.25`,
-    Math.abs(DAILY_LOSS_LIMIT_SOL - 0.25) < 1e-9,
+    `DAILY_LOSS_LIMIT_SOL = 0.50`,
+    Math.abs(DAILY_LOSS_LIMIT_SOL - 0.50) < 1e-9,
     `got ${DAILY_LOSS_LIMIT_SOL}`
   );
 
