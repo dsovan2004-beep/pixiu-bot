@@ -150,6 +150,14 @@ async function main() {
   console.log("=== Recommendation ===");
   console.log(`Rules: trades >= ${MIN_TRADES}, WR >= ${MIN_WR}%, total_sol >= 0\n`);
 
+  // Decision rule (Apr 22 revision):
+  //   KEEP = net positive SOL contribution (regardless of WR)
+  //   CUT  = net negative AND (WR < threshold OR already multi-trade sample)
+  // Rationale: the old rule cut daniww (+0.087 SOL, 30% WR) and theo
+  // pump sad (+0.087 SOL, 33% WR) for being below the 35% WR line even
+  // though they were the only net-profitable wallets in the book. A
+  // wallet that makes us money — even on a coin-flip WR — must not be
+  // cut. What matters is expectancy (net SOL), not win rate alone.
   const keep: string[] = [];
   const cut: string[] = [];
   const insufficient: string[] = [];
@@ -158,13 +166,12 @@ async function main() {
       insufficient.push(`${s.wallet} (${s.trades} trades, ${s.totalSol >= 0 ? "+" : ""}${s.totalSol.toFixed(4)} SOL)`);
       continue;
     }
-    const pass = s.wrPct >= MIN_WR && s.totalSol >= 0;
-    if (pass) {
+    // Any net-positive wallet with ≥ MIN_TRADES = KEEP
+    if (s.totalSol >= 0) {
       keep.push(`${s.wallet} (WR ${s.wrPct.toFixed(1)}%, ${s.totalSol >= 0 ? "+" : ""}${s.totalSol.toFixed(4)} SOL, ${s.trades} trades)`);
     } else {
-      const reasons: string[] = [];
+      const reasons: string[] = [`net ${s.totalSol.toFixed(4)} SOL`];
       if (s.wrPct < MIN_WR) reasons.push(`WR ${s.wrPct.toFixed(1)}% < ${MIN_WR}%`);
-      if (s.totalSol < 0) reasons.push(`net ${s.totalSol.toFixed(4)} SOL`);
       cut.push(`${s.wallet} (${reasons.join(", ")}, ${s.trades} trades)`);
     }
   }

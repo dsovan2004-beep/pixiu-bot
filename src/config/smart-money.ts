@@ -30,6 +30,13 @@ export const WALLET_BLACKLIST = new Set([
   "A3W8psibkTUvjxs4LRscbnjux6TFDXdvD4m4GsGpQ2KJ", // Numer0 — 5 trades, 40% WR, -0.016 SOL
   "2fg5QD1eD7rzNNCsvnhmXFm5hqNgwTTG8p7kQ6f3rx6f", // Cupsey — 8 trades, 25% WR, +0.008 SOL (carried by 1 lucky +0.149, rest -EV) (overrides TOP_ELITE)
   "EQaxqKT3N981QBmdSUGNzAGK5S26zUwAdRHhBCgn87zD", // jamessmith — 6 trades, 50% WR, -0.015 SOL. CLEAR DUMP PATTERN: signals BUY → sells → copy-traders bagholder. Observed Apr 22: Surprised Pikachu -0.015, CloudCoin -0.006 both within minutes of his SELL.
+  // ─── Apr 22 PM postmortem (140-trade sample, reconciled): ───
+  "Hw5UKBU5k3YudnGwaykj5E8cYUidNMPuEewRRar5Xoc7", // Trenchman — 5 trades, 0% WR, -0.092 SOL (worst remaining)
+  "J9TYAsWWidbrcZybmLSfrLzryANf4CgJBLdvwdGuC8MB", // Johnson — 5 trades, 20% WR, -0.019 SOL
+  "PMJA8UQDyWTFw2Smhyp9jGA6aTaP7jKHR7BPudrgyYN",  // chester (addr 1) — 3 trades, 0% WR, -0.072 SOL (preemptive at 3-trade sample, 0% signal is unambiguous)
+  "8NJ7Ujpji8uMF2675mqaTSEm2DCbfJA7fiRKtiaqkaLN", // chester (addr 2) — DB duplicate
+  "5t9xBNuDdGTGpjaPTx6hKd7sdRJbvtKS8Mhq6qVbo8Qz", // SmokezXBT — 3 trades, 0% WR, -0.042 SOL (preemptive, same reason)
+  "sAdNbe1cKNMDqDsa4npB3TfL62T14uAo2MsUQfLvzLT",  // pr6spr — 1 trade, -0.052 SOL (single massive loss — preemptive ban vs risk another -0.05)
 ]);
 
 // Tier 1 Smart Money wallet ADDRESSES — entry requires 1 of these
