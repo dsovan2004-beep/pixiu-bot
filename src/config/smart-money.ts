@@ -29,6 +29,7 @@ export const WALLET_BLACKLIST = new Set([
   "Be24Gbf5KisDk1LcWWZsBn8dvB816By7YzYF5zWZnRR6", // chair — 5 trades, 40% WR, -0.028 SOL
   "A3W8psibkTUvjxs4LRscbnjux6TFDXdvD4m4GsGpQ2KJ", // Numer0 — 5 trades, 40% WR, -0.016 SOL
   "2fg5QD1eD7rzNNCsvnhmXFm5hqNgwTTG8p7kQ6f3rx6f", // Cupsey — 8 trades, 25% WR, +0.008 SOL (carried by 1 lucky +0.149, rest -EV) (overrides TOP_ELITE)
+  "EQaxqKT3N981QBmdSUGNzAGK5S26zUwAdRHhBCgn87zD", // jamessmith — 6 trades, 50% WR, -0.015 SOL. CLEAR DUMP PATTERN: signals BUY → sells → copy-traders bagholder. Observed Apr 22: Surprised Pikachu -0.015, CloudCoin -0.006 both within minutes of his SELL.
 ]);
 
 // Tier 1 Smart Money wallet ADDRESSES — entry requires 1 of these
