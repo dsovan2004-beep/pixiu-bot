@@ -146,4 +146,13 @@ export const BUY_RESCUE_DELAY_MS = 3 * 60_000; // 3 min
 // drains some liquidity), so this floor is mildly more strict in
 // practice than the backtest — but the bimodal separation between
 // winners/losers is clean enough that 0.90 is a safe starting point.
-export const MIN_ROUND_TRIP_RECOVERY = 0.90;
+//
+// Apr 22 PM tightening: 0.90 → 0.95. Ben Pasterneck trade showed
+// pre-buy sim at 97.7% → post-buy monitor at 87.8% — our own 0.025
+// SOL buy drained 10 points of liquidity. The 0.90 floor meant any
+// pool 90-99% pre-buy could still collapse into the 80s on our own
+// impact. 0.95 leaves only 5% headroom for our buy's own drag,
+// rejecting pools that are structurally too thin even if the
+// pre-buy quote looks OK. Revert if entry throughput drops below
+// 1 trade/hour (we lose signal-to-noise).
+export const MIN_ROUND_TRIP_RECOVERY = 0.95;
