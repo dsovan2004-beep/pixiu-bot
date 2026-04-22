@@ -544,8 +544,37 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
           // closeTrade in the grid loop on some paths.
           const remainingPctAtClose = remainingPct;
           (async () => {
-            const solReceived = await parseSwapSolDelta(sig);
-            if (solReceived === null) return;
+            // Apr 22 fix: write sell_tx_sig IMMEDIATELY, don't block on
+            // parseSwapSolDelta. IXCOIN (Apr 22) was a phantom-closed row
+            // because the RPC was flaky → parseSwapSolDelta returned null
+            // → function exited before writing sell_tx_sig → row was
+            // status='closed' / exit_reason='stop_loss' / sell_tx_sig=null.
+            // Now sell_tx_sig is recorded first so we can always reconcile
+            // real_pnl_sol later (via find-missing-sell.ts or a retry).
+            try {
+              await supabase
+                .from("trades")
+                .update({ sell_tx_sig: sig })
+                .eq("id", pos.id);
+            } catch (err: any) {
+              console.error(`  [GUARD] sell_tx_sig write failed: ${err.message}`);
+            }
+
+            // Retry parseSwapSolDelta up to 3 times with backoff before
+            // giving up on real_pnl_sol. Transient RPC failures shouldn't
+            // lose accounting.
+            let solReceived: number | null = null;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              solReceived = await parseSwapSolDelta(sig);
+              if (solReceived !== null) break;
+              if (attempt < 3) {
+                await new Promise((r) => setTimeout(r, 2_000 * attempt));
+              }
+            }
+            if (solReceived === null) {
+              console.warn(`  [GUARD] ⚠️ parseSwapSolDelta failed 3x for ${sig} — real_pnl_sol left null for reconcile`);
+              return;
+            }
             const { data: row } = await supabase
               .from("trades")
               .select("entry_sol_cost, real_pnl_sol")
@@ -560,7 +589,6 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
               await supabase
                 .from("trades")
                 .update({
-                  sell_tx_sig: sig,
                   ...(realPnlSol !== null ? { real_pnl_sol: realPnlSol } : {}),
                 })
                 .eq("id", pos.id);
