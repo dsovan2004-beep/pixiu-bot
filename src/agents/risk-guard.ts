@@ -53,7 +53,24 @@ const LIQUIDITY_CHECK_INTERVAL_MS = 60_000;
 // by the next poll mark was -39% and we ate -0.020 SOL. A 60% floor
 // would have fired at the 48.6% reading when mark was still -5%,
 // saving ~0.035 SOL per rug-class trade.
-const LIQUIDITY_DROP_THRESHOLD = 0.60;
+//
+// Apr 23 PM: raised 0.60 → 0.85. Shoebill (today) entered with post-buy
+// sim at 66.2% IMMEDIATELY (pre-buy was 97.6% — our own 0.025 drained 31
+// points of liquidity = structurally broken pool). Mark peaked at +29.5%
+// but phantom peak gate correctly blocked L1 partials all through the
+// pump. Drain eventually fired at 54.5% after mark crashed to -8%, real
+// loss -0.016 SOL.
+//
+// A 0.85 floor would have fired on the FIRST liquidity check at 66.2%,
+// exiting at entry-time slippage only (~-0.010 SOL). That's a 38% loss
+// cut per broken-pool entry. Healthy pools quote 88-105% post-buy (e.g.
+// Enrique 90.6%, Ben Pasterneck 87.8%) so 0.85 still preserves legit
+// positions — it only catches the structurally broken ones.
+//
+// Tradeoff: some borderline pools (85-88%) might get dumped that would
+// otherwise recover. Acceptable cost to prevent shoebill-class -0.016
+// losses that compound fast at 25% WR.
+const LIQUIDITY_DROP_THRESHOLD = 0.85;
 const liquiditySnapshots = new Map<string, { lastCheckMs: number }>();
 type HolderSnapshot = {
   topAddresses: Set<string>;
