@@ -1148,26 +1148,36 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
         // CB/SL/TO/liquidity-drain handle the exit. Ben Pasterneck (Apr
         // 22) fired L1 at +31.4% mark but executed at -36% real on the
         // 50% slice; this gate would have prevented that phantom lock-in.
-        if (pos.entry_sol_cost != null) {
-          const gridRecovery = await simulateSellRecovery(
-            pos.coin_address,
-            Number(pos.entry_sol_cost),
-            remainingPct
-          );
-          if (gridRecovery !== null && gridRecovery < GRID_SIM_RECOVERY_FLOOR) {
-            console.log(
-              `  [GUARD] [GRID L${grid.level}] ${coinLabel} 🧿 PHANTOM PEAK — mark +${pnlPct.toFixed(1)}% but sim recovery ${(gridRecovery * 100).toFixed(1)}% < ${(GRID_SIM_RECOVERY_FLOOR * 100).toFixed(0)}% floor. Pool can't honor mark at our size. Skipping partial, reverting DB claim.`
-            );
-            await supabase
-              .from("trades")
-              .update({ grid_level: currentLevel })
-              .eq("id", pos.id);
-            break;
-          }
+        //
+        // Apr 23 AM race-fix: Enrique L1 fired with NO sim check because
+        // pos.entry_sol_cost was still null on the first guard poll after
+        // entry (executor's DB write hadn't synced yet). L2 fired ~3 min
+        // later with entry_sol_cost populated and sim check running fine.
+        // Fallback: if null, use LIVE_BUY_SOL * 1.2 as a conservative
+        // UPPER bound on real cost (typical slippage + fees is 8-20%).
+        // Higher cost in the denominator → LOWER recovery ratio → STRICTER
+        // gate. Better to occasionally over-reject than to fire L1 blind.
+        const costBasisForSim = pos.entry_sol_cost != null
+          ? Number(pos.entry_sol_cost)
+          : LIVE_BUY_SOL * 1.2;
+        const gridRecovery = await simulateSellRecovery(
+          pos.coin_address,
+          costBasisForSim,
+          remainingPct
+        );
+        if (gridRecovery !== null && gridRecovery < GRID_SIM_RECOVERY_FLOOR) {
           console.log(
-            `  [GUARD] [GRID L${grid.level}] ${coinLabel} sim recovery ${gridRecovery === null ? "NULL" : (gridRecovery * 100).toFixed(1) + "%"} — proceeding with partial`
+            `  [GUARD] [GRID L${grid.level}] ${coinLabel} 🧿 PHANTOM PEAK — mark +${pnlPct.toFixed(1)}% but sim recovery ${(gridRecovery * 100).toFixed(1)}% < ${(GRID_SIM_RECOVERY_FLOOR * 100).toFixed(0)}% floor. Pool can't honor mark at our size. Skipping partial, reverting DB claim.`
           );
+          await supabase
+            .from("trades")
+            .update({ grid_level: currentLevel })
+            .eq("id", pos.id);
+          break;
         }
+        console.log(
+          `  [GUARD] [GRID L${grid.level}] ${coinLabel} sim recovery ${gridRecovery === null ? "NULL" : (gridRecovery * 100).toFixed(1) + "%"}${pos.entry_sol_cost == null ? " (fallback cost basis)" : ""} — proceeding with partial`
+        );
 
         console.log(
           `  [GUARD] [GRID L${grid.level}] ${coinLabel} triggered at +${pnlPct.toFixed(1)}% — selling ${sellPctOfCurrent.toFixed(1)}% of current balance via Jupiter (slot claimed)`
