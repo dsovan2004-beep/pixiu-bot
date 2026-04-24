@@ -35,7 +35,18 @@ export function wasLastSellUnsellable(mint: string): boolean {
   return was;
 }
 const BUY_SLIPPAGE_BPS = 1000; // 10% for buys — pump.fun tokens need higher
-const SELL_SLIPPAGE_BPS = [500, 1000, 2000, 3000]; // Grid TP ladder: 5→10→20→30% on retry
+// Apr 23 PM: dropped 5% starting rung. Observed 2/2 LandSat Earth L1
+// partials time out at 5% → retry at 10% → land. Net effect: every
+// grid partial cost ~3 min of confirmation delay (60s wait + 120s
+// status check) before landing at 10%. During that window, mark drifts
+// 5-15pp, often costing the captured peak we triggered on.
+//
+// On pump.fun-class thin pools, 5% slippage is reliably insufficient
+// for even a 0.012 SOL L1 slice. Starting at 10% lands on the first
+// attempt and preserves the mark peak. Cost: we pay 10% slippage when
+// 5% might have sufficed (rare). Benefit: partials land within 30-60s
+// instead of 3+ min, so we actually capture the pump we detected.
+const SELL_SLIPPAGE_BPS = [1000, 2000, 3000]; // Grid TP ladder: 10→20→30% on retry
 
 // Sprint 10 Phase 6 — rescue-class exits start at aggressive slippage.
 // hehehe (Apr 21 9pm UTC): holder_rug triggered at +87% mark with 67%
