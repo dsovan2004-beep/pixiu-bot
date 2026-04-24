@@ -28,6 +28,10 @@ import {
   WALLET_BLACKLIST_TAGS,
   DUMP_PATTERN_MIN_SIGNALS,
   DUMP_PATTERN_WINDOW_MS,
+  ELITE_WALLET_TAGS,
+  ELITE_BUY_SOL,
+  getBuySolForWalletTag,
+  getPrimaryWalletTag,
 } from "../config/smart-money";
 import { sendAlert } from "../lib/telegram";
 
@@ -342,15 +346,29 @@ export async function startTradeExecutor(): Promise<void> {
           `  [FILTER] PASS ${coin} — age ${ageMin.toFixed(1)}min, co-buyers ${coBuyerCount}, dump-pattern signals ${blacklistSignalCount}`
         );
 
+        // ── Elite-wallet dynamic sizing (Apr 24) ──
+        // theo pump sad and daniww are net-positive proven wallets. Their
+        // signals get 2x size (0.05 vs 0.025). All other wallets stay at
+        // 0.025 baseline. Sim-recovery and buy amount must match so we
+        // validate the actual trade size we're about to execute.
+        const primaryTag = getPrimaryWalletTag(trade.wallet_tag);
+        const buySol = getBuySolForWalletTag(trade.wallet_tag);
+        const isEliteSignal = ELITE_WALLET_TAGS.has(primaryTag);
+        if (isEliteSignal) {
+          console.log(
+            `  [EXECUTOR] ⭐ ELITE SIGNAL — ${primaryTag} → upgrading buy size ${LIVE_BUY_SOL} → ${buySol} SOL`
+          );
+        }
+
         // ── Filter: pre-buy round-trip recovery (liquidity trap) ──
-        // Quote SOL→TOKEN→SOL at LIVE_BUY_SOL. If recovery < floor,
+        // Quote SOL→TOKEN→SOL at the ACTUAL buy size. If recovery < floor,
         // the pool is too thin to exit cleanly and the trade is a
         // near-guaranteed loser (KICAU MANIA class). Postmortem on
         // 67 trades: 0/14 winners below 90%, 41/53 losers below 90%.
         // Fail-open on Jupiter errors: a null recovery means we
         // couldn't get a quote, which is different from a bad quote,
         // so we proceed rather than miss the entry.
-        const rtRecovery = await simulateRoundTripRecovery(trade.coin_address, LIVE_BUY_SOL);
+        const rtRecovery = await simulateRoundTripRecovery(trade.coin_address, buySol);
         if (rtRecovery !== null && rtRecovery < MIN_ROUND_TRIP_RECOVERY) {
           console.log(
             `  [FILTER] SKIP ${coin} — liquidity trap: round-trip recovery ${(rtRecovery * 100).toFixed(1)}% < ${(MIN_ROUND_TRIP_RECOVERY * 100).toFixed(0)}% floor`
@@ -374,7 +392,7 @@ export async function startTradeExecutor(): Promise<void> {
 
         activeBuys.add(trade.coin_address);
         try {
-          const sig = await buyToken(trade.coin_address, LIVE_BUY_SOL);
+          const sig = await buyToken(trade.coin_address, buySol);
           if (sig) {
             console.log(`  [EXECUTOR] 🔴 LIVE BUY executed: ${sig}`);
             // Tag as [LIVE]

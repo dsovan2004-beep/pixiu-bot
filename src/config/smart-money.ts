@@ -88,6 +88,38 @@ export const WALLET_BLACKLIST_TAGS = new Set<string>([
 export const DUMP_PATTERN_MIN_SIGNALS = 3;
 export const DUMP_PATTERN_WINDOW_MS = 15 * 60_000; // 15 min
 
+// ─── Elite wallet sizing (Apr 24) ───
+// Wallets that have proven net-positive over ≥ 5 trades get 2x size. The
+// ONLY way to scale profitable wallets without waiting weeks for compounding
+// at 0.025 is to increase per-trade exposure on the signals that actually
+// make money. Size 2x losses too, but at the observed edge (+0.014 SOL/trade
+// for theo pump sad, +0.002 SOL/trade for daniww), EV scales linearly.
+//
+// Gate: primary wallet tag must match. Secondary/co-buyer signalers don't
+// trigger the upgrade — only when the elite wallet is the FIRST signaler.
+//
+// Risk envelope: DAILY_LOSS_LIMIT_SOL = 0.50 still caps overnight bleed.
+// At 0.05 size, ~10 losing trades worth = within cap.
+export const ELITE_WALLET_TAGS = new Set<string>([
+  "theo pump sad", // +0.0993 SOL / 7 trades / 42.9% WR — most consistent
+  "daniww",        // +0.0376 SOL / 17 trades / biggest win +0.1241 fat tail
+]);
+export const ELITE_BUY_SOL = 0.05; // 2x LIVE_BUY_SOL
+
+// Extract the primary (first) wallet tag from "wallet_tag" which may look
+// like "daniww+Zrool [LIVE]" or just "theo pump sad".
+export function getPrimaryWalletTag(walletTag: string | null | undefined): string {
+  if (!walletTag) return "";
+  const noSuffix = walletTag.replace(/\s*\[[^\]]*\]\s*$/, "");
+  return noSuffix.split("+")[0].trim();
+}
+
+// Resolve the correct buy size for a given signaler.
+export function getBuySolForWalletTag(walletTag: string | null | undefined): number {
+  const primary = getPrimaryWalletTag(walletTag);
+  return ELITE_WALLET_TAGS.has(primary) ? ELITE_BUY_SOL : LIVE_BUY_SOL;
+}
+
 // Tier 1 Smart Money wallet ADDRESSES — entry requires 1 of these.
 // WR labels on external names (GMGN/Kolscan) are STALE — do not trust them
 // as entry justification. Only live-trade real_pnl_sol matters. Apr 24
