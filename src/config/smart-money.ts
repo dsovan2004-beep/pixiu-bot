@@ -42,24 +42,47 @@ export const WALLET_BLACKLIST = new Set([
   "8NJ7Ujpji8uMF2675mqaTSEm2DCbfJA7fiRKtiaqkaLN", // chester (addr 2) — DB duplicate
   "5t9xBNuDdGTGpjaPTx6hKd7sdRJbvtKS8Mhq6qVbo8Qz", // SmokezXBT — 3 trades, 0% WR, -0.042 SOL (preemptive, same reason)
   "sAdNbe1cKNMDqDsa4npB3TfL62T14uAo2MsUQfLvzLT",  // pr6spr — 1 trade, -0.052 SOL (single massive loss — preemptive ban vs risk another -0.05)
+  // ─── Apr 24 postmortem (167 closed trades): stale TOP_ELITE labels didn't ───
+  // ─── match real performance. Net-negative wallets with ≥5 trades cut. ───
+  "4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk", // Jijo — 7 trades, 28.6% WR, -0.041 SOL (labeled "55% WR" in old TOP_ELITE — real WR half that; also REMOVED from TOP_ELITE below)
+  "78N177fzNJpp8pG49xDv1efYcTMSzo9tPTKEA9mAVkh2", // Sheep — 5 trades, 20% WR, -0.008 SOL (labeled "64% WR" GMGN#2; real WR 20%; also REMOVED from TOP_ELITE below)
+  "4uCT4g7YHH4xxfmfNfKUDenwGrRNGoZ9Ay1XFxfUGhQG", // pump sad esee — 6 trades, 50% WR, -0.010 SOL (net-negative even at 50% WR: losers are 1.5x bigger than winners)
 ]);
 
-// Tier 1 Smart Money wallet ADDRESSES — entry requires 1 of these
+// Tier 1 Smart Money wallet ADDRESSES — entry requires 1 of these.
+// WR labels on external names (GMGN/Kolscan) are STALE — do not trust them
+// as entry justification. Only live-trade real_pnl_sol matters. Apr 24
+// postmortem cut Jijo (real 28.6% WR, -0.041) and Sheep (real 20% WR,
+// -0.008) despite their "55% WR" and "64% WR" external labels.
 export const TOP_ELITE_ADDRESSES = new Set([
-  "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o", // Cented
+  "CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o", // Cented (note: also blacklisted — TOP_ELITE membership preserved for historical clarity but guard #10a rejects)
   "8deJ9xeUvXSJwicYptA9mHsU2rN2pDx37KWzkDkEXhU6", // Cooker
-  "J3Ez1WjZMpcnMua4xA9nirZwWTurAxY7wqhm4vPeJ8k5", // GMGN_SM_2 90% WR
-  "4gyFNL92hgMZUb87Nv4BgfasYTZ247M2GSf8d2LS1Q99", // GMGN_FW_1 95% WR
-  "5BGiLEfrrrAHPdjomZXhXk8mu36xgSdoV38BPxwkB3mz", // GMGN_FW_2 100% WR
-  "4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk", // Jijo 55% WR
-  "G45wKGBuuHbfh2tkkNhWchfFquLM1DQ7xKs3VfygXQ5F", // GMGN_FW_3 93% WR
-  "Hrk1f2nEMme9tDY5yro4itW9cN7P8K7PKyReGatf5zRb", // GMGN_FW_4 85% WR
-  "78N177fzNJpp8pG49xDv1efYcTMSzo9tPTKEA9mAVkh2", // Sheep 64% WR (GMGN #2)
-  "DjM7Tu7whh6P3pGVBfDzwXAx2zaw51GJWrJE3PwtuN7s", // LUKEY 94% WR (Kolscan #28)
-  "2fg5QD1eD7rzNNCsvnhmXFm5hqNgwTTG8p7kQ6f3rx6f", // Cupsey 56% WR (GMGN #3)
+  "J3Ez1WjZMpcnMua4xA9nirZwWTurAxY7wqhm4vPeJ8k5", // GMGN_SM_2
+  "4gyFNL92hgMZUb87Nv4BgfasYTZ247M2GSf8d2LS1Q99", // GMGN_FW_1
+  "5BGiLEfrrrAHPdjomZXhXk8mu36xgSdoV38BPxwkB3mz", // GMGN_FW_2
+  "G45wKGBuuHbfh2tkkNhWchfFquLM1DQ7xKs3VfygXQ5F", // GMGN_FW_3
+  "Hrk1f2nEMme9tDY5yro4itW9cN7P8K7PKyReGatf5zRb", // GMGN_FW_4
+  "DjM7Tu7whh6P3pGVBfDzwXAx2zaw51GJWrJE3PwtuN7s", // LUKEY
+  "2fg5QD1eD7rzNNCsvnhmXFm5hqNgwTTG8p7kQ6f3rx6f", // Cupsey (note: also blacklisted)
   "J7GR6XoJfCPwZumW9xZ1nbWkyaq1oYSQuSVmCdBTx6Nf", // GMGN_T1_1
   "JESUSL2s5BsffGNNn6wQtHART2iXVGjtGhKAwGw44bL", // GMGN_T1_2
   "8hfoNZCd2bK9aqCBkhg8f2L1AoL7qfHwd9tMv7x64qui", // GMGN_T1_3
+  // ─── Apr 24 PROMOTIONS — real live-trade winners ───
+  // theo pump sad: 7 trades, 42.9% WR, +0.0993 SOL net, biggest win +0.0815.
+  // MOST CONSISTENT PROFITABLE SIGNAL SOURCE in the book. Permanent T1
+  // to prevent tier-manager from demoting on a temporary losing streak.
+  "Bi4rd5FH5bYEN8scZ7wevxNZyNmKHdaBcvewdPFxYdLt", // theo pump sad — +0.0993 SOL, 42.9% WR
+  // daniww: 17 trades, 23.5% WR, +0.0376 SOL net, biggest win +0.1241 (!!!).
+  // FAT-TAIL PATTERN: low WR but huge rare winners pay for everything. The
+  // +0.1241 SOL trade was ~500% real on a 0.025 slice. Multiple wallet
+  // addresses — add all 7 so ANY daniww tx triggers the pattern we want.
+  "3v8mNVUrKsyRs2PUcoFfEY5of4zzRscahpkstGLgmGLS", // daniww (addr 1)
+  "BKWFf5zmw7PLmBZPUaHk8YXgZbZX5HHf7DT3LV6ViAJy", // daniww (addr 2)
+  "HLaRgbo8YrVfTh4Nn9MUU2o786RsJ86b4YSAbgjEfV9q", // daniww (addr 3)
+  "F1FE8k8cguYdzv3UeHgwao2AUgE8zPJzQvQKPiTfT14r", // daniww (addr 4)
+  "8NgSPEZcJBg78z78n4FejqtQZ4HzpWNXMMV7yJiU7PWf", // daniww (addr 5)
+  "G7mfcf5GbZezcBKqcDo5u16TSLARTVxTRSjXxDYbVnaq", // daniww (addr 6)
+  "AuPp4YTMTyqxYXQnHc5KUc6pUuCSsHQpBJhgnD45yqrf", // daniww (addr 7)
 ]);
 
 // Entry filters
