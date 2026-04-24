@@ -25,6 +25,9 @@ import {
   MIN_TOKEN_AGE_MINUTES,
   MAX_CO_BUYERS_5MIN,
   MIN_ROUND_TRIP_RECOVERY,
+  WALLET_BLACKLIST_TAGS,
+  DUMP_PATTERN_MIN_SIGNALS,
+  DUMP_PATTERN_WINDOW_MS,
 } from "../config/smart-money";
 import { sendAlert } from "../lib/telegram";
 
@@ -297,8 +300,46 @@ export async function startTradeExecutor(): Promise<void> {
             .eq("status", "open");
           continue;
         }
+
+        // ── Filter: dump-pattern (blacklist-tag signal density) ──
+        // chloe (Apr 24) lost -0.005 SOL because GMGN_SM_4+Trenchman+
+        // jamessmith spam-cycled BUY/SELL 40+ times in the hour before
+        // GMGN_T1_1 (legit) signaled. Co-buyer filter only looked at 5min
+        // BUYs and missed the broader dump pattern. This filter counts any
+        // signal (BUY or SELL) from blacklisted wallet tags in a wider
+        // 15min window. ≥ 3 blacklisted-wallet touches = this coin is
+        // being actively pumped+dumped, skip regardless of primary
+        // signaler legitimacy.
+        const dumpWindowStart = new Date(
+          Date.now() - DUMP_PATTERN_WINDOW_MS
+        ).toISOString();
+        const { data: recentSignals } = await supabase
+          .from("coin_signals")
+          .select("wallet_tag")
+          .eq("coin_address", trade.coin_address)
+          .gte("signal_time", dumpWindowStart);
+        let blacklistSignalCount = 0;
+        const offendingTags = new Set<string>();
+        for (const s of recentSignals ?? []) {
+          if (s.wallet_tag && WALLET_BLACKLIST_TAGS.has(s.wallet_tag)) {
+            blacklistSignalCount++;
+            offendingTags.add(s.wallet_tag);
+          }
+        }
+        if (blacklistSignalCount >= DUMP_PATTERN_MIN_SIGNALS) {
+          console.log(
+            `  [FILTER] SKIP ${coin} — 🩸 DUMP PATTERN: ${blacklistSignalCount} blacklist-wallet signals in last 15min from [${[...offendingTags].join(", ")}]`
+          );
+          await supabase
+            .from("trades")
+            .update({ status: "failed", exit_reason: "filter_dump_pattern" })
+            .eq("id", trade.id)
+            .eq("status", "open");
+          continue;
+        }
+
         console.log(
-          `  [FILTER] PASS ${coin} — age ${ageMin.toFixed(1)}min, co-buyers ${coBuyerCount}`
+          `  [FILTER] PASS ${coin} — age ${ageMin.toFixed(1)}min, co-buyers ${coBuyerCount}, dump-pattern signals ${blacklistSignalCount}`
         );
 
         // ── Filter: pre-buy round-trip recovery (liquidity trap) ──

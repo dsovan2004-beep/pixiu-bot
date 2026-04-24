@@ -49,6 +49,45 @@ export const WALLET_BLACKLIST = new Set([
   "4uCT4g7YHH4xxfmfNfKUDenwGrRNGoZ9Ay1XFxfUGhQG", // pump sad esee — 6 trades, 50% WR, -0.010 SOL (net-negative even at 50% WR: losers are 1.5x bigger than winners)
 ]);
 
+// Blacklisted wallet TAGS (for cross-referencing coin_signals which stores
+// wallet_tag, not wallet_address). Keep in sync with WALLET_BLACKLIST above.
+// Used by the dump-pattern filter in trade-executor.ts: if a coin has recent
+// signal activity from these tags, the coin is being pumped+dumped and we
+// skip even if primary signaler is legit. chloe (Apr 24) lost -0.005 SOL
+// because GMGN_SM_4+Trenchman+jamessmith spam-traded it 40+ times in the
+// hour before GMGN_T1_1 (legit) signaled buy; our co-buyer filter only
+// looked at a 5min window and missed the broader dump pattern.
+export const WALLET_BLACKLIST_TAGS = new Set<string>([
+  "GMGN_SM_5",
+  "Scharo",
+  "cented",
+  "Bluey",
+  "bandit",
+  "decu",
+  "chair",
+  "Numer0",
+  "Cupsey",
+  "jamessmith",
+  "Trenchman",
+  "Johnson",
+  "chester",
+  "SmokezXBT",
+  "pr6spr",
+  "jijo",        // Apr 24 cut — stale "55% WR" label
+  "Sheep",       // Apr 24 cut — stale "64% WR" label
+  "pump sad esee", // Apr 24 cut — 50% WR but net-negative
+  // GMGN_SM_4 is NOT explicitly blacklisted yet but spams dump patterns —
+  // add here because its signal density in a coin is a strong negative signal
+  // even if it's not a permanent primary-signaler ban.
+  "GMGN_SM_4",
+]);
+
+// Dump-pattern filter: if ≥ this many signals (any BUY/SELL) from blacklisted
+// wallet tags in the last DUMP_PATTERN_WINDOW_MS on the target coin, skip.
+// Chloe had 40+ blacklist-tag signals; even a floor of 3 would block it.
+export const DUMP_PATTERN_MIN_SIGNALS = 3;
+export const DUMP_PATTERN_WINDOW_MS = 15 * 60_000; // 15 min
+
 // Tier 1 Smart Money wallet ADDRESSES — entry requires 1 of these.
 // WR labels on external names (GMGN/Kolscan) are STALE — do not trust them
 // as entry justification. Only live-trade real_pnl_sol matters. Apr 24
