@@ -5,6 +5,103 @@ when shipped, then delete from here.
 
 ---
 
+## 🏎️ Limo Path — Strategic Roadmap (Apr 24)
+
+North-star plan. PixiuBot is the backbone through every stage. Every
+piece of infrastructure we've built (risk guard, Jupiter integration,
+Supabase trades DB, webhook entry path, wallet watcher, dashboard)
+carries forward without rewrite. Each stage validates the next.
+
+**Current state**: 1.27 SOL (~$109). Post-Apr 24 fixes expected edge:
+~+0.26 SOL/week if theo/daniww hold. Avg loss post-fix: -0.0037 SOL
+vs pre-fix -0.017 SOL (4.6x improvement).
+
+### Stage 1 — Prove the edge (now → +30 days)
+Just keep PixiuBot running in current form.
+- **Target**: 1.27 → 3+ SOL
+- **Method**: theo pump sad + daniww 2x elite sizing (shipped `918518b`),
+  dump-pattern filter (`b880e8b`), phantom peak gate, 0.85 drain floor
+- **Validation gate**: 30 post-fix trades must show net-positive
+  expectancy before advancing to Stage 2
+- **Dev time**: zero — already shipped
+- **Risk**: theo/daniww could stop performing. Run postmortem every
+  30 new trades to catch decay early.
+
+### Stage 2 — Kill infrastructure bottlenecks (+30-60 days)
+Upgrade execution layer without changing strategy.
+- **Target**: 3 → 10 SOL
+- **Ships**:
+  - Helius Pro subscription ($100-300/mo) → Geyser gRPC direct
+  - Signal lag drops **30s → 2-3s** (beats other copy-traders to fill)
+  - BloXroute Trader API integration → replaces Jito for bundle
+    submission. Fixes the 3/4 Jito timeout rate observed Apr 23-24.
+  - Free BloXroute tier works for 0.05 SOL trades.
+- **Dev time**: ~1 week (gRPC subscription + BloXroute drop-in)
+- **Expected uplift**: 20-30% on theo/daniww PnL from reduced slippage
+  + faster entries
+
+### Stage 3 — Add pump.fun sniper module (+60-120 days)
+Second strategy on same codebase. Copy-trade + snipe run in parallel.
+- **Target**: 10 → 50+ SOL
+- **Ships**:
+  - New signal source: pump.fun bonding-curve mint events via Geyser
+  - Entry within 500ms of token launch (vs our copy-trade T+2s)
+  - **Reuses existing risk guard** (phantom peak, drain, L1/L2 grid)
+  - **Reuses Jupiter + BloXroute** execution layer
+  - New filter set for sniper mode (holder count, dev wallet patterns)
+- **Dev time**: 5-7 days on top of Stage 2 infra
+- **Rationale**: Copy-trading smart money at T+2s is still behind
+  snipers who enter at T+100ms. Becoming the sniper captures the
+  first-move premium.
+
+### Stage 4 — Capital partnership (+120-180 days)
+Use 60-90 days of verified +EV logs as pitch material.
+- **Target**: 50 → 500 SOL
+- **Method**:
+  - Raise 30-50 SOL from 2-3 partners at 50/50 profit share
+  - Operate 0.5-3 SOL per position (vs current 0.05)
+  - Dashboard exposes per-partner PnL attribution
+  - All execution runs through same PixiuBot
+- **Risk**: capital allocation to strategy can shift — need per-stack
+  PnL accounting and clear exit rules
+- **Dev time**: 3-5 days (dashboard partner view + allocation rules)
+
+### Stage 5 — 🏎️ Limo territory (+180-365 days)
+500 SOL ≈ $43k at SOL=$86 → used limo cash.
+- **Decision point**: cash out vs continue compounding
+- **Alternative**: hire a driver because operating the bot is now a
+  full-time job and we shouldn't be driving anyway
+
+### What carries forward through every stage
+| Component | Stage 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| Risk guard (L1/L2 + drain + phantom) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Jupiter swap + rescue ladder | ✓ | ✓ (BloXroute) | ✓ | ✓ | ✓ |
+| Supabase trades DB | ✓ | ✓ | ✓ | ✓ (proof) | ✓ |
+| Wallet watcher + blacklist | ✓ | ✓ (Geyser) | ✓ | ✓ | ✓ |
+| Webhook entry path + 15 guards | ✓ | ✓ | ✓ (+ sniper path) | ✓ | ✓ |
+| Dashboard | ✓ | ✓ | ✓ (+ sniper view) | ✓ (+ partners) | ✓ |
+
+### Kill criteria (know when to stop)
+- **Stage 1 fails** if 30 post-fix trades show WR < 30% OR net < 0
+  → pause bot, postmortem, maybe strategy pivot
+- **Stage 2 fails** if faster execution doesn't lift PnL (sig lag was
+  not the bottleneck) → cancel Helius Pro, reassess
+- **Stage 3 fails** if sniper shows negative expectancy after 50
+  trades → disable sniper module, keep copy-trade
+- **Any stage** — if bankroll drops below 80% of stage entry level,
+  halt and postmortem before proceeding
+
+### Open questions (answer during Stage 1)
+- Does elite 2x sizing on daniww 23.5% WR actually scale linearly?
+  Losing streaks at 2x could overshoot `DAILY_LOSS_LIMIT_SOL` = 0.50.
+- Should `DUMP_PATTERN_MIN_SIGNALS = 3` be tightened to 2 after more
+  data? Chloe had 40+; 2 might block legitimate aged-token entries.
+- When theo/daniww inevitably decay, how do we detect early? Need
+  a rolling WR window (7d or 30d) that auto-demotes on regression.
+
+---
+
 ## Sprint 10 — Phase 7 shipped (Apr 21 PM UTC — selection-layer)
 
 Full selection-layer day after Phase 5-6 sell-side rebuild. Four
