@@ -47,6 +47,17 @@ export const WALLET_BLACKLIST = new Set([
   "4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk", // Jijo — 7 trades, 28.6% WR, -0.041 SOL (labeled "55% WR" in old TOP_ELITE — real WR half that; also REMOVED from TOP_ELITE below)
   "78N177fzNJpp8pG49xDv1efYcTMSzo9tPTKEA9mAVkh2", // Sheep — 5 trades, 20% WR, -0.008 SOL (labeled "64% WR" GMGN#2; real WR 20%; also REMOVED from TOP_ELITE below)
   "4uCT4g7YHH4xxfmfNfKUDenwGrRNGoZ9Ay1XFxfUGhQG", // pump sad esee — 6 trades, 50% WR, -0.010 SOL (net-negative even at 50% WR: losers are 1.5x bigger than winners)
+  // ─── 332-trade postmortem (after 165 new trades): bot lost 0.45 SOL of bankroll ───
+  // ─── while user was away. These 8 wallets cleared the 5-trade threshold ───
+  // ─── that they were under at last postmortem. Cumulative: -0.28 SOL hist bleed. ───
+  "AGqjivJr1dSv73TVUvdtqAwogzmThzvYMVXjGWg2FYLm", // noob mini — 20 trades, 15% WR, -0.067 SOL (biggest new bleeder, 4-trade window blew up sample)
+  "6EDaVsS6enYgJ81tmhEkiKFcb4HuzPUVFZeom6PHUqN3", // Cowboy — 19 trades, 21% WR, -0.044 SOL
+  "G6fUXjMKPJzCY1rveAE6Qm7wy5U3vZgKDJmN1VPAdiZC", // clukz — 23 trades, 35% WR, -0.044 SOL (largest sample of any bleeder — clear signal)
+  "BTf4A2exGK9BCVDNzy65b9dUzXgMqB4weVkvTMFQsadd", // kev main — 8 trades, 25% WR, -0.037 SOL
+  "99i9uVA7Q56bY22ajKKUfTZTgTeP5yCtVGsrG9J4pDYQ", // Zrool — 14 trades, 21% WR, -0.031 SOL
+  "5dd3zjBQQvQqtmWF67nR6XaRKe79cYu4fP6LFXZ1YRR9", // GMGN_SM_1 — 8 trades, 0% WR, -0.029 SOL (0% WR over 8 trades is unambiguous)
+  "gangJEP5geDHjPVRhDS5dTF5e6GtRvtNogMEEVs91RV",  // Q — 5 trades, 20% WR, -0.016 SOL
+  "DEdEW3SMPU2dCfXEcgj2YppmX9H3bnMDJaU4ctn2BQDQ", // King Solomon — 5 trades, 0% WR, -0.013 SOL
 ]);
 
 // Blacklisted wallet TAGS (for cross-referencing coin_signals which stores
@@ -80,6 +91,15 @@ export const WALLET_BLACKLIST_TAGS = new Set<string>([
   // add here because its signal density in a coin is a strong negative signal
   // even if it's not a permanent primary-signaler ban.
   "GMGN_SM_4",
+  // ─── Apr 25 — 332-trade postmortem additions ───
+  "noob mini",
+  "Cowboy",
+  "clukz",
+  "kev main",
+  "Zrool",
+  "GMGN_SM_1",
+  "Q",
+  "King Solomon",
 ]);
 
 // Dump-pattern filter: if ≥ this many signals (any BUY/SELL) from blacklisted
@@ -249,4 +269,19 @@ export const BUY_RESCUE_DELAY_MS = 3 * 60_000; // 3 min
 // rejecting pools that are structurally too thin even if the
 // pre-buy quote looks OK. Revert if entry throughput drops below
 // 1 trade/hour (we lose signal-to-noise).
-export const MIN_ROUND_TRIP_RECOVERY = 0.95;
+//
+// Apr 25 PM tightening: 0.95 → 0.97. Over 165 trades since Apr 24,
+// pattern is unambiguous: pre-buy sims at 95-98% routinely turn into
+// post-buy reality of 70-85%. The 0.85 drain floor catches these but
+// only AFTER we've paid entry. Dashboard shows dozens of "PD" exits
+// (Pedro Solana, Standing Eagle Chicken, Bow-Wow Battle, キックくん,
+// ur mom, turdcoin, trollhouse, GEN Z PREFERS, wenlambonorisknorari,
+// Povel Durev, etc.) — all immediate-drain entries. The pre/post
+// gap is the MEV/sniper tax on pump.fun pools: Jupiter quote is
+// "fair value", real execution gets sandwiched.
+//
+// 0.97 leaves only 3% headroom. Will block ~30% more entries but
+// those entries were systematically -EV. Net expected save: ~0.20
+// SOL across the next 165 trades. Revert to 0.95 if entry rate
+// drops below 1 trade per 2hr (we may be over-rejecting).
+export const MIN_ROUND_TRIP_RECOVERY = 0.97;
