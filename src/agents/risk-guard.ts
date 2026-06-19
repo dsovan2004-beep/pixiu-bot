@@ -361,10 +361,40 @@ async function checkPositions(levelFilter?: "L0" | "L1_PLUS"): Promise<void> {
     .eq("status", "closing")
     .lt("closing_started_at", fiveMinAgo);
 
+  // Phantom reaper (Jun 19 2026): the webhook inserts status='open' rows on
+  // every passing signal; the executor only resolves them to failed/[LIVE]
+  // while the bot is LIVE (`if (!live) return`). When the bot is stopped, or
+  // when signals arrive faster than the executor processes, these pre-confirm
+  // rows accumulate as 'open' forever. 2107 piled up over 6 weeks and made
+  // THIS query (unbounded status='open') return the 1000-row Supabase cap
+  // every 2s. A phantom is open + entry_sol_cost NULL + not [LIVE]: the buy
+  // never landed. Any such row older than 15min is dead (a real buy confirms
+  // in ~2min; age filter rejects >15min anyway), so flip it to failed. The
+  // guard always runs (even when stopped), so this keeps the table clean
+  // regardless of bot state.
+  const fifteenMinAgo = new Date(Date.now() - 15 * 60_000).toISOString();
+  await supabase
+    .from("trades")
+    .update({ status: "failed", exit_reason: "phantom_reaped" })
+    .eq("status", "open")
+    .is("entry_sol_cost", null)
+    .not("wallet_tag", "like", "%[LIVE]%")
+    .lt("entry_time", fifteenMinAgo);
+
+  // Only pull CONFIRMED positions into the monitoring loop. A row is
+  // confirmed when EITHER it carries the [LIVE] tag OR entry_sol_cost is set
+  // (the executor writes the tag synchronously right after the buy lands,
+  // then writes entry_sol_cost asynchronously once parseSwapSolDelta resolves
+  // — so during that brief window the [LIVE] tag is the only signal the buy
+  // is real, and the position MUST still be guarded against an early rug).
+  // Pure phantoms (no tag, no cost) are the executor's pre-confirm domain and
+  // get reaped above after 15min; excluding them here bounds the query to
+  // real positions so a phantom pileup can never balloon the workload again.
   const { data: allPositions, error } = await supabase
     .from("trades")
     .select("*")
-    .eq("status", "open");
+    .eq("status", "open")
+    .or("entry_sol_cost.not.is.null,wallet_tag.ilike.*LIVE*");
 
   if (error || !allPositions || allPositions.length === 0) return;
 
