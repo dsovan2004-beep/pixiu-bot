@@ -102,6 +102,46 @@ Use 60-90 days of verified +EV logs as pitch material.
 
 ---
 
+## ✅ Shipped Apr 22 → Jun 19 (Stage 0 → Stage 1 hardening)
+
+Full detail in `docs/JOURNAL.md` (2026-04-22→04-24 and 2026-06-19
+entries). Condensed:
+
+| Commit | What |
+|---|---|
+| `afa9c5f` `30e2d56` | L2 trail 12% + L2 sim floor 0.85 + 3-min L2 time cap |
+| `007bf7b` `58cf897` | drain floor 0.40 → 0.60 → 0.85 |
+| `eb4ac3c` `c61c547` | `LIVE_BUY_SOL` 0.05 → 0.025; dashboard reads it from config |
+| `64857f0` `9fa5229` | pre-buy `MIN_ROUND_TRIP_RECOVERY` 0.90 → 0.95 → 0.97 |
+| `c404a21` | phantom-peak gate on L1/L2 partials (`GRID_SIM_RECOVERY_FLOOR` 1.0) |
+| `cfa0ae4` | grid slippage ladder 5→10→20→30 ⇒ 10→20→30 |
+| `0f8be4a` | Apr 24 postmortem: promote theo/daniww (perm T1 2×), cut jijo/Sheep/pump-sad-esee |
+| `b880e8b` | dump-pattern filter (blacklist-tag signal density) |
+| `918518b` | elite 2× sizing (`ELITE_WALLET_TAGS`, `ELITE_BUY_SOL` 0.05) |
+| `9fa5229` | 332-trade postmortem: 8 new bleeders blacklisted |
+| `be97d0c` | phantom-open reaper + bounded guard query (2,107 rows cleaned) |
+
+New ops utilities: `diagnose-open.ts`, `cleanup-phantom-open.ts`,
+`get-winner-addrs.ts`, `get-bleeder-addrs.ts`.
+
+### Still open / next (Stage 1)
+- **P0 — validate post-fix stack**: need 30 post-fix trades net-positive
+  before any size-up (Limo Stage 1 gate). Watch `pool_drain` rate.
+- **P0 — next postmortem** at ~360 closed trades (every ~30). Watch for
+  elite decay (theo/daniww turning net-negative → demote).
+- **P1 — rolling-WR auto-demote** for `ELITE_WALLET_TAGS` so a decaying
+  elite wallet drops to 1× / out automatically instead of by hand.
+- **P1 — webhook-side phantom prevention**: ideally the webhook checks
+  `is_running` and/or stops inserting `open` rows the executor can't
+  resolve, so the reaper is a backstop not the primary cleanup.
+- **P2 — revisit `DUMP_PATTERN_MIN_SIGNALS`** (3): tighten to 2 if
+  false-negative dumps slip through; loosen if it blocks legit aged
+  tokens.
+- **P2 — `DAILY_LOSS_LIMIT_SOL`** currently 0.50; revisit vs the smaller
+  0.025 base size (0.50 = ~20 max-loss trades — may be too loose now).
+
+---
+
 ## Sprint 10 — Phase 7 shipped (Apr 21 PM UTC — selection-layer)
 
 Full selection-layer day after Phase 5-6 sell-side rebuild. Four

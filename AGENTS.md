@@ -20,7 +20,7 @@ insert site, add it there — not in the swarm.
 | `src/app/api/webhook/route.ts` | Cloudflare Edge | Helius webhook receiver; runs `evaluateAndEnter()` which owns **all 15 entry guards** and is the only code path that inserts `trades` |
 | `src/agents/wallet-watcher.ts` | Node (local/DO) | Watches tracked wallets, writes to `coin_signals` table |
 | `src/agents/trade-executor.ts` | Node | Polls `trades` every 3s, performs Jupiter swaps |
-| `src/agents/risk-guard.ts` | Node | Polls open positions every 5s, handles exits |
+| `src/agents/risk-guard.ts` | Node | Polls open positions (L0 2s / L1+ 5s), handles exits, reaps phantom `open` rows. Runs even when bot STOPPED |
 | `src/agents/tier-manager.ts` | Node | Demotes/promotes wallets T1↔T2 |
 
 `src/agents/run-all.ts` starts the 4 node agents. **Do not** recreate
@@ -83,10 +83,27 @@ observability depends on this consistency.
 - `is_running` in `bot_state` is authoritative. Every entry path
   **must** check it. If you're adding a new entry path (you shouldn't
   — see above), add the check first.
-- `LIVE_BUY_SOL` and `DAILY_LOSS_LIMIT_SOL` live in
-  `src/config/smart-money.ts`. The daily loss calc uses
+- `LIVE_BUY_SOL` (0.025 baseline) and `DAILY_LOSS_LIMIT_SOL` (0.50)
+  live in `src/config/smart-money.ts`. The daily loss calc uses
   `SUM(LIVE_BUY_SOL × |pnl_pct| / 100)` — not count × size. Old
   logic overstated losses ~3.5×.
+- **Elite sizing**: `ELITE_WALLET_TAGS` (theo pump sad, daniww) get
+  `ELITE_BUY_SOL` (0.05, 2×) — resolve size via
+  `getBuySolForWalletTag()`, matching the PRIMARY tag only. These are
+  the only wallets net-positive on live `real_pnl_sol`. Trust live PnL
+  for wallet selection, NOT external GMGN/Kolscan WR labels (jijo +
+  Sheep were cut for exactly that — labels said 55/64%, real was
+  28/20%).
+- **Phantom rows**: the webhook inserts `status='open'` per passing
+  signal; the executor only resolves them while LIVE. Stale phantoms
+  (open + `entry_sol_cost` NULL + not `[LIVE]` + age > 15min) are
+  reaped by risk-guard. Never write an unbounded `SELECT WHERE
+  status='open'` — bound it to confirmed rows (2,107 phantoms once
+  piled up and capped the guard query). See PLAYBOOK failure modes.
 - `checkTokenSafety()` and `checkLpAndHolders()` can fail-open on
   network errors — intentional. Better to miss an entry than to
   entry-block the world when DexScreener is flaky.
+- **Strategy reality**: copy-trading public smart money is −EV at our
+  T+30s latency (snipers/copy-traders take the liquidity first). The
+  exit/filter stack limits loss magnitude but can't fix the ~24% WR.
+  Forward plan is the Limo Path in `docs/BACKLOG.md` / `ROADMAP.md`.

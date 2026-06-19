@@ -45,7 +45,7 @@ and solve the problem differently.
 | `src/app/api/webhook/route.ts` | Cloudflare Edge | Helius webhook receiver; runs `evaluateAndEnter()` — owns all 15 entry guards and is the only code path that inserts `trades` |
 | `src/agents/wallet-watcher.ts` | Node (local or DO) | Watches tracked wallets, writes to `coin_signals` table |
 | `src/agents/trade-executor.ts` | Node | Polls `trades` every 3s, performs Jupiter swaps, tags `[LIVE]` |
-| `src/agents/risk-guard.ts` | Node | Polls open positions every 5s, fires exits |
+| `src/agents/risk-guard.ts` | Node | Polls open positions (L0 every 2s / L1+ every 5s), fires exits, reaps phantom rows. Runs even when bot STOPPED |
 | `src/agents/tier-manager.ts` | Node | Demotes/promotes tracked wallets T1↔T2 |
 
 `src/agents/run-all.ts` is the node-side swarm entry point. It starts
@@ -188,25 +188,65 @@ That binds every import transitively to the Cloudflare Workers runtime.
 
 ## Exit priority (risk-guard)
 
-`risk-guard.ts` polls open positions every 5 seconds. On each tick,
-per position, in order — first match wins:
+`risk-guard.ts` polls on a split cadence: **L0 positions every 2 s,
+L1+ every 5 s**. The guard ALWAYS runs even when the bot is STOPPED —
+STOP only blocks new entries, never exits. On each tick, per position,
+in order — first match wins:
 
 ```
-0a. Minimum hold time (30s)  — skip all except CB
-0b. Rug detection            — price=0 after 2min → exit at -100%
- 1. Circuit Breaker           — pnlPct ≤ -25% → emergency full exit
- 1b. Price echo guard         — pnlPct === 0.00% → skip (wait for real move)
- 2. Whale Exit                — confirming T1 wallet SELL → exit with whale
- 3. Stop Loss                 — pnlPct ≤ -10% → full exit
- 4. Timeout                   — held > 20min → full exit
- 5. Grid Levels:
-    L1 +15%  → sell 50% (break-even lock)
-    L2 +40%  → sell 25%
-    L3 +100% → trailing stop mode (replaces old sell-25%-at-L3);
-               hold until peak drop ≥ 20%, then full exit
- 6. Zero-balance close        — wallet has 0 tokens → lock PnL and close
-                                (phantom position rescue)
+0.  Phantom reaper (pre-loop)  — open + entry_sol_cost NULL + not [LIVE]
+                                 + age > 15min → mark failed/phantom_reaped
+0a. Closing reaper (pre-loop)  — 'closing' stuck > 5min → revert to 'open'
+0b. Skip phantom pre-confirm   — open but not yet [LIVE] / no entry_sol_cost
+0c. Holder exodus              — top-holder retention drop > 73% → exit
+0d. Liquidity drain monitor    — sim full-bag sell < 0.85 of entry cost
+                                 → pool_drain exit (catches broken pools)
+ 1. Circuit Breaker            — L0 ≤ -15% / L1+ ≤ -15% → emergency exit
+ 2. Whale Exit                 — DISABLED (structural latency; see below)
+ 3. Stop Loss                  — pnlPct ≤ -10% → full exit
+ 4. Timeout                    — held > 10min → full exit
+ 5. Grid Levels (each gated by the PHANTOM PEAK GATE):
+    L1 +15%  → sell 50%   ┐  before firing, sim-quote the slice; if
+    L2 +40%  → sell 25%   ┤  recovery < GRID_SIM_RECOVERY_FLOOR (1.0)
+    L3 +100% → trailing   ┘  skip partial, revert grid claim (mark is
+                             phantom at our size). Post-L1 trail 25%,
+                             post-L2 trail 12% + 0.85 sim floor + 3min cap.
+ 6. Zero-balance close         — wallet has 0 tokens → lock PnL and close
 ```
+
+### Key exit thresholds (all in `risk-guard.ts`, Jun 2026)
+
+| Constant | Value | Role |
+|---|---|---|
+| `CIRCUIT_BREAKER_L0_PCT` | 15 | CB threshold before any partials locked |
+| `STOP_LOSS_PCT` | 10 | hard SL |
+| `LIQUIDITY_DROP_THRESHOLD` | 0.85 | drain-monitor floor (full-bag sim ÷ entry) |
+| `GRID_SIM_RECOVERY_FLOOR` | 1.0 | phantom-peak gate — only fire L1/L2 if real breakeven+ available |
+| `POST_L1_TRAIL_PCT` | 25 | retrace from peak that closes a post-L1 position |
+| `POST_L2_TRAIL_PCT` | 12 | tighter retrace post-L2 |
+| `POST_L2_SIM_RECOVERY_FLOOR` | 0.85 | post-L2 sim auto-close |
+| `POST_L2_MAX_HOLD_MS` | 3 min | force-close post-L2 if no L3 (lock spike) |
+
+### Phantom peak gate (why grid partials sim-check first)
+
+DexScreener mark is a thin-pool MID price. At L1/L2 our actual Jupiter
+fill can be 15–40 pts below mark because snipers/copy-traders drained
+the pool first (Ben Pasterneck: +31.4% mark → −36% real on the slice).
+So before every grid partial the guard sim-quotes the sell; if recovery
+< 1.0 it logs `🧿 PHANTOM PEAK`, skips the partial, and reverts the DB
+grid claim. Real-profit partials still fire and lock SOL (e.g. LandSat
+Earth L1 +0.0004 real).
+
+### Drain monitor (broken-pool containment)
+
+Every poll, for confirmed `[LIVE]` positions, sim-quote a full-bag sell
+÷ entry cost. Below `LIQUIDITY_DROP_THRESHOLD` (0.85) → immediate
+`pool_drain` exit. This is the last line against broken-pool entries
+that pass the pre-buy filter but collapse the instant our buy lands.
+Pre-buy `MIN_ROUND_TRIP_RECOVERY` (0.97) is the FIRST line — reject
+before we pay. The pre/post-buy sim gap (95–98% → 70–85%) is the
+MEV/sniper tax on pump.fun and the core reason copy-trading is −EV at
+our latency.
 
 ### Atomic-claim pattern
 
@@ -239,9 +279,26 @@ dailyLossSol = SUM(LIVE_BUY_SOL × |pnl_pct| / 100) for today's closed losses
 Not `count × LIVE_BUY_SOL`. The old logic overstated actual SOL loss
 by ~3.55× on observed data — verified by `src/scripts/verify-daily-loss.ts`.
 
-`LIVE_BUY_SOL` (also `smart-money.ts`) is the per-trade position size.
-Currently `0.05`. Any bump to `0.10` must scale `DAILY_LOSS_LIMIT_SOL`
-proportionally.
+### Position sizing (current — Jun 2026)
+
+Two tiers, both in `smart-money.ts`:
+
+| Constant | Value | Applies to |
+|---|---|---|
+| `LIVE_BUY_SOL` | `0.025` | every signaler (baseline) |
+| `ELITE_BUY_SOL` | `0.05` (2×) | PRIMARY signaler in `ELITE_WALLET_TAGS` |
+
+`ELITE_WALLET_TAGS` = `theo pump sad`, `daniww` — the only wallets
+net-positive on live `real_pnl_sol`. Executor resolves size via
+`getBuySolForWalletTag(wallet_tag)`, matching the PRIMARY tag only (a
+co-buyer being elite does NOT upgrade size). The pre-buy round-trip sim
+runs at the ACTUAL chosen size so liquidity validation matches the
+real trade.
+
+History: baseline was `0.05`; halved to `0.025` (`eb4ac3c`, Apr 22) to
+cut loss magnitude while expectancy was negative. Any bump back must
+scale `DAILY_LOSS_LIMIT_SOL` proportionally. The dashboard reads
+`LIVE_BUY_SOL` from config (since `c61c547`) — never hardcode it in UI.
 
 ---
 
@@ -301,6 +358,49 @@ integration. No manual `wrangler deploy` needed.
    return a short health/405 response fast (<200ms).
 
 Rollback: revert the offending commit, push. CF redeploys in ~2min.
+
+---
+
+## Runbook: git push auth (when push 403s or "could not read Username")
+
+GitHub deprecated password auth; `git push` needs a PAT in a place git
+can read. Two failure modes seen Jun 2026:
+
+- **403 "Permission denied"** = a *valid* token that lacks write scope
+  (fine-grained PAT missing **Contents: Read and write**), OR an
+  expired token cached in macOS Keychain. Note `gh api repos/...`
+  returning `push:true` reflects your account ROLE, not the token's
+  scopes — it can lie.
+- **"could not read Username" / "Invalid username or token"** = no
+  credential is stored (keychain erased) or the token got truncated on
+  an interactive paste (fine-grained PATs are ~93 chars).
+
+**The reliable fix (one shot, no truncation):** inline-URL push —
+
+```bash
+cd ~/PixiuBot && git push "https://<PAT>@github.com/dsovan2004-beep/pixiu-bot.git" main
+```
+
+Takes the whole token in one shot; the interactive `Password:` prompt
+is invisible and silently truncates long pastes.
+
+**To persist** (so future pushes need no token): store it once —
+
+```bash
+printf "protocol=https\nhost=github.com\nusername=dsovan2004-beep\npassword=<PAT>\n\n" \
+  | git credential-osxkeychain store
+```
+
+**Cleanest of all (no token handling):** `gh auth login` → GitHub.com →
+HTTPS → "Authenticate Git? Yes" → "Login with a web browser". Browser
+OAuth grants every scope automatically (including `read:org`, which
+`gh auth login --with-token` rejects fine-grained PATs for). Then
+`gh auth setup-git`.
+
+Diagnostics: `git config --get-all credential.helper` (which helper
+answers), and to see what git actually resolves without leaking the
+secret, compare only against known placeholder strings — never print a
+real token's prefix/length into the transcript.
 
 ---
 
@@ -447,6 +547,76 @@ full 0.05 SOL loss instead of 0.0025 SOL.
 **Generalised lesson:** when a counter drives a kill-switch, derive
 it from the same numbers you'd use to compute actual P&L. Never
 proxy.
+
+### Phantom-open pileup — 2,107 stuck rows (commit `be97d0c`, Jun 19)
+
+**Symptom:** guard logged `Checking 1000 open position(s)` (the
+Supabase row cap) every 2 s while the dashboard showed 0 open. Real
+count: 2,107 rows in `status='open'`, accumulated over 6 weeks.
+
+**Root cause:** the webhook inserts `status='open'` on every passing
+signal; the executor only resolves those rows (→ failed or → `[LIVE]`)
+while the bot is LIVE (`if (!live) return`). Bot stopped, or signals
+faster than the executor → pre-confirm rows never resolve → pile up
+forever. The guard's unbounded `SELECT * WHERE status='open'` then
+pulled 1,000 every poll. None were ever bought (0 `entry_sol_cost`, 0
+`[LIVE]`), so the dashboard (which counts confirmed positions) showed 0.
+
+**Fix:** (1) a phantom reaper in `checkPositions()` that flips
+`open` + `entry_sol_cost NULL` + not `[LIVE]` + age > 15 min →
+`failed`/`phantom_reaped`, running every poll even when stopped; (2)
+bound the monitoring query to confirmed rows via
+`.or(entry_sol_cost.not.is.null, wallet_tag.ilike.*LIVE*)`. One-shot
+`cleanup-phantom-open.ts` cleared the backlog (with JSON backup).
+
+**Generalised lesson:** any unbounded `status='open'` query is a
+latent landmine — a write path that creates rows without a guaranteed
+terminal-state writer will pile up. Bound monitoring queries to the
+rows that path actually owns, and add a reaper for the orphan class.
+
+### Phantom peak — mark-vs-real divergence ate partials (commit `c404a21`)
+
+**Symptom:** L1/L2 "fired" at +15–40% mark but the slice booked a real
+loss (Ben Pasterneck: +31.4% mark → −36% real on the 50% slice).
+
+**Root cause:** DexScreener mark is a thin-pool MID price; at our sell
+size the pool had already been drained by faster actors, so the real
+Jupiter fill was far below mark.
+
+**Fix:** phantom-peak gate — sim-quote every grid partial before firing;
+skip + revert the grid claim if recovery < `GRID_SIM_RECOVERY_FLOOR`.
+
+**Generalised lesson:** never act on DexScreener mark for a SIZED
+decision. Sim-quote the actual trade. Mark is a display number, not an
+executable price.
+
+### Stale external WR labels (commit `0f8be4a`)
+
+**Symptom:** jijo and Sheep sat in `TOP_ELITE_ADDRESSES` with "55% WR"
+/ "64% WR" comments from GMGN/Kolscan, but live `real_pnl_sol` showed
+28.6% / 20% WR and net-negative SOL. They kept entering and losing.
+
+**Fix:** removed from TOP_ELITE, blacklisted. Postmortem now drives
+membership off live `real_pnl_sol`, not external labels.
+
+**Generalised lesson:** the only WR that matters is the one computed
+from our own closed trades. External leaderboard labels are marketing.
+Re-run `wallet-postmortem.ts` every ~30 closed trades.
+
+### Broken-pool entries (pre/post-buy sim gap)
+
+**Symptom:** dozens of immediate `pool_drain` exits (shoebill, Pedro
+Solana, etc.). Pre-buy round-trip sim read 95–98% but post-buy sim was
+70–85%.
+
+**Root cause:** MEV/sniper tax — the pre-buy Jupiter quote is "fair
+value" but our actual landed buy gets sandwiched / the pool is drained
+between quote and fill on pump.fun.
+
+**Fix:** raised pre-buy `MIN_ROUND_TRIP_RECOVERY` 0.90 → 0.95 → 0.97
+(first line, reject before paying) and the drain monitor floor 0.40 →
+0.60 → 0.85 (last line, contain after entry). This is the structural
+reason copy-trading is −EV at our latency — see ROADMAP "Limo Path".
 
 ---
 

@@ -5,6 +5,149 @@ Newest first.
 
 ---
 
+## 2026-06-19 — Phantom-open pileup fix + return-from-away postmortem
+
+Picked the bot back up after an extended unattended run. Bankroll had
+fallen **1.27 → 0.82 SOL** (−0.45 SOL over ~165 new trades, 332 total
+closed, 23.5% WR). Two distinct problems found and fixed.
+
+### Commits
+| Commit | What |
+|---|---|
+| `9fa5229` | `fix(filter+blacklist): 332-trade postmortem — 8 new bleeders + pre-buy floor 0.95→0.97` |
+| `be97d0c` | `fix(risk-guard): phantom-open pileup — reaper + bounded monitoring query` |
+
+### Problem 1 — 332-trade postmortem (the slow bleed)
+Re-ran `wallet-postmortem.ts` on all 332 closed trades. theo pump sad
+(+0.0811) and daniww (+0.0095) still the only net-positive wallets
+with ≥5 trades; jamessmith flipped marginally green (+0.0121, 6 tr).
+**Eight new bleeders** crossed the 5-trade threshold they were under
+at the Apr 24 run and were blacklisted (addr + tag):
+
+| Wallet | Trades | WR | Net SOL |
+|---|---|---|---|
+| noob mini | 20 | 15% | −0.067 |
+| Cowboy | 19 | 21% | −0.044 |
+| clukz | 23 | 35% | −0.044 |
+| kev main | 8 | 25% | −0.037 |
+| Zrool | 14 | 21% | −0.031 |
+| GMGN_SM_1 | 8 | 0% | −0.029 |
+| Q | 5 | 20% | −0.016 |
+| King Solomon | 5 | 0% | −0.013 |
+
+Also tightened `MIN_ROUND_TRIP_RECOVERY` 0.95 → 0.97. Dashboard showed
+dozens of immediate `pool_drain` (PD) exits (Pedro Solana, Standing
+Eagle Chicken, Bow-Wow Battle, etc.) — pre-buy sim of 95–98% routinely
+collapses to 70–85% post-buy (MEV/sniper tax on pump.fun pools). The
+0.85 drain floor caught them but only AFTER paying entry; the tighter
+pre-buy floor blocks more of them before we pay.
+
+### Problem 2 — phantom-open pileup (the resource bug)
+On restart the guard logged `[GUARD] Checking 1000 open position(s)`
+while the dashboard showed 0 open. Diagnosis (`diagnose-open.ts`):
+**2,107 rows stuck in `status='open'`**, accumulated May 6 → Jun 19,
+**none ever bought** (0 had `entry_sol_cost`, 0 were `[LIVE]`).
+
+Root cause: the webhook inserts `status='open'` on every passing
+signal; the executor only resolves those to failed/`[LIVE]` while the
+bot is **LIVE** (`if (!live) return`). When the bot is stopped — or
+signals arrive faster than the executor processes — the pre-confirm
+rows never resolve and pile up forever. The guard's unbounded
+`SELECT * WHERE status='open'` then returned the 1000-row Supabase cap
+every 2 s.
+
+Fix (`be97d0c`):
+1. **Phantom reaper** in `checkPositions()` (runs every poll, even when
+   stopped): flip `open` + `entry_sol_cost NULL` + not `[LIVE]` + age
+   > 15 min → `failed`/`phantom_reaped`. Self-healing.
+2. **Bounded monitoring query**: only pull CONFIRMED positions via
+   `.or(entry_sol_cost.not.is.null, wallet_tag.ilike.*LIVE*)` — keeps
+   the freshly-bought-but-delta-pending window guarded while excluding
+   pure phantoms. A pileup can never balloon per-poll workload again.
+
+One-shot `cleanup-phantom-open.ts` flipped all 2,107 to failed with a
+JSON backup; `status='open'` is now 0.
+
+### Ops note — git credential saga
+Mid-session the macOS-keychain GitHub token expired (pushes had been
+succeeding silently using it, then started 403'ing). Erasing the dead
+entry left git with no credential; the replacement fine-grained PAT
+kept getting truncated on interactive paste. Resolution that worked:
+inline-URL push (`git push https://<PAT>@github.com/...`), which takes
+the whole token in one shot. **Lesson:** the inline-URL form is the
+reliable fallback when interactive prompts truncate long fine-grained
+PATs. See the PLAYBOOK "git push auth" runbook.
+
+---
+
+## 2026-04-22 → 04-24 — Sell-side hardening, elite sizing, drain calibration
+
+Multi-day run focused on the mark-vs-real divergence that was eating
+partial profits, plus a wallet-selection overhaul. Bankroll drifted
+~1.5 → 1.27 SOL across the window; the fixes cut average loss per trade
+from −0.017 (pre) to ~−0.004 (post), a 4.6× improvement, though 25–27%
+WR kept the book net-negative.
+
+### Commits (chronological)
+| Commit | What |
+|---|---|
+| `afa9c5f` | `feat(risk-guard): tighter L2 trail + L2 sim-recovery safety net` |
+| `30e2d56` | `feat(risk-guard): 3-min L2 time cap to lock spike gains` |
+| `007bf7b` | `fix(risk-guard): LIQUIDITY_DROP_THRESHOLD 0.40 → 0.60` |
+| `e880cb5` | `fix(blacklist): re-blacklist Cupsey — 0/3 post-unblacklist` |
+| `eb4ac3c` | `chore(sizing): halve LIVE_BUY_SOL 0.05 → 0.025` |
+| `c61c547` | `fix(dashboard): read LIVE_BUY_SOL from config (was hardcoded "0.05")` |
+| `64857f0` | `fix(filter): MIN_ROUND_TRIP_RECOVERY 0.90 → 0.95` |
+| `c404a21` | `feat(risk-guard): phantom peak gate on L1/L2 grid partials` |
+| `58cf897` | `fix(risk-guard): LIQUIDITY_DROP_THRESHOLD 0.60 → 0.85` |
+| `cfa0ae4` | `perf(jupiter-swap): grid slippage ladder 5→10→20→30 ⇒ 10→20→30` |
+| `0f8be4a` | `feat(smart-money): Apr 24 postmortem — promote winners, cut stale-label losers` |
+| `b880e8b` | `feat(filter): dump-pattern detection — skip coins cycled by blacklist wallets` |
+| `918518b` | `feat(sizing): 2x position size on elite wallet signals (theo pump sad, daniww)` |
+| `eaf286b` | `docs(backlog): add Limo Path strategic roadmap (5-stage plan)` |
+
+### Key mechanisms shipped
+- **Phantom peak gate** (`c404a21`): before firing an L1/L2 grid
+  partial, sim-quote the sell. If recovery < `GRID_SIM_RECOVERY_FLOOR`
+  (1.0) the mark gain is illusory at our size — skip the partial,
+  revert the DB grid claim, let CB/SL/TO/drain handle exit. Motivated
+  by Ben Pasterneck: L1 "fired" at +31.4% mark but the slice executed
+  at −36% real because snipers/copy-traders drained the pool first.
+- **Drain floor recalibration** 0.40 → 0.60 → 0.85: post the
+  proportional-cost-basis fix, healthy pools quote ~1.0, broken pools
+  60–85%. 0.85 catches broken-pool entries on the FIRST liquidity
+  check (e.g. shoebill entered at 66% post-buy sim and was contained
+  to −0.016 instead of bleeding to zero).
+- **Elite 2× sizing** (`918518b`): theo pump sad + daniww (the only
+  net-positive wallets) get `ELITE_BUY_SOL` 0.05; everyone else stays
+  at `LIVE_BUY_SOL` 0.025. Gated on PRIMARY signaler only.
+- **Dump-pattern filter** (`b880e8b`): if ≥3 signals from blacklisted
+  wallet tags hit a coin in 15 min, skip — even if the primary
+  signaler is legit. Motivated by chloe (GMGN_SM_4 + Trenchman +
+  jamessmith cycled it 40+ times before a clean T1 buy).
+- **Position-size halving** 0.05 → 0.025 (`eb4ac3c`): cut loss
+  magnitude in half while expectancy stayed negative; buys bankroll
+  runway to validate the fix stack.
+- **Stale-label cull** (`0f8be4a`): jijo ("55% WR" label, real 28.6%)
+  and Sheep ("64% WR", real 20%) removed from TOP_ELITE and
+  blacklisted. **Lesson: trust live `real_pnl_sol`, never external
+  GMGN/Kolscan WR labels.**
+
+### Strategic finding (the honest one)
+Research + the running data converged: **copy-trading public smart
+money on pump.fun is structurally −EV at our latency.** We enter at
+T+30 s (Helius webhook → CF → executor), by which time snipers (T+100
+ms) and faster copy-traders have already taken the liquidity that
+produced the mark. The fix stack reduces loss magnitude but cannot fix
+the ~25% WR — that's a signal-quality/latency problem, not a code bug.
+The path forward is captured in the **Limo Path** roadmap
+(`docs/BACKLOG.md`): prove edge → Helius Pro + BloXroute (kill the
+latency) → pump.fun sniper module (become the early money) → capital
+partnership. theo pump sad + daniww remain the only proven edge and
+are protected as permanent T1.
+
+---
+
 ## 2026-04-21 (PM UTC) — Sprint 10 Phase 7: selection-layer hardening + first green day
 
 Full day of execution on the selection side after Phase 5-6's sell-side

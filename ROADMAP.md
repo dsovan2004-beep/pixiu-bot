@@ -7,52 +7,77 @@ Active sprint backlog lives in `docs/BACKLOG.md`. History lives in
 
 ---
 
-## Where we are today (Apr 17 2026)
+## Where we are today (Jun 19 2026)
 
 **Architecture**
 - Single entry path: webhook `evaluateAndEnter()` with all 15 guards
-  inline. Swarm reduced to 4 agents (watcher, executor, risk-guard,
-  tier-manager). Dead `signal-validator.ts` + `price-scout.ts` deleted.
-- Sprint 7 Day 3 consolidation complete — 5 commits shipped, all
-  CF green. See `docs/SPRINT7-DAY3-RECAP.md`.
+  inline. Swarm = 4 agents (watcher, executor, risk-guard,
+  tier-manager). Sell-side fully rebuilt (atomic claim, real grid
+  partials, phantom-peak gate, drain monitor, rescue slippage ladder).
+- risk-guard now self-heals phantom `status='open'` rows (reaper) and
+  bounds its monitoring query to confirmed positions (`be97d0c`).
 
-**Metrics (latest dashboard snapshot)**
+**Metrics (332-trade dashboard snapshot)**
 
 | Metric | Value |
 |---|---|
-| Real SOL balance | 1.0248 SOL (~\$91) |
-| Real P&L today | −2.6457 SOL (−\$235.81) |
-| Start of day | 3.6705 SOL |
-| Total trades | 303 |
-| Win rate | 62.4% (189W / 114L) |
-| Avg gain | +42.93% |
-| Avg loss | −23.77% |
-| Expectancy per trade | +17.8% |
+| Real SOL balance | 0.82 SOL (~\$56) |
+| Trade P&L (cumulative) | −1.25 SOL (−9.6% ROI) |
+| Total closed trades | 332 |
+| Win rate | 23.5% (78W / 254L) |
+| Avg win | +23.06% |
+| Avg loss | −19.71% |
 | Open positions | 0 |
-| Bot status | RUNNING, LIVE |
+| Bot status | STOPPED (user-gated restart) |
 
-**Recovery goal:** hit. Current focus shifts from "prove the stack
-works" to "don't bleed SOL via infra fragility while scaling up."
+**The honest read:** the early "62% WR" era was survivorship on a
+small sample; at scale, copy-trading public smart money on pump.fun is
+**structurally −EV at our T+30s latency**. The Apr–Jun fix stack cut
+average loss/trade from −0.017 → −0.004 (4.6×) but cannot lift the
+~24% WR — that's latency/signal-quality, not code. Only two wallets
+(theo pump sad, daniww) are net-positive and are protected as
+permanent T1 with 2× size. Forward plan = the **Limo Path** (below +
+`docs/BACKLOG.md`): stop bleeding → kill latency → become the early
+money (sniper) → scale with partner capital.
 
 ---
 
-## Next 48 hours — stability window
+## 🏎️ Limo Path (active strategic roadmap)
 
-No new features. Watch the metrics:
+Full detail, kill criteria, and carry-forward matrix in
+`docs/BACKLOG.md`. Summary:
 
-- **Bypass count** — entries inserted with `is_running=false`. Target:
-  0. The Sprint 7 D3 consolidation should make this architecturally
-  impossible. Verify.
-- **Phantom count** — positions that stay `status=open` > 30 min with
-  no exit attempt. Target: 0. Zero-balance close path (commit
-  `2bb9246`) should auto-clear these.
-- **Buy-land rate** — real Jupiter fills / attempted entries. Target:
-  > 90%. Drops below 80% mean routing or RPC issues.
-- **CF tail log sanity** — `[WEBHOOK] ❌` lines should dominate the
-  reject stream. If logs go silent during active signal flow, signals
-  aren't reaching the webhook at all (Helius → CF issue).
+| Stage | Goal | Gate to advance |
+|---|---|---|
+| **1. Prove edge** (now) | 0.82 → 3 SOL | 30 post-fix trades net-positive |
+| 2. Kill latency | 3 → 10 SOL | Helius Pro gRPC + BloXroute live, PnL lifts |
+| 3. pump.fun sniper | 10 → 50 SOL | sniper module +EV over 50 trades |
+| 4. Capital partnership | 50 → 500 SOL | 60–90d verified track record |
+| 5. 🏎️ Limo | ~500 SOL ($43k) | — |
 
-If any of those drift, stop and diagnose before shipping anything else.
+**Stage 1 is current.** Bot stays small (0.025 / elite 0.05) until 30
+post-fix trades prove net-positive expectancy. If they don't → halt
+and rethink, do not size up.
+
+---
+
+## Watch metrics (Stage 1 validation)
+
+- **`pool_drain` (PD) exit rate** — should fall sharply now that the
+  pre-buy floor is 0.97. A string of PD closes means broken-pool
+  entries are still getting through → tighten further or halt.
+- **Phantom open count** — `status='open'` rows with no
+  `entry_sol_cost`. Target: near-0 (reaper clears > 15min). The guard
+  log should read a small number, never `Checking 1000`.
+- **Elite-wallet PnL** — theo pump sad + daniww net SOL. If either
+  turns net-negative over its next ~10 trades, demote from
+  `ELITE_WALLET_TAGS` (their edge has decayed).
+- **Buy-land rate** — real Jupiter fills / attempted entries. < 80%
+  means routing/RPC issues (or Jito timeouts → BloXroute is Stage 2).
+- **Postmortem cadence** — re-run `wallet-postmortem.ts` every ~30 new
+  closed trades; blacklist new bleeders, protect new winners.
+
+If any drift, stop and diagnose before shipping anything else.
 
 ---
 
