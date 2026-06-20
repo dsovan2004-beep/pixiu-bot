@@ -16,6 +16,7 @@ import {
   WALLET_BLACKLIST,
 } from "@/config/smart-money";
 import { isPriceTooHigh, isOffensiveName, checkTokenSafety } from "@/lib/price-guards";
+import { ExecutionMode, normalizeExecutionMode } from "@/lib/execution-mode";
 
 export const runtime = "edge";
 
@@ -63,17 +64,56 @@ async function webhookIsRugStorm(): Promise<boolean> {
 // dogwifbeanie -37.71% all opened while bot was STOPPED.
 // SAFETY: on any error, default to FALSE (not running) — never trade
 // if we can't confirm running state.
-async function webhookIsBotRunning(): Promise<boolean> {
+async function webhookExecutionState(): Promise<{ isRunning: boolean; mode: ExecutionMode }> {
   try {
     const { data, error } = await supabase
       .from("bot_state")
-      .select("is_running")
+      .select("is_running,mode")
       .limit(1)
       .single();
-    if (error || !data) return false;
-    return data.is_running === true;
+    if (error || !data) return { isRunning: false, mode: "stopped" };
+    return { isRunning: data.is_running === true, mode: normalizeExecutionMode(data.mode) };
   } catch {
-    return false;
+    return { isRunning: false, mode: "stopped" };
+  }
+}
+
+function primaryWalletTag(walletTag: string): string {
+  return walletTag.replace(/\s*\[LIVE\]\s*$/, "").split("+")[0]?.trim() || walletTag;
+}
+
+async function logWalletScoringShadow(allTags: Set<string>, coinName: string | null, mint: string): Promise<void> {
+  try {
+    const primaryTags = Array.from(new Set(Array.from(allTags).map(primaryWalletTag)));
+    if (primaryTags.length === 0) return;
+
+    const { data, error } = await supabase
+      .from("current_wallet_status")
+      .select("wallet_tag,effective_status,status_reason,total_real_pnl_sol,trade_count,median_real_pnl_sol,lower_confidence_bound_sol")
+      .in("wallet_tag", primaryTags);
+
+    if (error) {
+      console.log(`  [WEBHOOK] shadow wallet scoring unavailable — ${error.message}`);
+      return;
+    }
+
+    const byTag = new Map((data || []).map((row: any) => [row.wallet_tag, row]));
+    for (const tag of primaryTags) {
+      const status = byTag.get(tag);
+      if (!status) {
+        console.log(`  [WEBHOOK] shadow wallet scoring unknown — ${coinName || mint.slice(0, 8)} primary=${tag}`);
+        continue;
+      }
+
+      const effectiveStatus = String(status.effective_status || "unknown");
+      if (effectiveStatus === "disabled" || effectiveStatus === "probation") {
+        console.log(
+          `  [WEBHOOK] shadow would-block wallet=${tag} status=${effectiveStatus} trades=${status.trade_count ?? "?"} total=${status.total_real_pnl_sol ?? "?"} median=${status.median_real_pnl_sol ?? "?"} lcb=${status.lower_confidence_bound_sol ?? "?"} coin=${coinName || mint.slice(0, 8)} reason=${status.status_reason || "unknown"}`
+        );
+      }
+    }
+  } catch (err: any) {
+    console.log(`  [WEBHOOK] shadow wallet scoring crashed — ${err.message}`);
   }
 }
 
@@ -327,7 +367,8 @@ async function evaluateAndEnter(
   // Bot-running check — HIGHEST PRIORITY. If dashboard shows STOPPED,
   // no new entries via any path. Without this, webhook bypasses the
   // dashboard STOP button and opens positions the user didn't approve.
-  if (!(await webhookIsBotRunning())) {
+  const execState = await webhookExecutionState();
+  if (!execState.isRunning || execState.mode === "stopped") {
     console.log(`  [WEBHOOK] ❌ ${coinName || mint.slice(0, 8)} — bot_stopped`);
     return { entered: false, reason: "bot_stopped" };
   }
@@ -424,6 +465,10 @@ async function evaluateAndEnter(
 
   const allTags = new Set((recentSignals || []).map((s) => s.wallet_tag));
   allTags.add(walletTag); // Include current signal
+
+  // Phase 2A wallet scoring shadow mode: log would-block decisions only.
+  // This must not reject, mutate tracked_wallets, or replace tier-manager.
+  await logWalletScoringShadow(allTags, coinName, mint);
 
   // Guard #10a — WALLET_BLACKLIST (Apr 21 postmortem).
   // Permanently banned primary signalers regardless of current tier.
@@ -566,6 +611,7 @@ async function evaluateAndEnter(
     entry_price: price,
     entry_mc: null,
     status: "open",
+    mode: execState.mode,
     priority: smartMoneyCount >= 2 ? "HIGH" : "normal",
     entry_time: new Date().toISOString(),
     position_size_usd: positionSize,
