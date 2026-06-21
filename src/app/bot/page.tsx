@@ -8,6 +8,7 @@ interface BotState {
   id: string;
   is_running: boolean;
   mode: string;
+  broadcast_tx: boolean;
   last_updated: string;
 }
 
@@ -43,6 +44,7 @@ interface Trade {
   grid_level: number;
   remaining_pct: number;
   partial_pnl: number;
+  mode: string;
 }
 
 export default function BotPage() {
@@ -52,7 +54,7 @@ export default function BotPage() {
   const [closedTrades, setClosedTrades] = useState<Trade[]>([]);
   const [walletCount, setWalletCount] = useState(0);
   const [allClosedStats, setAllClosedStats] = useState<
-    Array<{ real_pnl_sol: number | null; entry_sol_cost: number | null; exit_reason: string | null; wallet_tag?: string }>
+    Array<{ real_pnl_sol: number | null; entry_sol_cost: number | null; exit_reason: string | null; wallet_tag?: string; mode?: string }>
   >([]);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
@@ -86,20 +88,21 @@ export default function BotPage() {
           .from("trades")
           .select("*")
           .in("status", ["open", "closing"])       // include in-flight closes so positions don't vanish during sell-confirm
+          .in("mode", ["measure_live", "live"])
           .like("wallet_tag", "%[LIVE]%")
           .order("entry_time", { ascending: false }),
         supabase
           .from("trades")
           .select("*")
           .eq("status", "closed")
-          .like("wallet_tag", "%[LIVE]%")
+          .in("mode", ["measure_live", "live"])
           .order("exit_time", { ascending: false })
           .limit(50),
         supabase
           .from("trades")
-          .select("real_pnl_sol, entry_sol_cost, exit_reason, wallet_tag")
+          .select("real_pnl_sol, entry_sol_cost, exit_reason, wallet_tag, mode")
           .eq("status", "closed")
-          .like("wallet_tag", "%[LIVE]%"),
+          .in("mode", ["measure_live", "live"]),
       ]);
 
     if (stateRes.data && stateRes.data.length > 0) {
@@ -226,6 +229,29 @@ export default function BotPage() {
     0
   );
   const tradeROI = totalDeployedSol > 0 ? (realPnlSol / totalDeployedSol) * 100 : 0;
+  const executionMode = botState?.mode || "stopped";
+  const broadcastEnabled = botState?.broadcast_tx === true;
+  const liveActive = executionMode === "live" && botState?.is_running === true && broadcastEnabled;
+  const measureActive = executionMode === "measure_live" && botState?.is_running === true && broadcastEnabled;
+  const dryRunActive = executionMode === "dry_run" && botState?.is_running === true;
+  const statusLabel = !botState?.is_running || executionMode === "stopped"
+    ? "STOPPED"
+    : dryRunActive
+      ? "DRY RUN"
+      : measureActive
+        ? "MEASURE LIVE"
+        : liveActive
+          ? "LIVE"
+          : "CONFLICT";
+  const statusColor = statusLabel === "LIVE"
+    ? "text-red-400"
+    : statusLabel === "MEASURE LIVE"
+      ? "text-amber-400"
+      : statusLabel === "DRY RUN"
+        ? "text-blue-400"
+        : statusLabel === "CONFLICT"
+          ? "text-orange-400"
+          : "text-zinc-400";
 
   if (loading) {
     return <div className="text-zinc-500 text-center mt-20">Loading...</div>;
@@ -237,7 +263,7 @@ export default function BotPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-amber-500">PixiuBot</h1>
-          <span className="text-xs text-zinc-600">Live Trading</span>
+          <span className={`text-xs font-mono ${statusColor}`}>{statusLabel}</span>
         </div>
 
         {/* Wallet Balance — live, no baseline. Deposits/withdrawals are
@@ -246,7 +272,9 @@ export default function BotPage() {
           <div className="bg-red-900/30 border border-red-600 rounded-lg p-4">
             <div className="flex items-center justify-between mb-2">
               <div>
-                <span className="text-red-400 font-bold text-sm font-mono">LIVE TRADING ACTIVE</span>
+                <span className={`${statusColor} font-bold text-sm font-mono`}>
+                  {statusLabel}
+                </span>
                 <span className="text-zinc-500 text-xs ml-2">{LIVE_BUY_SOL} SOL/trade</span>
               </div>
               <div className="text-right">
@@ -307,9 +335,11 @@ export default function BotPage() {
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           <Card
             label="Status"
-            value={botState?.is_running ? "RUNNING" : "STOPPED"}
-            color={botState?.is_running ? "text-green-500" : "text-red-500"}
+            value={statusLabel}
+            color={statusColor}
           />
+          <Card label="Mode" value={executionMode} color={statusColor} />
+          <Card label="Broadcast Gate" value={broadcastEnabled ? "ON" : "OFF"} color={broadcastEnabled ? "text-red-500" : "text-zinc-500"} />
           <Card label="Tracked Wallets" value={String(walletCount)} />
           <Card label="Signals" value={String(signals.length)} />
         </div>
