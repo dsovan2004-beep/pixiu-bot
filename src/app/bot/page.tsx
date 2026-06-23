@@ -66,6 +66,14 @@ export default function BotPage() {
   const [whaleSells, setWhaleSells] = useState<
     Record<string, Array<{ wallet_tag: string; signal_time: string }>>
   >({});
+  // TR-v1 forward shadow validation (read-only; separate from trade PnL)
+  const [shadow, setShadow] = useState<{
+    policyActive: boolean; ruleVersion: string | null;
+    total: number; enter: number; block: number; resolved: number;
+    enterSum: number; enterMean: number; enterN: number;
+    blockSum: number; blockMean: number; blockN: number;
+    trailingN: number; latest: string | null;
+  } | null>(null);
 
   const fetchData = useCallback(async () => {
     const [stateRes, signalsRes, walletsRes, openRes, closedRes, allClosedRes] =
@@ -113,6 +121,32 @@ export default function BotPage() {
     setOpenTrades(openRes.data || []);
     setClosedTrades(closedRes.data || []);
     setAllClosedStats(allClosedRes.data || []);
+
+    // ── TR-v1 shadow validation (read-only; never gates entries) ──
+    try {
+      const [pol, total, enterC, blockC, resolvedC, latest, rrows] = await Promise.all([
+        supabase.from("token_risk_policy").select("rule_version,active").eq("active", true).limit(1),
+        supabase.from("stacked_filter_shadow").select("id", { count: "exact", head: true }),
+        supabase.from("stacked_filter_shadow").select("id", { count: "exact", head: true }).eq("would_enter", true),
+        supabase.from("stacked_filter_shadow").select("id", { count: "exact", head: true }).eq("would_block", true),
+        supabase.from("stacked_filter_shadow").select("id", { count: "exact", head: true }).not("outcome_resolved_at", "is", null),
+        supabase.from("stacked_filter_shadow").select("decision_time").order("decision_time", { ascending: false }).limit(1),
+        supabase.from("stacked_filter_shadow").select("would_enter,would_block,sim_pnl_pct,sim_exit_reason").not("outcome_resolved_at", "is", null).limit(2000),
+      ]);
+      const rows = (rrows.data || []) as Array<{ would_enter: boolean; would_block: boolean; sim_pnl_pct: number | null; sim_exit_reason: string | null }>;
+      const er = rows.filter((r) => r.would_enter);
+      const br = rows.filter((r) => r.would_block);
+      const sum = (a: typeof rows) => a.reduce((s, r) => s + (Number(r.sim_pnl_pct) || 0), 0);
+      setShadow({
+        policyActive: !!(pol.data && pol.data.length > 0 && pol.data[0].active),
+        ruleVersion: pol.data && pol.data[0] ? pol.data[0].rule_version : null,
+        total: total.count || 0, enter: enterC.count || 0, block: blockC.count || 0, resolved: resolvedC.count || 0,
+        enterSum: sum(er), enterMean: er.length ? sum(er) / er.length : 0, enterN: er.length,
+        blockSum: sum(br), blockMean: br.length ? sum(br) / br.length : 0, blockN: br.length,
+        trailingN: er.filter((r) => r.sim_exit_reason === "trailing_stop").length,
+        latest: latest.data && latest.data[0] ? latest.data[0].decision_time : null,
+      });
+    } catch { /* shadow tables not readable by anon yet (RLS) → panel shows access-pending */ }
 
     // Fetch live prices and whale sells for open positions
     const opens = openRes.data || [];
@@ -234,6 +268,7 @@ export default function BotPage() {
   const liveActive = executionMode === "live" && botState?.is_running === true && broadcastEnabled;
   const measureActive = executionMode === "measure_live" && botState?.is_running === true && broadcastEnabled;
   const dryRunActive = executionMode === "dry_run" && botState?.is_running === true;
+  const isStopped = !botState?.is_running || executionMode === "stopped";
   const statusLabel = !botState?.is_running || executionMode === "stopped"
     ? "STOPPED"
     : dryRunActive
@@ -252,30 +287,188 @@ export default function BotPage() {
         : statusLabel === "CONFLICT"
           ? "text-orange-400"
           : "text-zinc-400";
+  const profitReadiness = realPnlSol > 0 && Number(winRate) >= 50 ? "EVIDENCE POSITIVE" : "NEGATIVE EV";
+  const restartGate = liveActive
+    ? "LIVE ACTIVE"
+    : measureActive
+      ? "MEASURE LIVE"
+      : broadcastEnabled
+        ? "BROADCAST ON"
+        : "LIVE LOCKED";
+  const nextMilestone = realPnlSol < 0
+    ? "Improve entry quality before restart"
+    : "Validate edge before size-up";
+  const startButtonLabel = toggling
+    ? "..."
+    : botState?.is_running
+      ? "STOP BOT"
+      : executionMode === "dry_run"
+        ? "START DRY RUN"
+        : executionMode === "measure_live"
+          ? "START MEASURE"
+          : executionMode === "live"
+            ? "START LIVE"
+            : "START BOT";
+
+  // TR-v1 edge status (mirrors shadow-report pre-registered gate)
+  const edgeStatus = !shadow || shadow.total === 0
+    ? "INSUFFICIENT DATA"
+    : shadow.enterN >= 50 && shadow.enterSum > 0 && shadow.enterMean > shadow.blockMean && shadow.trailingN > 0
+      ? "POSITIVE EDGE CANDIDATE"
+      : shadow.enterN < 50
+        ? "INSUFFICIENT DATA"
+        : "NOT PROVEN";
+  const edgeColor = edgeStatus === "POSITIVE EDGE CANDIDATE" ? "text-green-400" : edgeStatus === "NOT PROVEN" ? "text-red-400" : "text-zinc-400";
+  const harnessStatus = shadow?.latest && (Date.now() - new Date(shadow.latest).getTime() < 30 * 60_000) ? "RUNNING" : "UNKNOWN";
+  const shadowAccessPending = !shadow || shadow.total === 0;
+  const shadowTotal = shadow?.total ?? 0;
+  const shadowEnter = shadow?.enter ?? 0;
+  const shadowBlock = shadow?.block ?? 0;
+  const shadowResolved = shadow?.resolved ?? 0;
+  const shadowEnterN = shadow?.enterN ?? 0;
+  const shadowBlockN = shadow?.blockN ?? 0;
+  const shadowEnterMean = shadow?.enterMean ?? 0;
+  const shadowBlockMean = shadow?.blockMean ?? 0;
+  const shadowEnterSum = shadow?.enterSum ?? 0;
+  const shadowBlockSum = shadow?.blockSum ?? 0;
+  const shadowTrailingN = shadow?.trailingN ?? 0;
+  const unresolvedShadow = Math.max(0, shadowTotal - shadowResolved);
+  const enterPct = shadowTotal > 0 ? (shadowEnter / shadowTotal) * 100 : 0;
+  const blockPct = shadowTotal > 0 ? (shadowBlock / shadowTotal) * 100 : 0;
+  const resolvedPct = shadowTotal > 0 ? (shadowResolved / shadowTotal) * 100 : 0;
+  const unresolvedPct = shadowTotal > 0 ? (unresolvedShadow / shadowTotal) * 100 : 0;
+  const latestDecision = shadow?.latest ? new Date(shadow.latest).toLocaleString() : "—";
+  const measureLiveStatus = measureActive ? "ACTIVE" : "OFF";
+  const startMuted = !botState?.is_running && edgeStatus !== "POSITIVE EDGE CANDIDATE";
 
   if (loading) {
     return <div className="text-zinc-500 text-center mt-20">Loading...</div>;
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white p-6">
-      <div className="max-w-6xl mx-auto space-y-6">
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 p-6">
+      <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-amber-500">PixiuBot</h1>
-          <span className={`text-xs font-mono ${statusColor}`}>{statusLabel}</span>
+          <div>
+            <h1 className="text-3xl font-bold text-amber-400">PixiuBot</h1>
+            <p className="mt-1 text-sm text-zinc-500">
+              Real PnL dashboard. Dry-run rows are excluded from trade PnL.
+            </p>
+          </div>
+          <span className={`rounded-full border px-3 py-1 text-xs font-mono font-bold ${
+            statusLabel === "LIVE"
+              ? "border-red-500/70 bg-red-950/60 text-red-300"
+              : statusLabel === "MEASURE LIVE"
+                ? "border-amber-500/60 bg-amber-950/50 text-amber-300"
+                : statusLabel === "DRY RUN"
+                  ? "border-sky-500/60 bg-sky-950/50 text-sky-300"
+                  : statusLabel === "CONFLICT"
+                    ? "border-orange-500/70 bg-orange-950/60 text-orange-300"
+                    : "border-zinc-700 bg-zinc-900 text-zinc-300"
+          }`}>
+            {statusLabel}
+          </span>
         </div>
+
+        <div className="rounded-lg border border-amber-600/60 bg-amber-950/30 p-4 text-sm text-amber-100">
+          <span className="font-semibold">Old strategy is negative EV.</span>{" "}
+          Shadow validation is testing TR-v1. No real SOL is being used.
+        </div>
+
+        {/* Current experiment */}
+        <section className="rounded-lg border border-sky-700/70 bg-sky-950/20 p-5">
+          <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-sky-200">
+                Current Experiment — TR-v1 Shadow Validation
+              </h2>
+              <p className="mt-1 text-sm text-zinc-400">
+                Pre-registered token-risk rule. Shadow-only, non-enforcing, no SOL.
+              </p>
+            </div>
+            <span className={`rounded-full border px-3 py-1 text-xs font-mono font-bold ${
+              edgeStatus === "POSITIVE EDGE CANDIDATE"
+                ? "border-green-500/70 bg-green-950/50 text-green-300"
+                : edgeStatus === "NOT PROVEN"
+                  ? "border-red-500/70 bg-red-950/50 text-red-300"
+                  : "border-zinc-700 bg-zinc-900 text-zinc-300"
+            }`}>
+              {edgeStatus}
+            </span>
+          </div>
+
+          {shadowAccessPending && (
+            <div className="mb-4 rounded-md border border-zinc-700 bg-zinc-950/80 p-3 text-sm text-zinc-300">
+              Access pending (RLS) — harness running via service-role. Dashboard anon reads may show zero rows until the operator applies read policies.
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <Metric label="TR-v1 Policy" value={shadow?.policyActive ? shadow.ruleVersion || "ACTIVE" : "MISSING / PENDING"} tone={shadow?.policyActive ? "info" : "muted"} />
+            <Metric label="Harness" value={shadowAccessPending ? "RUNNING VIA SERVICE" : harnessStatus} tone={harnessStatus === "RUNNING" || shadowAccessPending ? "info" : "muted"} />
+            <Metric label="Total Decisions" value={shadowAccessPending ? "ACCESS PENDING" : String(shadowTotal)} tone={shadowAccessPending ? "muted" : "neutral"} />
+            <Metric label="Latest Decision" value={shadowAccessPending ? "ACCESS PENDING" : latestDecision} tone="muted" />
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4">
+            <Metric label="Would Enter" value={shadowAccessPending ? "—" : `${shadowEnter} (${enterPct.toFixed(1)}%)`} tone="safe" />
+            <Metric label="Would Block" value={shadowAccessPending ? "—" : `${shadowBlock} (${blockPct.toFixed(1)}%)`} tone="danger" />
+            <Metric label="Resolved" value={shadowAccessPending ? "—" : `${shadowResolved} (${resolvedPct.toFixed(1)}%)`} tone="neutral" />
+            <Metric label="Unresolved" value={shadowAccessPending ? "—" : `${unresolvedShadow} (${unresolvedPct.toFixed(1)}%)`} tone="muted" />
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4">
+            <Metric
+              label="Enter Sim PnL"
+              value={shadowAccessPending || shadowEnterN === 0 ? "—" : `${shadowEnterSum.toFixed(2)}% total / ${shadowEnterMean.toFixed(2)}% mean`}
+              tone={!shadowAccessPending && shadowEnterMean > 0 ? "safe" : !shadowAccessPending && shadowEnterN > 0 ? "danger" : "muted"}
+            />
+            <Metric
+              label="Block Sim PnL"
+              value={shadowAccessPending || shadowBlockN === 0 ? "—" : `${shadowBlockSum.toFixed(2)}% total / ${shadowBlockMean.toFixed(2)}% mean`}
+              tone={!shadowAccessPending && shadowBlockMean > 0 ? "safe" : !shadowAccessPending && shadowBlockN > 0 ? "danger" : "muted"}
+            />
+            <Metric label="Trailing Preserved" value={shadowAccessPending ? "—" : String(shadowTrailingN)} tone={shadowTrailingN > 0 ? "safe" : "muted"} />
+            <Metric label="Edge Status" value={edgeStatus} tone={edgeStatus === "POSITIVE EDGE CANDIDATE" ? "safe" : edgeStatus === "NOT PROVEN" ? "danger" : "muted"} />
+          </div>
+        </section>
+
+        {/* Safety state */}
+        <section className={`rounded-lg border p-4 ${
+          liveActive
+            ? "border-red-500 bg-red-950/40"
+            : measureActive
+              ? "border-amber-500/70 bg-amber-950/30"
+              : "border-zinc-800 bg-zinc-900/70"
+        }`}>
+          <div className="grid gap-4 md:grid-cols-6">
+            <TruthItem label="Trading State" value={statusLabel} tone={statusLabel === "LIVE" ? "danger" : statusLabel === "DRY RUN" ? "info" : "muted"} />
+            <TruthItem label="Mode" value={executionMode} tone={executionMode === "live" ? "danger" : executionMode === "dry_run" ? "info" : "muted"} />
+            <TruthItem label="Broadcast Gate" value={broadcastEnabled ? "ON" : "OFF"} tone={broadcastEnabled ? "danger" : "safe"} />
+            <TruthItem label="Open Positions" value={String(openTrades.length)} tone={openTrades.length > 0 ? "danger" : "safe"} />
+            <TruthItem label="Measure Live" value={measureLiveStatus} tone={measureActive ? "danger" : "safe"} />
+            <TruthItem label="Restart Gate" value={restartGate} tone={restartGate === "LIVE LOCKED" ? "safe" : "danger"} />
+          </div>
+          <div className="mt-4 border-t border-zinc-800 pt-3 text-sm text-zinc-400">
+            <span className="font-semibold text-zinc-200">Profit readiness:</span>{" "}
+            <span className={profitReadiness === "NEGATIVE EV" ? "text-red-300" : "text-emerald-300"}>{profitReadiness}</span>
+            <span className="mx-2 text-zinc-700">|</span>
+            <span className="font-semibold text-zinc-200">Next:</span>{" "}
+            {nextMilestone}
+          </div>
+        </section>
 
         {/* Wallet Balance — live, no baseline. Deposits/withdrawals are
             invisible to trade accounting below. */}
         {phantomBalance && (
-          <div className="bg-red-900/30 border border-red-600 rounded-lg p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
             <div className="flex items-center justify-between mb-2">
               <div>
-                <span className={`${statusColor} font-bold text-sm font-mono`}>
+                <span className={`${statusColor} font-bold text-sm font-mono uppercase`}>
                   {statusLabel}
                 </span>
-                <span className="text-zinc-500 text-xs ml-2">{LIVE_BUY_SOL} SOL/trade</span>
+                <span className="text-zinc-500 text-xs ml-2">{LIVE_BUY_SOL} SOL/trade configured</span>
               </div>
               <div className="text-right">
                 <span className="text-white font-bold font-mono text-lg">
@@ -287,8 +480,8 @@ export default function BotPage() {
               </div>
             </div>
             {totalClosed > 0 && (
-              <div className="flex items-center justify-between text-xs font-mono pt-1 border-t border-zinc-800">
-                <span className="text-zinc-500">
+              <div className="flex items-center justify-between text-xs font-mono pt-3 mt-3 border-t border-zinc-800">
+                <span className="text-zinc-400">
                   Trade PnL across {totalClosed} trades
                 </span>
                 <span className={realPnlSol >= 0 ? "text-green-400" : "text-red-400"}>
@@ -319,14 +512,14 @@ export default function BotPage() {
               value={totalClosed > 0
                 ? `${realPnlSol >= 0 ? "+" : ""}${realPnlSol.toFixed(4)} SOL`
                 : "—"}
-              color={totalClosed > 0 ? (realPnlSol >= 0 ? "text-green-500" : "text-red-500") : undefined}
+              color={totalClosed > 0 ? (realPnlSol >= 0 ? "text-green-400" : "text-red-400") : undefined}
             />
             <Card
               label="Trade ROI"
               value={totalDeployedSol > 0
                 ? `${tradeROI >= 0 ? "+" : ""}${tradeROI.toFixed(2)}%`
                 : "—"}
-              color={totalDeployedSol > 0 ? (tradeROI >= 0 ? "text-green-500" : "text-red-500") : undefined}
+              color={totalDeployedSol > 0 ? (tradeROI >= 0 ? "text-green-400" : "text-red-400") : undefined}
             />
           </div>
         )}
@@ -339,24 +532,33 @@ export default function BotPage() {
             color={statusColor}
           />
           <Card label="Mode" value={executionMode} color={statusColor} />
-          <Card label="Broadcast Gate" value={broadcastEnabled ? "ON" : "OFF"} color={broadcastEnabled ? "text-red-500" : "text-zinc-500"} />
+          <Card label="Broadcast Gate" value={broadcastEnabled ? "ON" : "OFF"} color={broadcastEnabled ? "text-red-400" : "text-emerald-400"} />
           <Card label="Tracked Wallets" value={String(walletCount)} />
           <Card label="Signals" value={String(signals.length)} />
         </div>
 
         {/* Start/Stop */}
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <button
             onClick={toggleBot}
             disabled={toggling}
             className={`px-6 py-2 rounded-lg font-mono font-bold text-sm transition-colors ${
               botState?.is_running
                 ? "bg-red-600 hover:bg-red-700 text-white"
-                : "bg-green-600 hover:bg-green-700 text-white"
+                : startMuted
+                  ? "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                  : isStopped && executionMode === "dry_run"
+                    ? "bg-sky-600 hover:bg-sky-700 text-white"
+                    : "bg-zinc-700 hover:bg-zinc-600 text-white"
             } disabled:opacity-50 disabled:cursor-not-allowed`}
           >
-            {toggling ? "..." : botState?.is_running ? "STOP BOT" : "START BOT"}
+            {startButtonLabel}
           </button>
+          {!botState?.is_running && edgeStatus !== "POSITIVE EDGE CANDIDATE" && (
+            <span className="text-xs text-zinc-500">
+              dry-run only - edge not proven
+            </span>
+          )}
           {lastFetch && (
             <span className="text-zinc-600 text-xs">
               Last fetched: {lastFetch.toLocaleTimeString()}
@@ -364,31 +566,31 @@ export default function BotPage() {
           )}
         </div>
 
-        {/* ─── Performance ─────────────────────────────────── */}
+        {/* ─── Historical Old Strategy Performance ─────────── */}
         <section>
           <h2 className="text-lg font-semibold text-zinc-300 mb-3">
-            Performance
+            Historical Old Strategy Performance
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Card label="Closed Trades" value={String(totalClosed)} />
             <Card
               label="Win Rate"
               value={`${winRate}%`}
-              color={Number(winRate) >= 55 ? "text-green-500" : "text-red-500"}
+              color={Number(winRate) >= 55 ? "text-green-400" : "text-red-400"}
             />
-            <Card label="Wins" value={String(wins.length)} color="text-green-500" />
-            <Card label="Losses" value={String(losses.length)} color="text-red-500" />
+            <Card label="Wins" value={String(wins.length)} color="text-green-400" />
+            <Card label="Losses" value={String(losses.length)} color="text-red-400" />
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-4">
             <Card
               label="Avg Win"
               value={`+${avgGain}%`}
-              color="text-green-500"
+              color="text-green-400"
             />
             <Card
               label="Avg Loss"
               value={`${avgLoss}%`}
-              color="text-red-500"
+              color="text-red-400"
             />
             <Card label="Open Positions" value={String(openTrades.length)} />
           </div>
@@ -791,11 +993,73 @@ function Card({
   color?: string;
 }) {
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-      <div className="text-zinc-500 text-xs uppercase tracking-wider mb-1">
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 shadow-sm shadow-black/20">
+      <div className="text-zinc-500 text-xs uppercase tracking-wide mb-2">
         {label}
       </div>
       <div className={`text-lg font-mono font-bold ${color || "text-white"}`}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function TruthItem({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "safe" | "danger" | "info" | "muted";
+}) {
+  const toneClass =
+    tone === "safe"
+      ? "text-emerald-300"
+      : tone === "danger"
+        ? "text-red-300"
+        : tone === "info"
+          ? "text-sky-300"
+          : "text-zinc-300";
+
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-wide text-zinc-500">
+        {label}
+      </div>
+      <div className={`mt-1 font-mono text-base font-bold ${toneClass}`}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "safe" | "danger" | "info" | "neutral" | "muted";
+}) {
+  const toneClass =
+    tone === "safe"
+      ? "text-emerald-300"
+      : tone === "danger"
+        ? "text-red-300"
+        : tone === "info"
+          ? "text-sky-300"
+          : tone === "neutral"
+            ? "text-zinc-100"
+            : "text-zinc-500";
+
+  return (
+    <div className="rounded-md border border-zinc-800 bg-zinc-950/70 p-3">
+      <div className="text-xs uppercase tracking-wide text-zinc-500">
+        {label}
+      </div>
+      <div className={`mt-1 break-words font-mono text-sm font-bold ${toneClass}`}>
         {value}
       </div>
     </div>
