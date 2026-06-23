@@ -4,6 +4,14 @@
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
 <!-- END:nextjs-agent-rules -->
 
+# Multi-agent collaboration — read FIRST if Code and Codex are both active
+
+If both **Claude Code** and **Codex** are building PixiuBot, read and obey
+[`COLLAB.md`](COLLAB.md) before editing anything: claim files on its Lock Board
+before editing (one writer per file), sync before writing, exact-file commits,
+push immediately, and hand off via its append-only Handoff Log. This prevents
+the concurrent-edit collisions that corrupt shared files.
+
 # PixiuBot Architecture — read before touching entry logic
 
 **As of Sprint 7 Day 3 (Apr 17 2026), there is ONE entry path.**
