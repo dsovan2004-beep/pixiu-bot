@@ -28,9 +28,20 @@ function line(label: string, g: ReturnType<typeof grp>) {
 async function main() {
   const m = env();
   const sb = createClient(m.NEXT_PUBLIC_SUPABASE_URL!, m.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } });
-  const { data, error } = await sb.from("stacked_filter_shadow").select("*").order("decision_time", { ascending: true });
-  if (error) { console.error(error.message); process.exit(1); }
-  const all = data || [];
+  // paginate — PostgREST caps a single select at 1000 rows; read the FULL dataset
+  // so the walk-forward / PnL aggregates reflect every decision, not a stale slice.
+  const all: any[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb
+      .from("stacked_filter_shadow")
+      .select("*")
+      .order("decision_time", { ascending: true })
+      .range(from, from + 999);
+    if (error) { console.error(error.message); process.exit(1); }
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < 1000) break;
+  }
   const resolved = all.filter((r) => r.outcome_resolved_at);
   const enter = resolved.filter((r) => r.would_enter);
   const block = resolved.filter((r) => r.would_block);
