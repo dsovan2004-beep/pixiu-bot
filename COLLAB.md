@@ -97,3 +97,9 @@ PROMPT: Operator — in Supabase SQL Editor, apply exactly:
         CREATE POLICY anon_read_shadow ON stacked_filter_shadow FOR SELECT USING (true);
         ALTER TABLE token_risk_policy ENABLE ROW LEVEL SECURITY;
         CREATE POLICY anon_read_policy ON token_risk_policy FOR SELECT USING (true);
+
+[2026-06-23T03:15Z] FROM=Code TO=Operator
+DID:    Verified Codex commit `20b1aee` (TR-v1 shadow panel). Review PASS — scope clean (only page.tsx + COLLAB.md), dry_run exclusion intact (3 trades queries still `mode in ('measure_live','live')`), no duplication (1 `shadow` state, 1 `edgeStatus`), edge-status logic matches the shadow-report pre-registered gate (`enterN>=50 && enterSum>0 && enterMean>blockMean && trailingN>0`), `Metric`/`Card` defined, `setShadow` shape complete, brace/paren balanced, no forbidden imports (anon client only). Lock released.
+STATE:  live=NO, measure_live=NO, broadcast=NO, wallet/eligibility mutation=NO, schema/threshold change=NO. Compiler verification BLOCKED locally — `node_modules` toolchain is corrupted (`typescript` is a 45-byte stub; `tsc`/`eslint`/`next build` non-functional; only `tsx`/esbuild works, which does not typecheck). This is a pre-existing env issue, NOT the dashboard code. Authoritative build = Cloudflare on push `067c332`.
+NEXT:   Operator: (1) apply the anon RLS SQL above so the panel shows data; (2) confirm the Cloudflare deploy of `067c332` built green; (3) optional maintenance — repair local toolchain (`npm ci` / reinstall) so future local typecheck/lint works, ideally after pausing the launchd shadow jobs.
+PROMPT: Operator — apply the 4 anon-RLS lines above in the Supabase SQL Editor, then confirm the Cloudflare build for commit 067c332 is green. Optionally repair local node_modules (pause shadow launchd agents first).
