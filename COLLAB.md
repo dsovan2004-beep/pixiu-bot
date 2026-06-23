@@ -31,6 +31,7 @@ Before editing a file, append a row claiming it. Mark `RELEASED` (or delete the 
 | File / area | Owner | Status | Claimed (UTC) | Commit |
 |---|---|---|---|---|
 | _example: src/app/bot/page.tsx_ | Codex | HELD | 2026-06-22T20:00Z | — |
+| `src/app/bot/page.tsx` | Codex | HELD | 2026-06-23T03:01Z | — |
 
 - A `HELD` lock older than **2h with no commit** is stale → may be reclaimed after posting a note in the Handoff Log (§4).
 - If you find your target file already changed in the working tree by the other agent (uncommitted), **STOP** and use §6.
