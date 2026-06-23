@@ -5,7 +5,89 @@ when shipped, then delete from here.
 
 ---
 
+## Daily Profit Recovery Roadmap (current)
+
+**Project goal:** invest in meme coins, win consistently, make profit
+daily, and protect capital.
+
+### Verified facts (current — 2026-06-23)
+
+- Historical strategy EV is NEGATIVE. 332-trade postmortem: total PnL
+  −1.2473 SOL; L0 loss −1.1363 SOL; worst-10 wallets ≈ −0.7954 SOL.
+- The only real win mechanism is `trailing_stop` (+0.418 SOL @ 65.6% in
+  the postmortem). Drain/circuit/stop/timeout losses swamp it.
+- **Wallet-based edge is DISPROVEN out-of-sample** — walk-forward split:
+  the only train-profitable wallets (theo pump sad, daniww) went
+  −0.043 net in the held-out window. Past wallet PnL does not predict
+  future.
+- DB wallet scorer VALIDATED (CSV + DB reproduce the postmortem exactly:
+  0 promoted, 8 disabled, 19 probation, 10 unknown).
+- `measure_live` is telemetry only. Live restart is blocked. Main wallet
+  NEVER.
+- Bot state: `mode='dry_run'`, `broadcast_tx=false`, `is_running=false`.
+  measure_live_policy active = 0. tracked_wallets tier1=63 / active=751.
+
+### Roadmap P0–P6 — COMPLETE as design + validation + shadow
+
+| Stage | Status |
+|---|---|
+| P0 dry_run runtime row capture | CLOSED — blocked by entry rarity (0 organic entries cleared the 15 guards across 4 attended windows); dry_run path statically verified + broadcast-safe |
+| P1 DB wallet scorer | VALIDATED (CSV + DB; migrations 017/018/019 applied, policy `tr_v1` seeded) |
+| P2 shadow would-block reporting | VALIDATED (non-enforcing `logWalletScoringShadow`) |
+| P3 wallet cohort | DESIGNED — count-based cohort proven HARMFUL (cohort lost 2.7× more than solo); use quality-weighted (LCB), not co-buyer count |
+| P4 L0 entry-quality gate | DESIGNED — fail-closed composite (wallet+token+exec+guardrails), shadow-first |
+| P5 token-risk + bundle/dev/top-holder | DESIGNED + BUILT as **TR-v1** (pre-registered, frozen) |
+| P6 measure_live telemetry | DESIGNED — schema + fail-closed policy/gate ready; NOT enabled (no positive-edge candidate) |
+
+### Forward shadow validation — LIVE (the current experiment)
+
+- TR-v1 token-risk rule pre-registered/frozen
+  (`docs/ops/token-risk-rule-TR-v1.md`); harness built
+  (`src/lib/token-risk-v1.ts`, `token-risk-data.ts`,
+  `src/scripts/shadow-*.ts`), migration 020 applied, scheduled via
+  launchd (`docs/ops/shadow-harness-runbook.md`), dashboard panel live
+  (anon RLS read policy applied).
+- **First out-of-sample result (~2,056 decisions / ~1,977 resolved):**
+  TR-v1 admits ~11% (235 would_enter). **would_enter mean −12.89% vs
+  would_block mean −17.52%** → TR-v1 **discriminates** (filtered set
+  loses ~4.6pp less) **but is still net-NEGATIVE → EDGE NOT PROVEN.**
+- Read: token-risk filtering carries real signal but cannot manufacture
+  a positive edge from a −EV source. Consistent with the disproven
+  wallet edge. Caveat: absolute magnitudes are inflated by the broad
+  simulated population + −100% rug handling — the *relative*
+  discrimination is the trustworthy part.
+
+### Next backlog (owners per COLLAB.md Lock Board / Handoff Log)
+
+| ID | Task | Owner | Status | Note |
+|---|---|---|---|---|
+| N1 | Walk-forward eval of TR-v1 (`shadow-report`; does enter>block hold across time windows?) | Code | TODO | hardens or refutes the discrimination |
+| N2 | Paper-sim hardening — restrict to 15-guard-passing population and/or fix −100% rug handling so absolute sim PnL is trustworthy | Codex | TODO | current magnitudes are pessimistic |
+| N3 | Repair local toolchain (`node_modules` corrupted — `tsc`/`eslint`/`next build` are stubs; only `tsx` works) | Codex | TODO | blocks local typecheck/lint for both agents |
+| N4 | Auto-trigger orchestrator (watcher → `codex exec`/`claude -p`, worktree-isolated, safety-gated) | Code | BLOCKED | needs exact Codex CLI command from Operator |
+| N5 | Decision gate: pre-register TR-v2 (stricter) vs conclude "no recoverable edge on this signal source" | Code + ChatGPT | BLOCKED | needs N1 + N2 evidence |
+| N6 | Dashboard polish — walk-forward panel + per-exit-reason breakdown | Codex | TODO | builds on the live panel |
+
+**Strategic truth:** wallet-quality + token-risk filtering *reduces*
+losses but does not cross zero. Daily profit requires a genuinely new
+positive-edge signal source (faster/different signal), not a tighter
+filter on the current −EV feed. No live restart until a positive-edge
+subset is proven out-of-sample.
+
+### Hard blocks
+
+- Live trading: NO. `measure_live` for profit: NO. Main wallet: NEVER.
+- Wallet enforcement: blocked (shadow-only). `tracked_wallets.tier` /
+  `tracked_wallets.active` mutation: blocked.
+- No real SOL until a positive-edge subset is proven out-of-sample.
+
+---
+
 ## 🏎️ Limo Path — Strategic Roadmap (Apr 24)
+
+**Historical note:** this section predates the 332-trade negative-EV
+postmortem. It is retained for context only. The active roadmap is the
+Daily Profit Recovery Roadmap above.
 
 North-star plan. PixiuBot is the backbone through every stage. Every
 piece of infrastructure we've built (risk guard, Jupiter integration,

@@ -41,7 +41,13 @@ One owner per task. Statuses: `TODO → CLAIMED → IN_PROGRESS → REVIEW → D
 
 | ID | Task | Owner | Status | Notes |
 |---|---|---|---|---|
-| _example_ | Dashboard shadow panel | Codex | IN_PROGRESS | needs anon RLS policy (operator) |
+| — | Dashboard shadow panel | Codex | DONE | live + anon RLS applied (`20b1aee`) |
+| N1 | Walk-forward eval of TR-v1 (`shadow-report` across windows) | Code | IN_PROGRESS | does enter>block hold over time? |
+| N2 | Paper-sim hardening (−100% rug / broad-pop inflate magnitudes) | Codex | TODO | pause the paper-sim launchd agent before editing |
+| N3 | Repair local toolchain (`node_modules` stubs) | Codex | TODO | pause launchd shadow agents first |
+| N4 | Auto-trigger orchestrator (`codex exec`/`claude -p`) | Code | BLOCKED | needs exact Codex CLI cmd from Operator |
+| N5 | TR-v2 (stricter) vs "no recoverable edge" decision | Code+ChatGPT | BLOCKED | needs N1 + N2 |
+| N6 | Dashboard walk-forward + per-exit-reason panel | Codex | CLAIMABLE | baton in Handoff Log |
 
 ## 4. Handoff Log (append-only — this is the BATON / trigger)
 When you finish or hand off, append an entry. The `TO` + `PROMPT` fields are how the *next* agent gets triggered (see §6).
@@ -108,3 +114,9 @@ PROMPT: Operator — apply the 4 anon-RLS lines above in the Supabase SQL Editor
 DID:    Operator applied anon RLS policies; Cloudflare build (067c332) compiled GREEN with TypeScript passing and deployed. Verified anon now reads stacked_filter_shadow (2056 rows / 235 would_enter / 1967 resolved) + token_risk_policy(TR-v1); anon WRITE denied (read-only ✓). The TR-v1 shadow-validation dashboard panel is LIVE and populated.
 STATE:  live=NO, measure_live=NO (0 active), broadcast=NO, bot_state=dry_run/false/false, tracked_wallets unchanged. Only read-only anon exposure added.
 NEXT:   Dashboard task closed. Forward shadow data accruing; run `shadow-report` to evaluate the TR-v1 gate when ready — note: edge is NOT proven until net-positive + discrimination + walk-forward hold (≥50 would_enter is already met, but those other conditions are not yet evaluated).
+
+[2026-06-23T03:30Z] FROM=Code TO=Codex
+DID:    Recapped + rewrote docs/BACKLOG.md to current reality (P0-P6 complete; TR-v1 forward result: discriminates but NOT PROVEN — would_enter mean -12.89% vs would_block -17.52%; wallet edge disproven OOS). Defined next backlog N1-N6 with owners. Code is taking N1 (walk-forward eval).
+STATE:  live=NO, measure_live=NO, broadcast=NO, bot_state=dry_run/false/false, tracked_wallets 63/751. Docs-only change.
+NEXT:   Codex: take N6 — add walk-forward + per-exit-reason views to the TR-v1 dashboard panel.
+PROMPT: Codex — read COLLAB.md + docs/BACKLOG.md first. Claim `src/app/bot/page.tsx` on the Lock Board and commit that claim BEFORE editing. Then extend the "Current Experiment — TR-v1 Shadow Validation" panel with: (a) a walk-forward view — split RESOLVED stacked_filter_shadow rows by decision_time into 2 equal halves and show would_enter mean sim_pnl_pct + count per half (so we can see if enter>block discrimination holds across time); (b) a per-exit-reason breakdown of resolved rows (sim_exit_reason → count + mean sim_pnl_pct). Anon/read-only only. Do NOT edit webhook/agents/jupiter-swap/executor/schema, do NOT change TR-v1 thresholds, do NOT enable live/measure_live, do NOT mutate tracked_wallets/bot_state, keep the dry_run exclusion (mode in measure_live/live) intact. Build via CF (local toolchain is broken — N3). Commit exact-file (page.tsx + COLLAB.md lock release), push, append a Handoff entry TO=Code to verify.
