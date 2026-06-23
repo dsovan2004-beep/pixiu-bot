@@ -31,7 +31,7 @@ Before editing a file, append a row claiming it. Mark `RELEASED` (or delete the 
 | File / area | Owner | Status | Claimed (UTC) | Commit |
 |---|---|---|---|---|
 | _example: src/app/bot/page.tsx_ | Codex | HELD | 2026-06-22T20:00Z | — |
-| `src/app/bot/page.tsx` | Codex | HELD | 2026-06-23T03:01Z | — |
+| `src/app/bot/page.tsx` | Codex | RELEASED | 2026-06-23T03:01Z | `20b1aee` |
 
 - A `HELD` lock older than **2h with no commit** is stale → may be reclaimed after posting a note in the Handoff Log (§4).
 - If you find your target file already changed in the working tree by the other agent (uncommitted), **STOP** and use §6.
@@ -79,3 +79,21 @@ If both agents touched the same file:
 
 ## 8. Current open coordination item
 - `src/app/bot/page.tsx` — Code and Codex collided here (dashboard shadow panel). **Resolve ownership first** (assign one agent on the Lock Board), have the other revert its uncommitted hunks, then proceed. The dashboard panel also needs an **anon RLS read-policy** on `stacked_filter_shadow` + `token_risk_policy` (operator DDL) before it shows data.
+
+## 9. Handoff Log
+
+[2026-06-23T03:05Z] FROM=Codex TO=Code
+DID:    Reconciled `src/app/bot/page.tsx` into one read-only dashboard version and committed `20b1aee` (`feat(dashboard): surface TR-v1 shadow validation`). The page now puts "Current Experiment — TR-v1 Shadow Validation" first, preserves Code's `shadow` fetch, keeps Codex's mode-aware safety UI, de-emphasizes START while edge is unproven, labels old performance as historical, and keeps real-PnL queries limited to `mode in ('measure_live','live')`.
+STATE:  live=NO, measure_live=NO, broadcast=NO, wallet enforcement=NO, tracked_wallets mutation=NO. Build/lint attempted but blocked by broken local `node_modules` shims (`next` missing `../server/require-hook`, `eslint` missing `../package.json`).
+NEXT:   Verify build/typecheck and edge-status logic after dependency/toolchain repair.
+PROMPT: Code — verify commit `20b1aee` dashboard logic in `src/app/bot/page.tsx`, especially TR-v1 edge status, anon/RLS access-pending rendering, and dry-run exclusion from real PnL. Do not enable live/measure_live, do not mutate wallet eligibility, and do not edit webhook/agents/swap/executor/schema.
+
+[2026-06-23T03:05Z] FROM=Codex TO=Operator
+DID:    Dashboard now renders access-pending when anon sees zero TR-v1 shadow rows. Commit `20b1aee`.
+STATE:  Verified blocker: dashboard uses anon key; service-role harness has data but anon reads can show zero rows until read policies are applied. Agents must not run DDL.
+NEXT:   Apply anon read RLS policy for dashboard visibility if approved.
+PROMPT: Operator — in Supabase SQL Editor, apply exactly:
+        ALTER TABLE stacked_filter_shadow ENABLE ROW LEVEL SECURITY;
+        CREATE POLICY anon_read_shadow ON stacked_filter_shadow FOR SELECT USING (true);
+        ALTER TABLE token_risk_policy ENABLE ROW LEVEL SECURITY;
+        CREATE POLICY anon_read_policy ON token_risk_policy FOR SELECT USING (true);
