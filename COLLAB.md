@@ -32,7 +32,7 @@ Before editing a file, append a row claiming it. Mark `RELEASED` (or delete the 
 |---|---|---|---|---|
 | _example: src/app/bot/page.tsx_ | Codex | HELD | 2026-06-22T20:00Z | — |
 | `src/app/bot/page.tsx` | Codex | RELEASED | 2026-06-23T03:01Z | `20b1aee` |
-| `src/app/bot/page.tsx` | Codex | HELD | 2026-06-23T03:29Z | — |
+| `src/app/bot/page.tsx` | Codex | RELEASED | 2026-06-23T03:29Z | `8cba431` |
 
 - A `HELD` lock older than **2h with no commit** is stale → may be reclaimed after posting a note in the Handoff Log (§4).
 - If you find your target file already changed in the working tree by the other agent (uncommitted), **STOP** and use §6.
@@ -48,7 +48,7 @@ One owner per task. Statuses: `TODO → CLAIMED → IN_PROGRESS → REVIEW → D
 | N3 | Repair local toolchain (`node_modules` stubs) | Codex | TODO | pause launchd shadow agents first |
 | N4 | Auto-trigger orchestrator (`codex exec`/`claude -p`) | Code | BLOCKED | needs exact Codex CLI cmd from Operator |
 | N5 | TR-v2 (stricter) vs "no recoverable edge" decision | Code+ChatGPT | BLOCKED | needs N1 + N2 |
-| N6 | Dashboard walk-forward + per-exit-reason panel | Codex | IN_PROGRESS | lock held for `src/app/bot/page.tsx` |
+| N6 | Dashboard walk-forward + per-exit-reason panel | Codex | REVIEW | pushed `8cba431`; TO=Code verify |
 
 ## 4. Handoff Log (append-only — this is the BATON / trigger)
 When you finish or hand off, append an entry. The `TO` + `PROMPT` fields are how the *next* agent gets triggered (see §6).
@@ -121,3 +121,9 @@ DID:    Recapped + rewrote docs/BACKLOG.md to current reality (P0-P6 complete; T
 STATE:  live=NO, measure_live=NO, broadcast=NO, bot_state=dry_run/false/false, tracked_wallets 63/751. Docs-only change.
 NEXT:   Codex: take N6 — add walk-forward + per-exit-reason views to the TR-v1 dashboard panel.
 PROMPT: Codex — read COLLAB.md + docs/BACKLOG.md first. Claim `src/app/bot/page.tsx` on the Lock Board and commit that claim BEFORE editing. Then extend the "Current Experiment — TR-v1 Shadow Validation" panel with: (a) a walk-forward view — split RESOLVED stacked_filter_shadow rows by decision_time into 2 equal halves and show would_enter mean sim_pnl_pct + count per half (so we can see if enter>block discrimination holds across time); (b) a per-exit-reason breakdown of resolved rows (sim_exit_reason → count + mean sim_pnl_pct). Anon/read-only only. Do NOT edit webhook/agents/jupiter-swap/executor/schema, do NOT change TR-v1 thresholds, do NOT enable live/measure_live, do NOT mutate tracked_wallets/bot_state, keep the dry_run exclusion (mode in measure_live/live) intact. Build via CF (local toolchain is broken — N3). Commit exact-file (page.tsx + COLLAB.md lock release), push, append a Handoff entry TO=Code to verify.
+
+[2026-06-23T03:34Z] FROM=Codex TO=Code
+DID:    Added the N6 dashboard readouts in `src/app/bot/page.tsx` and pushed `8cba431` (`feat(dashboard): add TR-v1 walk-forward analysis`). The TR-v1 panel now pages all anon-visible resolved `stacked_filter_shadow` rows, splits them by `decision_time` into two walk-forward windows, shows would-enter/would-block count + mean PnL per window, and groups resolved rows by `sim_exit_reason` with count + mean PnL.
+STATE:  live=NO, measure_live=NO, broadcast=NO, bot_state mutation=NO, tracked_wallets mutation=NO, webhook/agents/swap/executor/schema/TR-v1 thresholds untouched. Real PnL queries still exclude dry_run via `mode in ("measure_live","live")`. `git diff --check -- src/app/bot/page.tsx` passed; `npm run build`, `npm run lint`, and `npx tsc --noEmit` remain blocked by the known broken local `node_modules` shims (`next` missing `../server/require-hook`, `eslint` missing `../package.json`, `tsc` missing `../lib/tsc.js`).
+NEXT:   Verify Cloudflare build/typecheck for `8cba431`, review the walk-forward/exit-reason logic against N1's full-dataset methodology, then mark N6 DONE or send a correction baton.
+PROMPT: Code — verify commit `8cba431` in `src/app/bot/page.tsx`: confirm the TR-v1 walk-forward split uses all resolved anon-visible rows ordered by `decision_time`, per-exit-reason grouping is read-only and dynamic, dry-run rows remain excluded from real PnL, and no bot/trading/schema/threshold files changed. Local toolchain is still broken here, so please use Cloudflare/your repaired environment for build/typecheck. Do not enable live/measure_live, do not mutate wallet eligibility, and do not edit webhook/agents/swap/executor/schema unless a separate locked task is opened.
