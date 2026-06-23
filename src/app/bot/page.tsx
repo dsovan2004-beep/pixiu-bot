@@ -47,6 +47,28 @@ interface Trade {
   mode: string;
 }
 
+type ShadowResolvedRow = {
+  decision_time: string | null;
+  would_enter: boolean;
+  would_block: boolean;
+  sim_pnl_pct: number | null;
+  sim_exit_reason: string | null;
+};
+
+type WalkForwardBucket = {
+  label: string;
+  enterCount: number;
+  enterMean: number | null;
+  blockCount: number;
+  blockMean: number | null;
+};
+
+type ExitReasonBucket = {
+  reason: string;
+  count: number;
+  mean: number | null;
+};
+
 export default function BotPage() {
   const [botState, setBotState] = useState<BotState | null>(null);
   const [signals, setSignals] = useState<CoinSignal[]>([]);
@@ -73,6 +95,8 @@ export default function BotPage() {
     enterSum: number; enterMean: number; enterN: number;
     blockSum: number; blockMean: number; blockN: number;
     trailingN: number; latest: string | null;
+    walkForward: WalkForwardBucket[];
+    exitReasons: ExitReasonBucket[];
   } | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -124,19 +148,66 @@ export default function BotPage() {
 
     // ── TR-v1 shadow validation (read-only; never gates entries) ──
     try {
-      const [pol, total, enterC, blockC, resolvedC, latest, rrows] = await Promise.all([
+      const [pol, total, enterC, blockC, resolvedC, latest] = await Promise.all([
         supabase.from("token_risk_policy").select("rule_version,active").eq("active", true).limit(1),
         supabase.from("stacked_filter_shadow").select("id", { count: "exact", head: true }),
         supabase.from("stacked_filter_shadow").select("id", { count: "exact", head: true }).eq("would_enter", true),
         supabase.from("stacked_filter_shadow").select("id", { count: "exact", head: true }).eq("would_block", true),
         supabase.from("stacked_filter_shadow").select("id", { count: "exact", head: true }).not("outcome_resolved_at", "is", null),
         supabase.from("stacked_filter_shadow").select("decision_time").order("decision_time", { ascending: false }).limit(1),
-        supabase.from("stacked_filter_shadow").select("would_enter,would_block,sim_pnl_pct,sim_exit_reason").not("outcome_resolved_at", "is", null).limit(2000),
       ]);
-      const rows = (rrows.data || []) as Array<{ would_enter: boolean; would_block: boolean; sim_pnl_pct: number | null; sim_exit_reason: string | null }>;
+      const rows: ShadowResolvedRow[] = [];
+      const resolvedTotal = resolvedC.count || 0;
+      for (let from = 0; from < resolvedTotal; from += 1000) {
+        const to = Math.min(from + 999, resolvedTotal - 1);
+        const { data, error } = await supabase
+          .from("stacked_filter_shadow")
+          .select("decision_time,would_enter,would_block,sim_pnl_pct,sim_exit_reason")
+          .not("outcome_resolved_at", "is", null)
+          .order("decision_time", { ascending: true })
+          .range(from, to);
+        if (error) throw error;
+        rows.push(...((data || []) as ShadowResolvedRow[]));
+      }
       const er = rows.filter((r) => r.would_enter);
       const br = rows.filter((r) => r.would_block);
-      const sum = (a: typeof rows) => a.reduce((s, r) => s + (Number(r.sim_pnl_pct) || 0), 0);
+      const sum = (a: ShadowResolvedRow[]) => a.reduce((s, r) => s + (Number(r.sim_pnl_pct) || 0), 0);
+      const mean = (a: ShadowResolvedRow[]) => a.length ? sum(a) / a.length : null;
+      const ordered = [...rows].sort((a, b) => {
+        const at = a.decision_time ? new Date(a.decision_time).getTime() : 0;
+        const bt = b.decision_time ? new Date(b.decision_time).getTime() : 0;
+        return at - bt;
+      });
+      const midpoint = Math.ceil(ordered.length / 2);
+      const windows = [
+        { label: "Window 1", rows: ordered.slice(0, midpoint) },
+        { label: "Window 2", rows: ordered.slice(midpoint) },
+      ];
+      const walkForward = windows.map(({ label, rows: bucketRows }) => {
+        const enters = bucketRows.filter((r) => r.would_enter);
+        const blocks = bucketRows.filter((r) => r.would_block);
+        return {
+          label,
+          enterCount: enters.length,
+          enterMean: mean(enters),
+          blockCount: blocks.length,
+          blockMean: mean(blocks),
+        };
+      });
+      const exitReasonMap = new Map<string, ShadowResolvedRow[]>();
+      for (const row of rows) {
+        const reason = row.sim_exit_reason || "unknown";
+        const list = exitReasonMap.get(reason) || [];
+        list.push(row);
+        exitReasonMap.set(reason, list);
+      }
+      const exitReasons = Array.from(exitReasonMap.entries())
+        .map(([reason, reasonRows]) => ({
+          reason,
+          count: reasonRows.length,
+          mean: mean(reasonRows),
+        }))
+        .sort((a, b) => b.count - a.count);
       setShadow({
         policyActive: !!(pol.data && pol.data.length > 0 && pol.data[0].active),
         ruleVersion: pol.data && pol.data[0] ? pol.data[0].rule_version : null,
@@ -145,6 +216,8 @@ export default function BotPage() {
         blockSum: sum(br), blockMean: br.length ? sum(br) / br.length : 0, blockN: br.length,
         trailingN: er.filter((r) => r.sim_exit_reason === "trailing_stop").length,
         latest: latest.data && latest.data[0] ? latest.data[0].decision_time : null,
+        walkForward,
+        exitReasons,
       });
     } catch { /* shadow tables not readable by anon yet (RLS) → panel shows access-pending */ }
 
@@ -340,6 +413,11 @@ export default function BotPage() {
   const latestDecision = shadow?.latest ? new Date(shadow.latest).toLocaleString() : "—";
   const measureLiveStatus = measureActive ? "ACTIVE" : "OFF";
   const startMuted = !botState?.is_running && edgeStatus !== "POSITIVE EDGE CANDIDATE";
+  const walkForwardBuckets = shadow?.walkForward ?? [];
+  const exitReasonBuckets = shadow?.exitReasons ?? [];
+  const formatShadowMean = (value: number | null) => value === null ? "—" : `${value.toFixed(2)}%`;
+  const shadowMeanTone = (value: number | null) =>
+    value === null ? "text-zinc-500" : value >= 0 ? "text-emerald-300" : "text-red-300";
 
   if (loading) {
     return <div className="text-zinc-500 text-center mt-20">Loading...</div>;
@@ -431,6 +509,96 @@ export default function BotPage() {
             />
             <Metric label="Trailing Preserved" value={shadowAccessPending ? "—" : String(shadowTrailingN)} tone={shadowTrailingN > 0 ? "safe" : "muted"} />
             <Metric label="Edge Status" value={edgeStatus} tone={edgeStatus === "POSITIVE EDGE CANDIDATE" ? "safe" : edgeStatus === "NOT PROVEN" ? "danger" : "muted"} />
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-md border border-zinc-800 bg-zinc-950/70 p-4">
+              <div className="mb-3">
+                <h3 className="text-sm font-semibold text-zinc-200">
+                  Walk-forward Stability
+                </h3>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Resolved decisions split by decision time into two equal windows.
+                </p>
+              </div>
+              {shadowAccessPending ? (
+                <div className="rounded-md border border-zinc-800 bg-zinc-900/70 p-3 text-sm text-zinc-500">
+                  Access pending (RLS) — no anon-visible resolved rows yet.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm font-mono">
+                    <thead>
+                      <tr className="border-b border-zinc-800 text-xs uppercase tracking-wide text-zinc-500">
+                        <th className="py-2 pr-3 text-left">Window</th>
+                        <th className="px-3 py-2 text-right">Enter Count</th>
+                        <th className="px-3 py-2 text-right">Enter Mean</th>
+                        <th className="px-3 py-2 text-right">Block Count</th>
+                        <th className="py-2 pl-3 text-right">Block Mean</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {walkForwardBuckets.map((bucket) => (
+                        <tr key={bucket.label} className="border-b border-zinc-900 last:border-0">
+                          <td className="py-2 pr-3 text-zinc-300">{bucket.label}</td>
+                          <td className="px-3 py-2 text-right text-zinc-300">{bucket.enterCount}</td>
+                          <td className={`px-3 py-2 text-right font-bold ${shadowMeanTone(bucket.enterMean)}`}>
+                            {formatShadowMean(bucket.enterMean)}
+                          </td>
+                          <td className="px-3 py-2 text-right text-zinc-300">{bucket.blockCount}</td>
+                          <td className={`py-2 pl-3 text-right font-bold ${shadowMeanTone(bucket.blockMean)}`}>
+                            {formatShadowMean(bucket.blockMean)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-md border border-zinc-800 bg-zinc-950/70 p-4">
+              <div className="mb-3">
+                <h3 className="text-sm font-semibold text-zinc-200">
+                  Exit Reason Breakdown
+                </h3>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Resolved shadow outcomes grouped by simulated exit reason.
+                </p>
+              </div>
+              {shadowAccessPending ? (
+                <div className="rounded-md border border-zinc-800 bg-zinc-900/70 p-3 text-sm text-zinc-500">
+                  Access pending (RLS) — no anon-visible resolved rows yet.
+                </div>
+              ) : exitReasonBuckets.length === 0 ? (
+                <div className="rounded-md border border-zinc-800 bg-zinc-900/70 p-3 text-sm text-zinc-500">
+                  No resolved shadow exit reasons available.
+                </div>
+              ) : (
+                <div className="max-h-64 overflow-y-auto">
+                  <table className="w-full text-sm font-mono">
+                    <thead>
+                      <tr className="border-b border-zinc-800 text-xs uppercase tracking-wide text-zinc-500">
+                        <th className="py-2 pr-3 text-left">Reason</th>
+                        <th className="px-3 py-2 text-right">Count</th>
+                        <th className="py-2 pl-3 text-right">Mean PnL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {exitReasonBuckets.map((bucket) => (
+                        <tr key={bucket.reason} className="border-b border-zinc-900 last:border-0">
+                          <td className="py-2 pr-3 text-zinc-300">{bucket.reason}</td>
+                          <td className="px-3 py-2 text-right text-zinc-300">{bucket.count}</td>
+                          <td className={`py-2 pl-3 text-right font-bold ${shadowMeanTone(bucket.mean)}`}>
+                            {formatShadowMean(bucket.mean)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
         </section>
 
