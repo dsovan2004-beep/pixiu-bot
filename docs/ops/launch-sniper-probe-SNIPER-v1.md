@@ -47,6 +47,26 @@ is a *different infrastructure game* (on-chain bonding-curve pricing + sub-secon
 detection) than the copy-feed harness — it is NOT a free reuse. `sniper-collect.ts`
 is committed but PARKED pending this decision.
 
+### v1.1 PRE-DATA REVISION (Codex strategy input + user experience, 2026-06-24)
+Source: Codex shared a sniping article + the **user confirmed prior pump.fun
+sniping experience ("must be in/out fast")** — see [[project-user-sniping-experience]].
+Weak/inspirational input, NOT proof. No SNIPER outcomes collected yet, so this
+refines the method before any data (legit pre-registration, not post-hoc tuning):
+- **Timing buckets = SECONDS, not minutes:** t0/+1/+3/+5/+10/+15/+30/+60s. A
+  sniping edge, if any, lives in the first seconds — the LP-v1 minute-scale ladder
+  is too coarse.
+- **Exit model = FAST:** quick take-profit + tight stop + short max-hold (minutes,
+  not the copy-feed 120-min hold). Sniping is fast in/out.
+- **Cost gate = realistic sniping drag:** require survival after **10–20%
+  round-trip slippage + priority fee + FAILED FILLS** (a sniped buy that doesn't
+  land). The generic 3% gate is far too lenient for this game.
+- **Pricing = on-chain bonding curve (mandatory)** — DexScreener has no t0 price.
+- **Infra reality:** seconds-scale capture needs a **persistent fast-poll process**,
+  NOT the 2-min cron. Sniping is a fast/infra game — a materially bigger build than
+  the copy-feed harness. Scope/effort to be weighed before committing.
+- Decision gate otherwise unchanged (walk-forward both windows, median ≥ 0,
+  ex-top-1% ≥ 0). No live / no real SOL until a bucket clears it.
+
 ## Method (parallel to LP-v1; reuses the hardened harness)
 1. **Broad collect (no filter at capture):** record EVERY detected pump.fun launch
    into a `launch_sniper_shadow` table — mint, creation time, first-seen lag, and a
