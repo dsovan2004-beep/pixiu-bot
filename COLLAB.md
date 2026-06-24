@@ -35,10 +35,10 @@ Before editing a file, append a row claiming it. Mark `RELEASED` (or delete the 
 | `src/app/bot/page.tsx` | Codex | RELEASED | 2026-06-23T03:29Z | `8cba431` |
 | `src/scripts/shadow-paper-sim.ts` | Codex | RELEASED | 2026-06-24T02:27Z | `e8dcdfc` |
 | `src/scripts/shadow-report.ts` | Codex | RELEASED | 2026-06-24T02:27Z | `e8dcdfc` |
-| `supabase/migrations/021_latency_probe.sql` | Codex | HELD | 2026-06-24T02:40Z | — |
-| `src/scripts/lp-collect.ts` | Codex | HELD | 2026-06-24T02:40Z | — |
-| `src/scripts/lp-report.ts` | Codex | HELD | 2026-06-24T02:40Z | — |
-| `src/scripts/shadow-paper-sim.ts` | Codex | HELD | 2026-06-24T02:40Z | — |
+| `supabase/migrations/021_latency_probe.sql` | Codex | RELEASED | 2026-06-24T02:40Z | `b4da414` |
+| `src/scripts/lp-collect.ts` | Codex | RELEASED | 2026-06-24T02:40Z | `b4da414` |
+| `src/scripts/lp-report.ts` | Codex | RELEASED | 2026-06-24T02:40Z | `b4da414` |
+| `src/scripts/shadow-paper-sim.ts` | Codex | RELEASED | 2026-06-24T02:40Z | `b4da414` |
 
 - A `HELD` lock older than **2h with no commit** is stale → may be reclaimed after posting a note in the Handoff Log (§4).
 - If you find your target file already changed in the working tree by the other agent (uncommitted), **STOP** and use §6.
@@ -157,3 +157,15 @@ DID:    N2 VERIFIED (commit e8dcdfc): scope clean (shadow-paper-sim.ts + shadow-
 STATE:  live=NO, measure_live=NO, broadcast=NO, bot_state=dry_run/false/false, tracked_wallets 63/751. No file change this entry.
 NEXT:   Codex: build the LP-v1 latency-probe collector (docs/ops/latency-edge-probe-LP-v1.md) reusing the hardened paper-sim exit model. It runs in parallel + starts the actual edge hunt (does entering earlier flip -EV->+EV).
 PROMPT: (full LP-v1 build prompt provided to Operator to paste — author migration 021_latency_probe.sql [operator applies] + src/scripts/lp-collect.ts + lp-report.ts; reuse boundedExitAtThreshold/confirmedPrice from shadow-paper-sim.ts; entry timings t0/+60/+180/+300s; fair-resolution + guard views; shadow-only, no SOL; claim locks; commit exact-file; push; Handoff TO=Code.)
+
+[2026-06-24T02:45Z] FROM=Codex TO=Code
+DID:    LP-v1 latency probe implementation pushed as `b4da414` (`feat(shadow): add LP-v1 latency probe`). Authored `supabase/migrations/021_latency_probe.sql` for `latency_probe_shadow` storage + anon SELECT RLS; added `src/scripts/lp-collect.ts` to insert fresh BUY signals, snapshot t0/+60/+180/+300 prices, and advance each timing with the shared hardened paper-sim helpers; added `src/scripts/lp-report.ts` to paginate the full dataset, apply fair max-hold maturity, compare mean sim PnL across timings, print exit-reason breakdowns, and split walk-forward windows. `src/scripts/shadow-paper-sim.ts` now exports the hardened `confirmedPrice`, `boundedExitAtThreshold`, constants, and `evaluatePaperSimExit` while keeping its worker main guarded for direct execution.
+STATE:  live=NO, measure_live=NO, broadcast=NO, real SOL=NO, bot_state mutation=NO, tracked_wallets mutation=NO, webhook/agents/jupiter-swap/executor/TR-v1 thresholds untouched. Validation: `git diff --check` PASS; `npx esbuild src/scripts/lp-collect.ts src/scripts/lp-report.ts src/scripts/shadow-paper-sim.ts --bundle --platform=node --packages=external` PASS; `npm run build` still blocked by the known local Next shim (`next` missing `../server/require-hook`). Migration 021 is AUTHOR-ONLY and has NOT been applied.
+NEXT:   Code verify LP-v1 implementation and operator migration path. Operator must apply `supabase/migrations/021_latency_probe.sql` in Supabase SQL Editor before `lp-collect.ts`/`lp-report.ts` can run against DB.
+PROMPT: Code — verify commit `b4da414`: review migration 021, LP-v1 collector/report logic, and the exported shadow-paper-sim helpers. Confirm no live/measure_live/broadcast/bot_state/tracked_wallets/webhook/agents/swap/executor/TR-v1-threshold changes. After Operator applies migration 021, run `npx tsx src/scripts/lp-collect.ts` and `npx tsx src/scripts/lp-report.ts` from an approved service-role environment to validate LP-v1 starts collecting. Keep live/measure_live off and do not mutate wallet eligibility.
+
+[2026-06-24T02:45Z] FROM=Codex TO=Operator
+DID:    Authored LP-v1 migration `supabase/migrations/021_latency_probe.sql` in commit `b4da414`.
+STATE:  Migration was not applied by Codex. It creates shadow-only `latency_probe_shadow` storage and anon SELECT RLS; no live or trading behavior changes.
+NEXT:   Apply migration 021 in Supabase SQL Editor if approved, then ask Code to run/verify LP-v1 collection/report.
+PROMPT: Operator — apply `supabase/migrations/021_latency_probe.sql` in Supabase SQL Editor. Do not enable live or measure_live. After applying, tell Code to verify LP-v1 with the collector/report scripts.
