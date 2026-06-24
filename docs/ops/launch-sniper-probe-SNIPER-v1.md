@@ -35,6 +35,18 @@ minutes). The edge, if any, lives in a **filter**, not in blanket sniping.
 - **No paid feed (Geyser/Bitquery) needed for the shadow probe.** A faster stream
   is only justified later IF this probe shows an edge worth executing on.
 
+### BUILD FINDING (2026-06-24) — pricing blocker
+The Helius `CREATE` feed works (validated: 21 txs → 20 launches extracted). BUT
+`confirmedPrice()` (DexScreener) returns null for brand-new launches — DexScreener
+only indexes a pair minutes after creation, once it has liquidity. So
+**at true t0 there is NO DexScreener price.** The only t0 price source is the
+**pump.fun bonding curve account** (on-chain: derive curve PDA from mint, decode
+virtual SOL/token reserves, price = vSOL/vToken). The existing DexScreener-based
+harness cannot snipe at t0 without that decoder. Implication: true launch-sniping
+is a *different infrastructure game* (on-chain bonding-curve pricing + sub-second
+detection) than the copy-feed harness — it is NOT a free reuse. `sniper-collect.ts`
+is committed but PARKED pending this decision.
+
 ## Method (parallel to LP-v1; reuses the hardened harness)
 1. **Broad collect (no filter at capture):** record EVERY detected pump.fun launch
    into a `launch_sniper_shadow` table — mint, creation time, first-seen lag, and a
