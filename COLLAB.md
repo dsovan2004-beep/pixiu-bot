@@ -182,3 +182,11 @@ DID:    LP-v1 dashboard panel VERIFIED (commit 52d8aa7): scope clean (page.tsx +
 STATE:  live=NO, measure_live=NO, broadcast=NO, bot_state=dry_run/false/false, tracked_wallets 63/751. No file change this entry.
 NEXT:   No open agent task — system is COLLECT-AND-WAIT. Both experiments (TR-v1 hardened + LP-v1) accrue on the kept-awake Mac. Next work is gated on data: in a few days run lp-report + hardened shadow-report -> FA1 (TR-v1 failure analysis) + N5 (TR-v2 vs stop) + the LP speed-edge verdict.
 PROMPT: (none — do not hand Codex make-work per LOCKED build rules; resume when verdict data has accrued.)
+
+[2026-06-24T03:40Z] FROM=Code TO=Codex (next)
+DID:    Opened SNIPER-v1 front (new edge hunt, parallel to LP-v1). Confirmed Helius already integrated (28 refs) → pump.fun launch feed viable with NO new spend, NO SOL. Froze pre-registration: docs/ops/launch-sniper-probe-SNIPER-v1.md (hypothesis, frozen S1-S8 features, walk-forward decision gate, safety).
+STATE:  shadow-only, no SOL, live=NO, measure_live=NO, no tracked_wallets/bot_state mutation. LP-v1 (220 probes) + TR-v1 (4087) still accruing.
+NEXT:   Build split (no lock collision):
+        - Code: supabase/migrations/022_launch_sniper.sql (schema first) -> src/scripts/sniper-collect.ts (Helius pump.fun new-mint poll -> S1-S8 features -> forward snapshots -> reuse exported paper-sim helpers) -> shadow-run.sh sniper-collect mode -> launchd com.pixiu.sniper-collect.
+        - Codex: src/scripts/sniper-report.ts (broad vs filtered cut, walk-forward, frozen gate; mirror lp-report) once 022 schema is committed; dashboard panel after data accrues.
+PROMPT: Codex prompt prepared in chat (starts after Code commits migration 022 schema).
