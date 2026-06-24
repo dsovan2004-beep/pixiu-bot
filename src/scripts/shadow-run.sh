@@ -13,9 +13,11 @@ LOG="logs/shadow-$MODE.log"
 LOCK="logs/.lock-$MODE"
 
 case "$MODE" in
-  collect)   SCRIPT="src/scripts/shadow-collect.ts" ;;
-  paper-sim) SCRIPT="src/scripts/shadow-paper-sim.ts" ;;
-  report)    SCRIPT="src/scripts/shadow-report.ts" ;;
+  collect)    SCRIPT="src/scripts/shadow-collect.ts" ;;
+  paper-sim)  SCRIPT="src/scripts/shadow-paper-sim.ts" ;;
+  report)     SCRIPT="src/scripts/shadow-report.ts" ;;
+  lp-collect) SCRIPT="src/scripts/lp-collect.ts" ;;
+  lp-report)  SCRIPT="src/scripts/lp-report.ts" ;;
   *) echo "bad mode: $MODE" >&2; exit 2 ;;
 esac
 
