@@ -35,6 +35,10 @@ Before editing a file, append a row claiming it. Mark `RELEASED` (or delete the 
 | `src/app/bot/page.tsx` | Codex | RELEASED | 2026-06-23T03:29Z | `8cba431` |
 | `src/scripts/shadow-paper-sim.ts` | Codex | RELEASED | 2026-06-24T02:27Z | `e8dcdfc` |
 | `src/scripts/shadow-report.ts` | Codex | RELEASED | 2026-06-24T02:27Z | `e8dcdfc` |
+| `supabase/migrations/021_latency_probe.sql` | Codex | HELD | 2026-06-24T02:40Z | — |
+| `src/scripts/lp-collect.ts` | Codex | HELD | 2026-06-24T02:40Z | — |
+| `src/scripts/lp-report.ts` | Codex | HELD | 2026-06-24T02:40Z | — |
+| `src/scripts/shadow-paper-sim.ts` | Codex | HELD | 2026-06-24T02:40Z | — |
 
 - A `HELD` lock older than **2h with no commit** is stale → may be reclaimed after posting a note in the Handoff Log (§4).
 - If you find your target file already changed in the working tree by the other agent (uncommitted), **STOP** and use §6.
