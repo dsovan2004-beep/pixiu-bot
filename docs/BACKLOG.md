@@ -39,34 +39,39 @@ daily, and protect capital.
 | P5 token-risk + bundle/dev/top-holder | DESIGNED + BUILT as **TR-v1** (pre-registered, frozen) |
 | P6 measure_live telemetry | DESIGNED — schema + fail-closed policy/gate ready; NOT enabled (no positive-edge candidate) |
 
-### Forward shadow validation — LIVE (the current experiment)
+### Forward shadow validation — LIVE (status 2026-06-24)
 
-- TR-v1 token-risk rule pre-registered/frozen
-  (`docs/ops/token-risk-rule-TR-v1.md`); harness built
-  (`src/lib/token-risk-v1.ts`, `token-risk-data.ts`,
-  `src/scripts/shadow-*.ts`), migration 020 applied, scheduled via
-  launchd (`docs/ops/shadow-harness-runbook.md`), dashboard panel live
-  (anon RLS read policy applied).
-- **First out-of-sample result (~2,056 decisions / ~1,977 resolved):**
-  TR-v1 admits ~11% (235 would_enter). **would_enter mean −12.89% vs
-  would_block mean −17.52%** → TR-v1 **discriminates** (filtered set
-  loses ~4.6pp less) **but is still net-NEGATIVE → EDGE NOT PROVEN.**
-- Read: token-risk filtering carries real signal but cannot manufacture
-  a positive edge from a −EV source. Consistent with the disproven
-  wallet edge. Caveat: absolute magnitudes are inflated by the broad
-  simulated population + −100% rug handling — the *relative*
-  discrimination is the trustworthy part.
+- TR-v1 harness built + scheduled (launchd) + dashboard panel live (anon
+  RLS applied). **TR-v1: 4,087 decisions / 3,950 resolved.** Paper-sim
+  loss model **hardened (N2)** — stop/circuit exits now fill at threshold
+  + bounded slippage (was recording −50% via poll-gap), rug requires
+  re-check before −100%.
+- **TR-v1 verdict = EDGE NOT PROVEN (anti-edge on full data: would_enter
+  ~−25% vs would_block ~−17%).** BUT this average is on the ~3,950
+  PRE-N2 rows that carry the inflated −50% stops and can't be re-resolved
+  (no past prices). The **clean verdict requires fresh data resolved
+  under the hardened sim** — accruing now.
+- **LP-v1 latency probe = LIVE (119 probes).** Tests whether entering at
+  t0 beats +60/+180/+300s (i.e., is *speed* the edge). Needs **N≥100
+  resolved-complete** + walk-forward before a verdict.
+- **Standing finding:** wallet-based edge DISPROVEN out-of-sample;
+  token-risk filtering reduces losses but does not cross zero. The only
+  real win mechanism is `trailing_stop` (+84% mean in sim, +0.418 SOL in
+  the postmortem). Daily profit needs a NEW positive-edge signal
+  (speed/sniper), not more filtering — LP-v1 is testing exactly that.
 
-### Next backlog (owners per COLLAB.md Lock Board / Handoff Log)
+### Backlog status (owners per COLLAB.md)
 
-| ID | Task | Owner | Status | Note |
-|---|---|---|---|---|
-| N1 | Walk-forward eval of TR-v1 (`shadow-report`; does enter>block hold across time windows?) | Code | TODO | hardens or refutes the discrimination |
-| N2 | Paper-sim hardening — restrict to 15-guard-passing population and/or fix −100% rug handling so absolute sim PnL is trustworthy | Codex | TODO | current magnitudes are pessimistic |
-| N3 | Repair local toolchain (`node_modules` corrupted — `tsc`/`eslint`/`next build` are stubs; only `tsx` works) | Codex | TODO | blocks local typecheck/lint for both agents |
-| N4 | Auto-trigger orchestrator (watcher → `codex exec`/`claude -p`, worktree-isolated, safety-gated) | Code | BLOCKED | needs exact Codex CLI command from Operator |
-| N5 | Decision gate: pre-register TR-v2 (stricter) vs conclude "no recoverable edge on this signal source" | Code + ChatGPT | BLOCKED | needs N1 + N2 evidence |
-| N6 | Dashboard polish — walk-forward panel + per-exit-reason breakdown | Codex | TODO | builds on the live panel |
+| ID | Task | Owner | Status |
+|---|---|---|---|
+| N1 | Walk-forward eval + shadow-report full-dataset pagination fix | Code | ✅ DONE (`99aba3b`) |
+| N2 | Paper-sim loss-model hardening (realistic stop fill, rug re-check, fair-resolution) | Codex | ✅ DONE (`e8dcdfc`, verified) |
+| N6 | Dashboard walk-forward + per-exit-reason panel | Codex | ✅ DONE (`8cba431`, verified) |
+| LP-v1 | Latency edge probe (build + migration 021 + scheduler) | Codex+Code | ✅ BUILT & LIVE (`b4da414`, mig applied, launchd every 2m) |
+| N5 | Decision gate: TR-v2 (stricter) vs "no recoverable edge" | Code+ChatGPT | ⏳ BLOCKED — needs clean hardened-sim + LP-v1 data (days of accrual) |
+| N3 | Repair local toolchain (`node_modules` stubs: tsc/eslint/next) | Codex | ⛔ TODO — local build/typecheck blocked; CF build is authoritative |
+| N4 | Auto-trigger orchestrator (true no-human Code⇄Codex) | Code | ⛔ BLOCKED — no local `codex` CLI (`codex not found`); human one-paste baton is the mechanism |
+| N7 | Cloud-droplet migration (24/7 harness, off the laptop) | Code+Codex | 💤 DEFERRED — operator chose Mac + keep-awake for now |
 
 **Strategic truth:** wallet-quality + token-risk filtering *reduces*
 losses but does not cross zero. Daily profit requires a genuinely new
