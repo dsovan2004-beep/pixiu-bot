@@ -67,7 +67,7 @@ daily, and protect capital.
 | N1 | Walk-forward eval + shadow-report full-dataset pagination fix | Code | ✅ DONE (`99aba3b`) |
 | N2 | Paper-sim loss-model hardening (realistic stop fill, rug re-check, fair-resolution) | Codex | ✅ DONE (`e8dcdfc`, verified) |
 | N6 | Dashboard walk-forward + per-exit-reason panel | Codex | ✅ DONE (`8cba431`, verified) |
-| LP-v1 | Latency edge probe (build + migration 021 + scheduler) | Codex+Code | ✅ BUILT & LIVE (`b4da414`, mig applied, launchd every 2m) |
+| LP-v1 | Latency edge probe — **VERDICT: NO EDGE** (speed is anti-edge; positive means are bull-regime + 1%-tail + sub-cost artifacts that die OOS) | Codex+Code | ✅ DONE — verdict in (N=1,918) |
 | FA1 | **TR-v1 failure analysis** — why anti-edge (winners concentrate in the BLOCKED set; "safe-looking" tokens underperform); quantify on clean hardened-sim data | Code | 🔬 ACTIVE NEXT — partial finding logged; formalize as hardened data accrues |
 | N5 | Decision gate: TR-v2 (stricter) vs "no recoverable edge" | Code+ChatGPT | ⏳ BLOCKED — needs FA1 + clean hardened-sim + LP-v1 data (days of accrual) |
 | N3 | Repair local toolchain (`node_modules` stubs: tsc/eslint/next) | Codex | ⛔ TODO — local build/typecheck blocked; CF build is authoritative |

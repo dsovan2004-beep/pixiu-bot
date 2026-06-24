@@ -6,11 +6,12 @@
 status materially changes.
 
 ## TL;DR
-The recovery roadmap (P0–P6) is **complete as design + validation + shadow**. Hard
-evidence says the current copy-trade strategy is **structurally −EV with no
-recoverable edge from filtering**. We've built the instruments to test the one
-remaining edge hypothesis — **speed** — and it's live, collecting, **no real SOL**.
-No live trading; capital protected.
+The current copy-trade strategy is **structurally −EV, now disproven THREE
+independent ways**: wallet quality (walk-forward), token-risk filtering (TR-v1,
+anti-edge both windows), and **latency/speed (LP-v1, verdict in)**. The only
+"positive" numbers are bull-regime + 1%-tail + sub-cost artifacts that die
+out-of-sample. No tradeable edge in this feed. No live trading; capital protected
+(0.82 SOL, no real SOL ever used).
 
 ## Bankroll / historical (verified)
 - Wallet **0.82 SOL (~$57)**. Trade PnL **−1.2473 SOL / 332 trades / 23.5% WR**
@@ -32,9 +33,11 @@ No live trading; capital protected.
 
 ## Live experiments (shadow-only, no SOL)
 - **TR-v1 harness:** 4,087 decisions; launchd-scheduled; dashboard panel live.
-- **LP-v1 latency probe:** **LIVE, 119 probes.** Tests whether entering at
-  **t0 vs +60/+180/+300s** changes the outcome — i.e., **is *speed* the edge?**
-  Needs **N≥100 resolved-complete + walk-forward** for a verdict (~days).
+- **LP-v1 latency probe — VERDICT IN (N=1,918 resolved-complete): NO EDGE.**
+  Speed is *anti*-edge — chasing at t0 is the worst entry (mean −1.0%, median
+  −17.5%); delayed entries look better only as a **bull-regime artifact** (W1
+  +6.97 / W2 −0.87 at +300s), are **100% tail-driven** (top-1% mean +450%,
+  ex-top-1% −1.67%), and **die at 3% cost**. Latency is not our problem.
 
 ## Backlog status
 | ID | Item | Status |

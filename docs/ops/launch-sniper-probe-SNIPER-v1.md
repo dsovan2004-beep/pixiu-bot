@@ -56,13 +56,17 @@ S7 LP status (burned/locked %) · S8 name/symbol offensive/stablecoin filter (re
 No other inputs. No hardcoded wallet allowlists. Cuts are expressed as policy
 thresholds (a `launch_sniper_policy` row), never source constants.
 
-## Decision gate (frozen, pre-committed)
-- **SNIPER EDGE CANDIDATE = YES** iff, on the held-out window with **N ≥ 100
-  resolved-complete** in the cut: net EV > 0 AND it survives a second walk-forward
-  fold AND the broad (unfiltered) population is, as expected, net-negative (proving
-  the *filter* — not the market — is doing the work).
-- Otherwise **NO / INSUFFICIENT** → launch-sniping is −EV on this market → stop or
-  pivot. Do not relax the gate to manufacture a pass.
+## Decision gate (frozen — HARDENED by the LP-v1 lesson, 2026-06-24)
+LP-v1 proved an aggregate mean LIES: its "+3.05% @ +300s" was a bull-regime
+(W1 +6.97 / W2 −0.87) + 1%-tail (top-1% mean +450%, ex-top-1% mean −1.67%) +
+sub-cost (dies at 3% round-trip) artifact. SNIPER-v1 must clear **ALL** of:
+- **N ≥ 100** resolved-complete in the cut.
+- **Walk-forward positive in BOTH time windows** — not just pooled.
+- **Median PnL ≥ 0** in the cut — not just mean (guards tail-only mirages).
+- **Ex-top-1% mean ≥ 0** — the edge cannot live entirely in untradeable moonshots.
+- **Net positive after ≥3% round-trip cost** (pump.fun slippage + fees).
+- **Broad (unfiltered) population net-negative** — proves the *filter*, not the market/regime.
+- Fail ANY → **NO**. Do not relax the gate to manufacture a pass.
 - A YES is a *candidate only*. It does NOT authorize live or measure_live. Live
   restart still requires the C1–C3 hardcoded→DB migration + operator sign-off.
 
