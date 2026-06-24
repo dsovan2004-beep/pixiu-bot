@@ -743,3 +743,20 @@ fixes.
 | rug_or_missing | 7 | 28.6% | −35.4% | −0.13 |
 | circuit_breaker | 53 | 26.4% | −29.2% | −0.96 |
 | whale_exit | 94 | 23.4% | −17.6% | −1.24 |
+
+---
+
+## Compliance backlog — LOCKED dynamic-build rules (added 2026-06-23)
+
+Governing standard: `docs/ops/global-build-rules.md` (binding on Code + Codex).
+Verified gap: the legacy LIVE entry path violates the no-hardcoding rule.
+
+| ID | Task | Owner | Status | Note |
+|---|---|---|---|---|
+| C1 | Migrate `WALLET_BLACKLIST` (denylist) → DB source-of-truth (e.g. `wallet_eligibility`/`current_wallet_status`); route.ts guard #10a reads DB | Code+Codex | TODO | **pre-live-restart gate** |
+| C2 | Migrate `ELITE_WALLET_TAGS`/`ELITE_BUY_SOL` (allowlist+sizing) → policy table; remove `if wallet === "theo pump sad"` pattern in `getBuySolForWalletTag` | Code+Codex | TODO | **pre-live-restart gate** |
+| C3 | Migrate entry thresholds (`MAX_GAP_MINUTES`, `MIN_LIQUIDITY_USD`, `MIN_FDV_USD`, `MAX_ENTRY_PRICE`, `DUMP_PATTERN_MIN_SIGNALS`, cooldowns, `LIVE_BUY_SOL`, `DAILY_LOSS_LIMIT_SOL`) → `entry_policy`/`l0_gate_policy` rows | Code+Codex | TODO | **pre-live-restart gate** |
+
+**Hard rule:** no live restart while the entry path is hardcoded. These are
+dormant today (`is_running=false`), so not urgent — but they are a blocking gate
+before any real-SOL trading, per the LOCKED build rules.

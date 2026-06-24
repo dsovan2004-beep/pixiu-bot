@@ -12,6 +12,13 @@ before editing (one writer per file), sync before writing, exact-file commits,
 push immediately, and hand off via its append-only Handoff Log. This prevents
 the concurrent-edit collisions that corrupt shared files.
 
+**LOCKED build rules (binding on both agents):** obey
+[`docs/ops/global-build-rules.md`](docs/ops/global-build-rules.md) — dynamic /
+policy-driven / data-driven / fail-closed / evidence-based. No hardcoded wallets,
+allowlists, denylists, or thresholds: values that can change must come from policy
+/ config / source-of-truth tables, never source-code constants. Missing critical
+data → fail closed + report, never guess.
+
 # PixiuBot Architecture — read before touching entry logic
 
 **As of Sprint 7 Day 3 (Apr 17 2026), there is ONE entry path.**
