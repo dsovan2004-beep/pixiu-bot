@@ -67,6 +67,27 @@ refines the method before any data (legit pre-registration, not post-hoc tuning)
 - Decision gate otherwise unchanged (walk-forward both windows, median ≥ 0,
   ex-top-1% ≥ 0). No live / no real SOL until a bucket clears it.
 
+### v1.2 — insider/extraction detection is P0 (Codex research, 2026-06-24)
+Source: Codex research (CoinDesk ZREAL sniper coverage, MELANIA/LIBRA-style
+insider launches, pump.fun/memecoin research). Weak/inspirational, NOT proof.
+Synthesis: **the biggest sniper wins are usually insider / early-private access +
+distribution into retail — not skillful public detection. Blind public sniping
+makes you the exit liquidity.** This is consistent with LP-v1's untradeable 1%
+moonshot tail (likely insider-controlled).
+- **Reframe:** the realistic *retail* edge is DEFENSIVE — detect and AVOID
+  insider-controlled / extraction launches — not catching moonshots we can't exit.
+- **P0 insider-footprint features** (validation signals; need on-chain early-trade
+  parsing per launch): deployer history / prior-deployer outcomes, first-buyer
+  count, first-sell time, first top-wallet sell time, top-10 concentration at
+  +5/+15/+30/+60s, same-funder / clustered early wallets, bundle-buy ratio, early
+  market-sell spam, holder-distribution slope, liquidity/mcap growth slope, and
+  MFE/MAE in the first 1-5 min.
+- **Pricing infra (RESOLVED):** on-chain bonding-curve read works for free —
+  `src/lib/pump-curve-price.ts` (`getCurveState`/`getCurvePriceSol`), verified live
+  (price ~2.8-4.2e-8 SOL). pump.fun API is blocked (530); DexScreener has no t0
+  price. So the shadow probe is buildable with NO paid infra at ~5s+ granularity;
+  true 1-3s precision would need Geyser (paid) — that's a later, gated decision.
+
 ## Method (parallel to LP-v1; reuses the hardened harness)
 1. **Broad collect (no filter at capture):** record EVERY detected pump.fun launch
    into a `launch_sniper_shadow` table — mint, creation time, first-seen lag, and a
