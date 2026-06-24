@@ -69,6 +69,40 @@ type ExitReasonBucket = {
   mean: number | null;
 };
 
+type LpTimingLabel = "t0" | "60" | "180" | "300";
+
+type LpProbeRow = {
+  first_seen_at: string | null;
+  entry_time_300: string | null;
+  resolved_at_t0: string | null;
+  resolved_at_60: string | null;
+  resolved_at_180: string | null;
+  resolved_at_300: string | null;
+  sim_pnl_t0: number | null;
+  sim_pnl_60: number | null;
+  sim_pnl_180: number | null;
+  sim_pnl_300: number | null;
+};
+
+type LpTimingStat = {
+  label: LpTimingLabel;
+  display: string;
+  count: number;
+  meanPct: number;
+  sumPct: number;
+  winPct: number;
+};
+
+const LP_TIMINGS: Array<{ label: LpTimingLabel; display: string }> = [
+  { label: "t0", display: "t0" },
+  { label: "60", display: "+60s" },
+  { label: "180", display: "+180s" },
+  { label: "300", display: "+300s" },
+];
+// Mirrors src/scripts/lp-report.ts / shadow-paper-sim.ts; UI only.
+const LP_MAX_HOLD_MIN = 120;
+const LP_MIN_RESOLVED_COMPLETE = 100;
+
 export default function BotPage() {
   const [botState, setBotState] = useState<BotState | null>(null);
   const [signals, setSignals] = useState<CoinSignal[]>([]);
@@ -97,6 +131,13 @@ export default function BotPage() {
     trailingN: number; latest: string | null;
     walkForward: WalkForwardBucket[];
     exitReasons: ExitReasonBucket[];
+  } | null>(null);
+  const [lpProbe, setLpProbe] = useState<{
+    total: number;
+    mature: number;
+    complete: number;
+    stats: LpTimingStat[];
+    speedEdgeStatus: "YES" | "NO" | "INSUFFICIENT";
   } | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -220,6 +261,67 @@ export default function BotPage() {
         exitReasons,
       });
     } catch { /* shadow tables not readable by anon yet (RLS) → panel shows access-pending */ }
+
+    // ── LP-v1 latency edge probe (read-only; never gates entries) ──
+    try {
+      const rows: LpProbeRow[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabase
+          .from("latency_probe_shadow")
+          .select("first_seen_at,entry_time_300,resolved_at_t0,resolved_at_60,resolved_at_180,resolved_at_300,sim_pnl_t0,sim_pnl_60,sim_pnl_180,sim_pnl_300")
+          .order("first_seen_at", { ascending: true })
+          .range(from, from + 999);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        rows.push(...((data || []) as LpProbeRow[]));
+        if (data.length < 1000) break;
+      }
+
+      const isMature = (row: LpProbeRow) => {
+        const finalEntryTime = row.entry_time_300 ? new Date(row.entry_time_300).getTime() : 0;
+        return Date.now() - finalEntryTime >= LP_MAX_HOLD_MIN * 60_000;
+      };
+      const mature = rows.filter(isMature);
+      const complete = mature.filter((row) =>
+        row.resolved_at_t0 && row.resolved_at_60 && row.resolved_at_180 && row.resolved_at_300
+      );
+      const valuesFor = (timing: LpTimingLabel) =>
+        complete
+          .map((row) => Number(row[`sim_pnl_${timing}` as keyof LpProbeRow]))
+          .filter((value) => Number.isFinite(value));
+      const mean = (values: number[]) => values.length ? values.reduce((s, v) => s + v, 0) / values.length : 0;
+      const stats = LP_TIMINGS.map((timing) => {
+        const values = valuesFor(timing.label);
+        const wins = values.filter((value) => value > 0).length;
+        const sumPct = values.reduce((s, v) => s + v, 0);
+        return {
+          label: timing.label,
+          display: timing.display,
+          count: values.length,
+          meanPct: mean(values),
+          sumPct,
+          winPct: values.length ? (wins / values.length) * 100 : 0,
+        };
+      });
+      const t0 = stats.find((s) => s.label === "t0");
+      const t180 = stats.find((s) => s.label === "180");
+      const t300 = stats.find((s) => s.label === "300");
+      const speedEdgeStatus = complete.length < LP_MIN_RESOLVED_COMPLETE
+        ? "INSUFFICIENT"
+        : t0 && t180 && t300 && t0.sumPct > 0 && t0.meanPct > 0 && t0.meanPct > t180.meanPct && t0.meanPct > t300.meanPct
+          ? "YES"
+          : "NO";
+      setLpProbe({
+        total: rows.length,
+        mature: mature.length,
+        complete: complete.length,
+        stats,
+        speedEdgeStatus,
+      });
+    } catch {
+      setLpProbe(null);
+      /* latency_probe_shadow not readable by anon yet → panel shows access-pending */
+    }
 
     // Fetch live prices and whale sells for open positions
     const opens = openRes.data || [];
@@ -418,6 +520,26 @@ export default function BotPage() {
   const formatShadowMean = (value: number | null) => value === null ? "—" : `${value.toFixed(2)}%`;
   const shadowMeanTone = (value: number | null) =>
     value === null ? "text-zinc-500" : value >= 0 ? "text-emerald-300" : "text-red-300";
+  const lpAccessPending = !lpProbe || lpProbe.total === 0;
+  const lpTotal = lpProbe?.total ?? 0;
+  const lpMature = lpProbe?.mature ?? 0;
+  const lpComplete = lpProbe?.complete ?? 0;
+  const lpSpeedEdgeStatus = lpProbe?.speedEdgeStatus ?? "INSUFFICIENT";
+  const lpStats = lpProbe?.stats ?? [];
+  const lpT0 = lpStats.find((stat) => stat.label === "t0");
+  const lpT180 = lpStats.find((stat) => stat.label === "180");
+  const lpT300 = lpStats.find((stat) => stat.label === "300");
+  const lpT0BeatsLate = !!(lpT0 && lpT180 && lpT300 && lpT0.meanPct > lpT180.meanPct && lpT0.meanPct > lpT300.meanPct);
+  const lpStatusTone = lpSpeedEdgeStatus === "YES"
+    ? "safe"
+    : lpSpeedEdgeStatus === "NO"
+      ? "danger"
+      : "muted";
+  const lpBadgeClass = lpSpeedEdgeStatus === "YES"
+    ? "border-green-500/70 bg-green-950/50 text-green-300"
+    : lpSpeedEdgeStatus === "NO"
+      ? "border-red-500/70 bg-red-950/50 text-red-300"
+      : "border-zinc-700 bg-zinc-900 text-zinc-300";
 
   if (loading) {
     return <div className="text-zinc-500 text-center mt-20">Loading...</div>;
@@ -599,6 +721,98 @@ export default function BotPage() {
                 </div>
               )}
             </div>
+          </div>
+        </section>
+
+        {/* LP-v1 latency edge probe */}
+        <section className="rounded-lg border border-violet-700/70 bg-violet-950/20 p-5">
+          <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-violet-200">
+                Current Experiment — LP-v1 Latency Edge
+              </h2>
+              <p className="mt-1 text-sm text-zinc-400">
+                Shadow-only speed probe. Compares t0 vs delayed entries; no SOL.
+              </p>
+            </div>
+            <span className={`rounded-full border px-3 py-1 text-xs font-mono font-bold ${lpBadgeClass}`}>
+              SPEED EDGE {lpSpeedEdgeStatus}
+            </span>
+          </div>
+
+          {lpAccessPending && (
+            <div className="mb-4 rounded-md border border-zinc-700 bg-zinc-950/80 p-3 text-sm text-zinc-300">
+              Access pending — LP-v1 may be running via service-role, but dashboard anon reads show no rows yet.
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <Metric label="Total Probes" value={lpAccessPending ? "ACCESS PENDING" : String(lpTotal)} tone={lpAccessPending ? "muted" : "neutral"} />
+            <Metric label="Mature Probes" value={lpAccessPending ? "—" : String(lpMature)} tone="neutral" />
+            <Metric label="Resolved Complete" value={lpAccessPending ? "—" : String(lpComplete)} tone={lpComplete >= LP_MIN_RESOLVED_COMPLETE ? "safe" : "muted"} />
+            <Metric label="Speed Edge Candidate" value={lpAccessPending ? "—" : lpSpeedEdgeStatus} tone={lpStatusTone} />
+          </div>
+
+          <div className="mt-4 overflow-x-auto rounded-md border border-zinc-800 bg-zinc-950/70 p-4">
+            <table className="w-full text-sm font-mono">
+              <thead>
+                <tr className="border-b border-zinc-800 text-xs uppercase tracking-wide text-zinc-500">
+                  <th className="py-2 pr-3 text-left">Entry Timing</th>
+                  <th className="px-3 py-2 text-right">Count</th>
+                  <th className="px-3 py-2 text-right">Mean PnL</th>
+                  <th className="px-3 py-2 text-right">Win %</th>
+                  <th className="py-2 pl-3 text-right">Vs t0</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lpAccessPending ? (
+                  <tr>
+                    <td className="py-3 text-zinc-500" colSpan={5}>
+                      Access pending — no anon-visible LP-v1 probe rows yet.
+                    </td>
+                  </tr>
+                ) : (
+                  lpStats.map((stat) => {
+                    const deltaFromT0 = lpT0 ? stat.meanPct - lpT0.meanPct : 0;
+                    const isT0 = stat.label === "t0";
+                    const highlightT0 = isT0 && lpT0BeatsLate;
+                    return (
+                      <tr key={stat.label} className="border-b border-zinc-900 last:border-0">
+                        <td className={`py-2 pr-3 font-bold ${highlightT0 ? "text-emerald-300" : isT0 ? "text-violet-200" : "text-zinc-300"}`}>
+                          {stat.display}
+                        </td>
+                        <td className="px-3 py-2 text-right text-zinc-300">{stat.count}</td>
+                        <td className={`px-3 py-2 text-right font-bold ${stat.meanPct >= 0 ? "text-emerald-300" : "text-red-300"}`}>
+                          {stat.meanPct.toFixed(2)}%
+                        </td>
+                        <td className="px-3 py-2 text-right text-zinc-300">{stat.winPct.toFixed(1)}%</td>
+                        <td className={`py-2 pl-3 text-right ${isT0 ? "text-zinc-500" : deltaFromT0 >= 0 ? "text-emerald-300" : "text-red-300"}`}>
+                          {isT0 ? "base" : `${deltaFromT0 >= 0 ? "+" : ""}${deltaFromT0.toFixed(2)}pp`}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
+            <Metric
+              label="N>=100 Complete"
+              value={lpAccessPending ? "—" : `${lpComplete >= LP_MIN_RESOLVED_COMPLETE}`}
+              tone={lpComplete >= LP_MIN_RESOLVED_COMPLETE ? "safe" : "muted"}
+            />
+            <Metric
+              label="t0 Net Positive"
+              value={lpAccessPending || !lpT0 ? "—" : `${lpT0.sumPct > 0 && lpT0.meanPct > 0}`}
+              tone={!lpAccessPending && lpT0 && lpT0.sumPct > 0 && lpT0.meanPct > 0 ? "safe" : "danger"}
+            />
+            <Metric
+              label="t0 Beats +180/+300"
+              value={lpAccessPending ? "—" : `${lpT0BeatsLate}`}
+              tone={lpT0BeatsLate ? "safe" : "danger"}
+            />
           </div>
         </section>
 
