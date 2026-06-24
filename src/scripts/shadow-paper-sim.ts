@@ -11,12 +11,12 @@ import { readFileSync } from "fs";
 import { join } from "path";
 
 // exit logic aligned with risk-guard
-const STOP_LOSS_PCT = 10;
-const CIRCUIT_BREAKER_L0_PCT = 15;
-const TRAIL_ARM_PCT = 10;       // peak must reach +10% to arm trailing
-const TRAIL_FROM_PEAK_PCT = 25; // POST_L1_TRAIL_PCT
-const MAX_HOLD_MIN = 120;       // timeout
-const RUG_AFTER_MIN = 10;       // no price + older than this → treat as rug (-100%)
+export const STOP_LOSS_PCT = 10;
+export const CIRCUIT_BREAKER_L0_PCT = 15;
+export const TRAIL_ARM_PCT = 10;       // peak must reach +10% to arm trailing
+export const TRAIL_FROM_PEAK_PCT = 25; // POST_L1_TRAIL_PCT
+export const MAX_HOLD_MIN = 120;       // timeout
+export const RUG_AFTER_MIN = 10;       // no price + older than this → treat as rug (-100%)
 function numericAssumption(name: string, fallback: number) {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
@@ -28,10 +28,10 @@ function numericAssumption(name: string, fallback: number) {
 // model, record the exit at the threshold plus bounded slippage instead of the
 // raw next-poll price. This is a simulation-only constant; it never affects
 // live routing, live slippage, or TR-v1 thresholds.
-const STOP_FILL_SLIPPAGE_PCT = numericAssumption("SHADOW_STOP_FILL_SLIPPAGE_PCT", 7.5);
-const MISSING_PRICE_CONFIRM_MIN = numericAssumption("SHADOW_MISSING_PRICE_CONFIRM_MIN", 5);
-const MISSING_PRICE_RECHECK_DELAY_MS = numericAssumption("SHADOW_MISSING_PRICE_RECHECK_DELAY_MS", 1500);
-const RUG_OR_MISSING_PNL_PCT = -100;
+export const STOP_FILL_SLIPPAGE_PCT = numericAssumption("SHADOW_STOP_FILL_SLIPPAGE_PCT", 7.5);
+export const MISSING_PRICE_CONFIRM_MIN = numericAssumption("SHADOW_MISSING_PRICE_CONFIRM_MIN", 5);
+export const MISSING_PRICE_RECHECK_DELAY_MS = numericAssumption("SHADOW_MISSING_PRICE_RECHECK_DELAY_MS", 1500);
+export const RUG_OR_MISSING_PNL_PCT = -100;
 
 function env() {
   const text = readFileSync(join(process.cwd(), ".env.local"), "utf8");
@@ -52,7 +52,7 @@ async function price(mint: string): Promise<number | null> {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function confirmedPrice(mint: string): Promise<number | null> {
+export async function confirmedPrice(mint: string): Promise<number | null> {
   const first = await price(mint);
   if (first !== null && first > 0) return first;
   await sleep(MISSING_PRICE_RECHECK_DELAY_MS);
@@ -60,12 +60,39 @@ async function confirmedPrice(mint: string): Promise<number | null> {
   return second !== null && second > 0 ? second : null;
 }
 
-function boundedExitAtThreshold(entry: number, thresholdPct: number) {
+export function boundedExitAtThreshold(entry: number, thresholdPct: number) {
   const pnlPct = -Math.min(99, thresholdPct + STOP_FILL_SLIPPAGE_PCT);
   return {
     pnlPct,
     exitPrice: entry * (1 + pnlPct / 100),
   };
+}
+
+export type PaperSimExitDecision = {
+  exitReason: string | null;
+  pnlPct: number;
+  exitPrice: number;
+  peak: number;
+};
+
+export function evaluatePaperSimExit(entry: number, cur: number, previousPeak: number | null | undefined, ageMin: number): PaperSimExitDecision {
+  let pnlPct = ((cur - entry) / entry) * 100;
+  let exitPrice = cur;
+  let exitReason: string | null = null;
+  const peak = Math.max(Number(previousPeak ?? -Infinity), pnlPct);
+
+  if (pnlPct <= -CIRCUIT_BREAKER_L0_PCT) {
+    exitReason = "circuit_breaker";
+    const filled = boundedExitAtThreshold(entry, CIRCUIT_BREAKER_L0_PCT);
+    pnlPct = filled.pnlPct; exitPrice = filled.exitPrice;
+  } else if (pnlPct <= -STOP_LOSS_PCT) {
+    exitReason = "stop_loss";
+    const filled = boundedExitAtThreshold(entry, STOP_LOSS_PCT);
+    pnlPct = filled.pnlPct; exitPrice = filled.exitPrice;
+  } else if (peak >= TRAIL_ARM_PCT && pnlPct <= peak - TRAIL_FROM_PEAK_PCT) exitReason = "trailing_stop";
+  else if (ageMin >= MAX_HOLD_MIN) exitReason = "timeout";
+
+  return { exitReason, pnlPct, exitPrice, peak };
 }
 
 async function main() {
@@ -100,21 +127,11 @@ async function main() {
         continue;
       }
     } else {
-      pnlPct = ((cur - entry) / entry) * 100;
-      const peak = Math.max(Number(r.peak_pct ?? -Infinity), pnlPct);
-      if (pnlPct <= -CIRCUIT_BREAKER_L0_PCT) {
-        exitReason = "circuit_breaker";
-        const filled = boundedExitAtThreshold(entry, CIRCUIT_BREAKER_L0_PCT);
-        pnlPct = filled.pnlPct; exitPrice = filled.exitPrice;
-      } else if (pnlPct <= -STOP_LOSS_PCT) {
-        exitReason = "stop_loss";
-        const filled = boundedExitAtThreshold(entry, STOP_LOSS_PCT);
-        pnlPct = filled.pnlPct; exitPrice = filled.exitPrice;
-      } else if (peak >= TRAIL_ARM_PCT && pnlPct <= peak - TRAIL_FROM_PEAK_PCT) exitReason = "trailing_stop";
-      else if (ageMin >= MAX_HOLD_MIN) exitReason = "timeout";
+      const decision = evaluatePaperSimExit(entry, cur, r.peak_pct, ageMin);
+      pnlPct = decision.pnlPct; exitPrice = decision.exitPrice; exitReason = decision.exitReason;
       if (!exitReason) {
         // not resolved — advance peak/last price
-        await sb.from("stacked_filter_shadow").update({ peak_pct: peak, last_price: cur, last_polled_at: new Date().toISOString() }).eq("id", r.id);
+        await sb.from("stacked_filter_shadow").update({ peak_pct: decision.peak, last_price: cur, last_polled_at: new Date().toISOString() }).eq("id", r.id);
         advanced++; continue;
       }
     }
@@ -127,4 +144,6 @@ async function main() {
   }
   console.log(`resolved=${resolved} advanced=${advanced} missing_pending=${missingPending}`);
 }
-main().catch((e) => { console.error(e); process.exit(1); });
+if (process.argv[1]?.endsWith("shadow-paper-sim.ts")) {
+  main().catch((e) => { console.error(e); process.exit(1); });
+}
