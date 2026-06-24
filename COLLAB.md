@@ -39,7 +39,7 @@ Before editing a file, append a row claiming it. Mark `RELEASED` (or delete the 
 | `src/scripts/lp-collect.ts` | Codex | RELEASED | 2026-06-24T02:40Z | `b4da414` |
 | `src/scripts/lp-report.ts` | Codex | RELEASED | 2026-06-24T02:40Z | `b4da414` |
 | `src/scripts/shadow-paper-sim.ts` | Codex | RELEASED | 2026-06-24T02:40Z | `b4da414` |
-| `src/app/bot/page.tsx` | Codex | HELD | 2026-06-24T03:04Z | — |
+| `src/app/bot/page.tsx` | Codex | RELEASED | 2026-06-24T03:04Z | `52d8aa7` |
 
 - A `HELD` lock older than **2h with no commit** is stale → may be reclaimed after posting a note in the Handoff Log (§4).
 - If you find your target file already changed in the working tree by the other agent (uncommitted), **STOP** and use §6.
@@ -170,3 +170,9 @@ DID:    Authored LP-v1 migration `supabase/migrations/021_latency_probe.sql` in 
 STATE:  Migration was not applied by Codex. It creates shadow-only `latency_probe_shadow` storage and anon SELECT RLS; no live or trading behavior changes.
 NEXT:   Apply migration 021 in Supabase SQL Editor if approved, then ask Code to run/verify LP-v1 collection/report.
 PROMPT: Operator — apply `supabase/migrations/021_latency_probe.sql` in Supabase SQL Editor. Do not enable live or measure_live. After applying, tell Code to verify LP-v1 with the collector/report scripts.
+
+[2026-06-24T03:08Z] FROM=Codex TO=Code
+DID:    Added the LP-v1 dashboard panel in `src/app/bot/page.tsx` and pushed `52d8aa7` (`feat(dashboard): add LP-v1 latency panel`). The panel reads `latency_probe_shadow` through the anon client, paginates all rows, applies the same fair maturity rule as `lp-report.ts` (`entry_time_300 + MAX_HOLD_MIN`), counts resolved-complete probes for t0/+60/+180/+300, shows mean sim PnL + win% + count, and renders the same speed-edge hint (`N>=100`, t0 net-positive, t0 beats +180/+300).
+STATE:  live=NO, measure_live=NO, broadcast=NO, real SOL=NO, bot_state mutation=NO, tracked_wallets mutation=NO, webhook/agents/jupiter-swap/executor/schema/TR-v1/LP thresholds untouched. Existing real-PnL trade queries still exclude dry_run via `mode in ("measure_live","live")`. Validation: `git diff --check -- src/app/bot/page.tsx` PASS; `npx esbuild src/app/bot/page.tsx --bundle --platform=browser --packages=external` PASS; `npm run build` and `npm run lint -- src/app/bot/page.tsx` remain blocked by known broken local `node_modules` shims (`next` missing `../server/require-hook`, `eslint` missing `../package.json`).
+NEXT:   Verify Cloudflare/repaired-environment build for `52d8aa7` and compare dashboard LP-v1 math against `src/scripts/lp-report.ts` after anon-visible probe rows accrue.
+PROMPT: Code — verify commit `52d8aa7` in `src/app/bot/page.tsx`: confirm the LP-v1 dashboard panel paginates anon-visible `latency_probe_shadow`, applies the same mature/resolved-complete and speed-edge math as `src/scripts/lp-report.ts`, handles zero anon rows as access-pending, and keeps dry_run rows excluded from real PnL. Do not enable live/measure_live, do not mutate bot_state/tracked_wallets, and do not edit webhook/agents/swap/executor/schema/thresholds unless a separate locked task is opened.
