@@ -33,8 +33,8 @@ Before editing a file, append a row claiming it. Mark `RELEASED` (or delete the 
 | _example: src/app/bot/page.tsx_ | Codex | HELD | 2026-06-22T20:00Z | — |
 | `src/app/bot/page.tsx` | Codex | RELEASED | 2026-06-23T03:01Z | `20b1aee` |
 | `src/app/bot/page.tsx` | Codex | RELEASED | 2026-06-23T03:29Z | `8cba431` |
-| `src/scripts/shadow-paper-sim.ts` | Codex | HELD | 2026-06-24T02:27Z | — |
-| `src/scripts/shadow-report.ts` | Codex | HELD | 2026-06-24T02:27Z | — |
+| `src/scripts/shadow-paper-sim.ts` | Codex | RELEASED | 2026-06-24T02:27Z | `e8dcdfc` |
+| `src/scripts/shadow-report.ts` | Codex | RELEASED | 2026-06-24T02:27Z | `e8dcdfc` |
 
 - A `HELD` lock older than **2h with no commit** is stale → may be reclaimed after posting a note in the Handoff Log (§4).
 - If you find your target file already changed in the working tree by the other agent (uncommitted), **STOP** and use §6.
@@ -46,7 +46,7 @@ One owner per task. Statuses: `TODO → CLAIMED → IN_PROGRESS → REVIEW → D
 |---|---|---|---|---|
 | — | Dashboard shadow panel | Codex | DONE | live + anon RLS applied (`20b1aee`) |
 | N1 | Walk-forward eval of TR-v1 (`shadow-report` across windows) | Code | IN_PROGRESS | does enter>block hold over time? |
-| N2 | Paper-sim hardening (−100% rug / broad-pop inflate magnitudes) | Codex | IN_PROGRESS | locks held for shadow sim/report |
+| N2 | Paper-sim hardening (−100% rug / broad-pop inflate magnitudes) | Codex | REVIEW | pushed `e8dcdfc`; TO=Code verify/re-run |
 | N3 | Repair local toolchain (`node_modules` stubs) | Codex | TODO | pause launchd shadow agents first |
 | N4 | Auto-trigger orchestrator (`codex exec`/`claude -p`) | Code | BLOCKED | needs exact Codex CLI cmd from Operator |
 | N5 | TR-v2 (stricter) vs "no recoverable edge" decision | Code+ChatGPT | BLOCKED | needs N1 + N2 |
@@ -141,3 +141,9 @@ DID:    Re-ran shadow-report on the grown dataset (3927 decisions / 3751 resolve
 STATE:  live=NO, measure_live=NO, broadcast=NO, bot_state=dry_run/false/false, tracked_wallets 63/751. Analysis-only (no file change beyond this note).
 NEXT:   Codex: N2 (paper-sim hardening) still open + still useful to make LP-v1 numbers trustworthy. Then build the LP-v1 collector (docs/ops/latency-edge-probe-LP-v1.md). The edge lever is TIMING/SPEED, not token-safety filtering.
 PROMPT: Codex — read COLLAB.md + docs/BACKLOG.md, take the open Handoff entry addressed to you (N2: harden src/scripts/shadow-paper-sim.ts — resolution-time bias + conservative rug handling + guard-passing-only view). Claim the lock first. Shadow-only, no SOL, no webhook/agents/swap/schema/threshold changes. Commit exact-file, push, Handoff TO=Code.
+
+[2026-06-24T02:32Z] FROM=Codex TO=Code
+DID:    N2 implementation pushed as `e8dcdfc` (`fix(shadow): harden paper-sim loss model`). `src/scripts/shadow-paper-sim.ts` now exits stop/circuit paper positions at the crossed threshold plus bounded simulation slippage (`SHADOW_STOP_FILL_SLIPPAGE_PCT`, default 7.5%) instead of raw gapped next-poll price; rechecks missing DexScreener prices and requires a confirmed missing-price interval before `rug_or_missing = -100`; and keeps all changes shadow-only. `src/scripts/shadow-report.ts` now counts edge/walk-forward stats only after the fair max-hold window (`120m`) has elapsed, and prints a guard-passing-only section only if real `guard_passing`/`webhook_guards_passed` metadata exists.
+STATE:  live=NO, measure_live=NO, broadcast=NO, bot_state mutation=NO, tracked_wallets mutation=NO, webhook/agents/jupiter-swap/executor/schema/TR-v1 thresholds untouched. Paper-sim launchd agent unloaded before edits and reloaded after commit. Validation: `git diff --check -- src/scripts/shadow-paper-sim.ts src/scripts/shadow-report.ts` PASS; `npx esbuild ... --bundle --platform=node --packages=external` PASS; `npm run build` still blocked by known local Next shim (`next` missing `../server/require-hook`). BLOCKER: current `stacked_filter_shadow` schema/collector do not store a true 15-webhook-guard-pass flag, so the report refuses to infer guard-passing from TR-v1 outcomes and prints a blocker when metadata is absent.
+NEXT:   Re-run `shadow-report` on the hardened methodology, verify stop_loss/circuit means no longer show impossible -50% average from gapped polling, and decide whether to add a real guard-pass tag in a separately reviewed shadow-only collector/schema task before LP-v1.
+PROMPT: Code — verify commit `e8dcdfc`: review the threshold-fill loss model, confirmed missing-price rug handling, and mature-only reporting in `src/scripts/shadow-paper-sim.ts` / `src/scripts/shadow-report.ts`. Re-run shadow-report to get a trustworthy N2 verdict. Note the guard-passing-only view is fail-closed because no actual 15-webhook-guard-pass metadata exists in current shadow rows; do not treat `would_enter` as guard-passing. Keep live/measure_live/broadcast off and do not mutate bot_state/tracked_wallets.
