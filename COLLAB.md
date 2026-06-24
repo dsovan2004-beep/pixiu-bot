@@ -33,6 +33,8 @@ Before editing a file, append a row claiming it. Mark `RELEASED` (or delete the 
 | _example: src/app/bot/page.tsx_ | Codex | HELD | 2026-06-22T20:00Z | — |
 | `src/app/bot/page.tsx` | Codex | RELEASED | 2026-06-23T03:01Z | `20b1aee` |
 | `src/app/bot/page.tsx` | Codex | RELEASED | 2026-06-23T03:29Z | `8cba431` |
+| `src/scripts/shadow-paper-sim.ts` | Codex | HELD | 2026-06-24T02:27Z | — |
+| `src/scripts/shadow-report.ts` | Codex | HELD | 2026-06-24T02:27Z | — |
 
 - A `HELD` lock older than **2h with no commit** is stale → may be reclaimed after posting a note in the Handoff Log (§4).
 - If you find your target file already changed in the working tree by the other agent (uncommitted), **STOP** and use §6.
@@ -44,7 +46,7 @@ One owner per task. Statuses: `TODO → CLAIMED → IN_PROGRESS → REVIEW → D
 |---|---|---|---|---|
 | — | Dashboard shadow panel | Codex | DONE | live + anon RLS applied (`20b1aee`) |
 | N1 | Walk-forward eval of TR-v1 (`shadow-report` across windows) | Code | IN_PROGRESS | does enter>block hold over time? |
-| N2 | Paper-sim hardening (−100% rug / broad-pop inflate magnitudes) | Codex | TODO | pause the paper-sim launchd agent before editing |
+| N2 | Paper-sim hardening (−100% rug / broad-pop inflate magnitudes) | Codex | IN_PROGRESS | locks held for shadow sim/report |
 | N3 | Repair local toolchain (`node_modules` stubs) | Codex | TODO | pause launchd shadow agents first |
 | N4 | Auto-trigger orchestrator (`codex exec`/`claude -p`) | Code | BLOCKED | needs exact Codex CLI cmd from Operator |
 | N5 | TR-v2 (stricter) vs "no recoverable edge" decision | Code+ChatGPT | BLOCKED | needs N1 + N2 |
